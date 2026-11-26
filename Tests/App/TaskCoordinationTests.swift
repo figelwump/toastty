@@ -1,4 +1,5 @@
 import CoreState
+import CryptoKit
 import Foundation
 import RemoteProtocol
 import Testing
@@ -24,6 +25,142 @@ struct TaskCoordinationTests {
     }
 
     // MARK: - Send
+
+    @Test func checkedApprovalWaitsForAnOpenPromptAndIsOnlyTypedOnce() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        let coordinator = fixture.coordinator!
+        let request = try coordinator.needsReply(taskID: task.id, question: "Read the release receipt?", approval: true)
+        let questionID = try #require(request.replyRequest?.approvalID)
+        fixture.sessions.report(session, .ready)
+        fixture.sessions.sessionsShowingInteraction.insert(session)
+        let answer = try coordinator.answerApproval(taskID: task.id, questionID: questionID, decision: .approve)
+        #expect(answer.delivery == .queued)
+        #expect(try messages(fixture, to: task).isEmpty)
+        #expect(throws: TaskError.self) {
+            try coordinator.answerApproval(taskID: task.id, questionID: questionID, decision: .decline)
+        }
+
+        fixture.sessions.sessionsShowingInteraction.remove(session)
+        fixture.sessions.deliveryResult = .uncertain
+        coordinator.evaluateWatches()
+        coordinator.evaluateWatches()
+        let sent = try #require(fixture.record(task.id)?.lastApprovalAnswer)
+        #expect(sent.sessionID == session)
+        #expect(sent.delivery == .sentUnconfirmed)
+        #expect(try messages(fixture, to: task) == ["\(answer.messageHeader)\nApproved by you.\nRead the release receipt?"])
+    }
+
+    @Test func replacingOrExpiringAQuestionLeavesItsOldAnswerUndelivered() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        let coordinator = fixture.coordinator!
+        let first = try coordinator.needsReply(taskID: task.id, question: "Read the first receipt?", approval: true)
+        let firstID = try #require(first.replyRequest?.approvalID)
+        fixture.sessions.report(session, .working)
+        try coordinator.answerApproval(taskID: task.id, questionID: firstID, decision: .approve)
+        let next = try coordinator.needsReply(taskID: task.id, question: "Read the second receipt?", approval: true)
+        let nextID = try #require(next.replyRequest?.approvalID)
+        #expect(throws: TaskError.self) {
+            try coordinator.answerApproval(taskID: task.id, questionID: firstID, decision: .approve)
+        }
+        try coordinator.answerApproval(taskID: task.id, questionID: nextID, decision: .decline)
+        let deadline = try #require(next.replyRequest?.askedAt).addingTimeInterval(TaskApprovalAnswer.questionLifetime)
+        fixture.sessions.report(session, .ready)
+        coordinator.deliverApprovalAnswers(at: deadline)
+        #expect(try messages(fixture, to: task).isEmpty)
+        #expect(fixture.record(task.id)?.lastApprovalAnswer?.delivery == .cancelled)
+    }
+
+    @Test func aSignedBotAnswerRequiresTheOwnersGrantAndMatchingFleet() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        let coordinator = fixture.coordinator!
+        try coordinator.records.save(id: task.id) { $0.release = TaskRelease(childTaskIDs: []) }
+        let webhooks = TaskWebhookService(webhooksFileURL: nil, outboxFileURL: nil, secrets: InMemoryTaskWebhookSecretStore())
+        let secret = "disposable-bot-test-key"
+        let webhook = try webhooks.add(
+            name: "test-bot", settings: .init(url: "https://bot.example.test/events", auth: .hmac),
+            secret: secret, requester: .init()
+        )
+        try webhooks.approve(id: webhook.id, shownDigest: webhook.settingsDigest)
+        coordinator.webhooks = webhooks
+        let scope = try #require(TaskFleetChecks(version: "0.2.12", targets: ["computer-one"]))
+        let request = try coordinator.needsReply(taskID: task.id, question: nil, approval: true, fleetChecks: scope)
+        let questionID = try #require(request.replyRequest?.approvalID)
+        let approvedWebhook = try #require(webhooks.webhook(named: webhook.name))
+        let grant = try #require(webhooks.fleetAnswerGrant(for: approvedWebhook, task: request, scope: scope))
+        func submit(_ id: UUID, signedDecision: String = "approve") throws -> TaskApprovalAnswer {
+            let input = "toastty-task-answer-v1\n\(webhook.id.uuidString)\n\(task.id.uuidString)\n\(id.uuidString)\n\(signedDecision)"
+            let signature = HMAC<SHA256>.authenticationCode(
+                for: Data(input.utf8), using: SymmetricKey(data: Data(secret.utf8))
+            ).map { String(format: "%02x", $0) }.joined()
+            return try coordinator.answerApproval(taskID: task.id, questionID: id, decision: .approve, bot: (webhook.id, signature))
+        }
+        #expect(throws: TaskError.self) { try submit(questionID) }
+        try coordinator.grantFleetAnswers(taskID: task.id, questionID: questionID, grant: grant)
+        #expect(throws: TaskError.self) { try submit(questionID, signedDecision: "decline") }
+        fixture.sessions.report(session, .working)
+        let answer = try submit(questionID)
+        #expect(answer.delivery == .queued)
+        #expect(throws: TaskError.self) { try submit(questionID) }
+        fixture.sessions.report(session, .ready)
+        coordinator.webhooks = nil
+        coordinator.evaluateWatches()
+        #expect(fixture.record(task.id)?.lastApprovalAnswer?.delivery == .queued)
+        #expect(try messages(fixture, to: task).isEmpty)
+        coordinator.webhooks = webhooks
+        coordinator.evaluateWatches()
+        let sent = try #require(fixture.record(task.id)?.lastApprovalAnswer)
+        #expect(sent.delivery == .sent)
+        #expect(try messages(fixture, to: task) == ["\(answer.messageHeader)\nApproved via test-bot.\n\(scope.question) \(scope.detail)"])
+
+        let different = try #require(TaskFleetChecks(version: "0.2.12", targets: ["computer-two"]))
+        let next = try coordinator.needsReply(taskID: task.id, question: nil, approval: true, fleetChecks: different)
+        let nextID = try #require(next.replyRequest?.approvalID)
+        #expect(throws: TaskError.self) { try submit(nextID) }
+        let nextGrant = try #require(webhooks.fleetAnswerGrant(for: approvedWebhook, task: next, scope: different))
+        try coordinator.grantFleetAnswers(taskID: task.id, questionID: nextID, grant: nextGrant)
+        #expect(try submit(nextID).delivery == .queued)
+        try coordinator.revokeFleetAnswers(taskID: task.id, grant: try #require(fixture.record(task.id)?.fleetAnswerGrant))
+        #expect(fixture.record(task.id)?.lastApprovalAnswer?.delivery == .cancelled)
+        let renewed = try #require(fixture.record(task.id)?.replyRequest?.approvalID)
+        try coordinator.grantFleetAnswers(taskID: task.id, questionID: renewed, grant: nextGrant)
+        #expect(throws: TaskError.self) { try submit(nextID) }
+        #expect(try messages(fixture, to: task).count == 1)
+    }
+
+    @Test(arguments: [true, false])
+    func queuedApprovalFollowsOnlyTheOriginalConversation(restored: Bool) async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        let coordinator = fixture.coordinator!
+        fixture.sessions.report(session, .working)
+        var agent = try #require(fixture.sessions.sessions[session])
+        agent.nativeConversationID = "original-conversation"
+        fixture.sessions.sessions[session] = agent
+        let request = try coordinator.needsReply(taskID: task.id, question: "Read the test receipt?", approval: true)
+        let questionID = try #require(request.replyRequest?.approvalID)
+        #expect(try coordinator.answerApproval(taskID: task.id, questionID: questionID, decision: .approve).delivery == .queued)
+        let reloaded = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(reloaded)
+
+        fixture.sessions.stop(session)
+        agent.sessionID = "new-session"
+        agent.nativeConversationID = restored ? "original-conversation" : "another-conversation"
+        fixture.sessions.sessions[agent.sessionID] = agent
+        fixture.sessions.report(agent.sessionID, .ready)
+        reloaded.evaluateWatches()
+
+        let answer = try #require(fixture.record(task.id)?.lastApprovalAnswer)
+        #expect(answer.delivery == (restored ? .sent : .cancelled))
+        #expect(try messages(fixture, to: task).count == (restored ? 1 : 0))
+        if restored { #expect(answer.sessionID == agent.sessionID) }
+    }
 
     @Test func sendReachesTheSessionRestoredInTheTasksPaneAfterARelaunch() async throws {
         let fixture = try Fixture()

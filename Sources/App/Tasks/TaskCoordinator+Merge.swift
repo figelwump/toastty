@@ -287,12 +287,36 @@ extension TaskCoordinator {
     /// user. The task waits in Needs you, even after the user reads the
     /// turn, until the task's agent starts new work.
     @discardableResult
-    func needsReply(taskID: UUID, question: String?) throws -> TaskRecord {
-        guard records.record(id: taskID) != nil else {
+    func needsReply(
+        taskID: UUID, question: String?, approval: Bool = false, fleetChecks: TaskFleetChecks? = nil
+    ) throws -> TaskRecord {
+        guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
-        let request = TaskReplyRequest(askedAt: now(), question: question.flatMap(taskNonEmpty))
-        try saveMergeState(taskID: taskID) { $0.replyRequest = request }
+        let question = fleetChecks?.question ?? question.flatMap(taskNonEmpty)
+        let origin: TaskReplyRequest.Origin?
+        if approval {
+            guard let question, question.utf8.count <= 2_048 else {
+                throw TaskError("An approval question needs a question of at most 2,048 bytes.")
+            }
+            if fleetChecks != nil, record.release == nil {
+                throw TaskError("Only a release task can ask for read-only fleet checks.")
+            }
+            guard let session = liveAgentSession(of: record, ownAgentOnly: true) else {
+                throw TaskError("The task's agent must be running to ask a checked approval question.")
+            }
+            origin = .init(sessionID: session.sessionID, conversationID: session.nativeConversationID, provider: session.agent.rawValue)
+        } else {
+            origin = nil
+        }
+        let request = TaskReplyRequest(
+            askedAt: now(), question: question, approvalID: approval ? UUID() : nil,
+            fleetChecks: fleetChecks, approvalOrigin: origin
+        )
+        try saveMergeState(taskID: taskID) { saved in
+            if saved.lastApprovalAnswer?.delivery == .queued { saved.lastApprovalAnswer?.delivery = .cancelled }
+            saved.replyRequest = request
+        }
         return records.record(id: taskID)!
     }
 
@@ -307,6 +331,7 @@ extension TaskCoordinator {
               record.replyRequest != nil || record.waiting?.wokenAt != nil,
               liveAgentSession(of: record)?.sessionID == sessionID else { return }
         saveOrDefer(taskID: record.id) {
+            if $0.lastApprovalAnswer?.delivery == .queued { $0.lastApprovalAnswer?.delivery = .cancelled }
             $0.replyRequest = nil
             if $0.waiting?.wokenAt != nil { $0.waiting = nil }
         }

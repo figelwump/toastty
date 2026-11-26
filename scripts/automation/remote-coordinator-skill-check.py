@@ -53,6 +53,7 @@ event log, the `gh` log and the app log.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
@@ -1063,8 +1064,10 @@ class Run:
         # for, and puts its own sender line before the coordinator's text.
         unsigned = [m['text'][:120] for task, m in received
                     if not SENDER_LINE.sub('', m['text'].lstrip(), count=1).startswith('[coordinator]')
+                    and not (self.name in ('checked-task-answer', 'signed-task-answer')
+                             and m['text'].lstrip().startswith('[Toastty task answer] '))
                     and not (task.id in self.merges_expected and 'toastty-task-merge' in m['text'])]
-        self.check('every message to a task starts with [coordinator]', not unsigned, unsigned)
+        self.check('every coordinator message to a task starts with [coordinator]', not unsigned, unsigned)
         # `task send --steer` may reach an agent that works: Toastty checks
         # the agent before it types. It never types at a prompt.
         steered = [c for c in commands if re.search(r'task\s+send\b', c) and '--steer' in c]
@@ -1655,6 +1658,65 @@ def approval_passed_on(run):
               'user' in body and re.search(r'\bapproved?\b|\bapproves\b|\byes\b', body) and not refusal, body)
     run.check('the message names the action', 'delet' in body and '45' in body, body)
     run.check('the message asks for no second yes in the task', not SECOND_YES.search(body), body)
+
+
+def ask_checked(run, task, *arguments):
+    run.status(task, 'working')
+    question = subprocess.run(
+        [str(run.cli_path), '--json', 'task', 'needs-reply', *arguments],
+        env={**run.environment, 'TOASTTY_SESSION_ID': run.session_of(task)},
+        capture_output=True, text=True, timeout=30,
+    )
+    require(question.returncode == 0, f'The task could not ask: {question.stdout} {question.stderr}')
+    question_id = json.loads(question.stdout)['result']['replyRequest']['approvalID']
+    run.status(task, 'idle')
+    return question_id
+
+
+def checked_task_answer(run):
+    """Use the real Coordinator chat card to answer a task without asking its agent to relay."""
+    task = run.create_task('Inspect a release receipt')
+    run.seed_policy(unblocking='- Wait for the user to answer task questions themselves.')
+    run.open_coordinator()
+    question_id = ask_checked(run, task, '--approval', '--question',
+                              'May I read the installed-version receipt for the test computer?')
+    driver = run.root / 'ax-drive'
+    subprocess.run(['swiftc', '-O', str(HERE / 'ax-drive.swift'), '-o', str(driver)], check=True, capture_output=True)
+    pid = str(run.instance.process.pid)
+
+    def ax(*arguments):
+        return subprocess.run([str(driver), pid, *arguments], capture_output=True, text=True, timeout=30)
+
+    status = ax('status').stdout.strip()
+    require(status == 'trusted=true locked=false', f'BLOCKED: the card needs Accessibility and an unlocked screen: {status}')
+    with FOCUS_LOCK:
+        run.cli('coordinator', 'open')
+        ax('activate')
+        button = 'coordinator.task-approval.approve'
+        wait_for('Approve in Coordinator chat', lambda: ax('frame', button).returncode == 0, timeout=30)
+        frame = ax('frame', 'coordinator.chat')
+        if frame.returncode == 0:
+            rect = ','.join(frame.stdout.split())
+            subprocess.run(['screencapture', '-x', '-R', rect, str(run.artifacts / 'question.png')],
+                           capture_output=True, timeout=15)
+        checked = ax('press', button)
+        if checked.returncode != 0:
+            checked = ax('click', button)
+        require(checked.returncode == 0, f'Approve could not be pressed: {checked.stdout} {checked.stderr}')
+
+    def received():
+        return [event['text'] for event in run.messages(task) if '[Toastty task answer]' in event['text']]
+
+    messages = wait_for('the task to get the checked answer', received, timeout=30)
+    receipt = run.get(task).get('lastApprovalAnswer') or {}
+    run.check('the app delivers a single approval tied to the task question and session',
+              len(messages) == 1 and question_id in messages[0] and 'Approved by you.' in messages[0]
+              and receipt.get('delivery') == 'sent' and receipt.get('questionID') == question_id
+              and receipt.get('sessionID') == task.session,
+              dict(messages=messages, receipt=receipt))
+    commands = [command for turn in run.turns() for command in turn['commands']]
+    run.check('the Coordinator agent makes no task send for the checked answer',
+              not any(re.search(r'task\s+send\b', command) for command in commands), commands)
 
 
 def to_review(run, task, **pull_request):
@@ -2542,6 +2604,70 @@ def approve_webhook_in_the_sheet(run, name):
         run.notes.append(json.dumps({'approval steps': steps}))
         run.cli('action', 'run', 'window.tasks.hide', '--window', run.window_id)
     return sheet_text
+
+
+def signed_task_answer(run):
+    """Grant one bot access to a disposable release's exact fleet question, then exercise its CLI."""
+    receiver = WebhookReceiver()
+    secret = uuid.uuid4().hex
+    try:
+        project_task = run.create_task('Prepare test website')
+        run.cli('task', 'mark-done', project_task.id)
+        release = run.cli('task', 'release', '--workspace', run.get(project_task)['workspaceID'])
+
+        def started():
+            record = run.cli('task', 'get', release['taskID'])
+            return record if record['setup']['state'] == 'started' else None
+
+        task = Task(run, wait_for('the test release task to start', started, timeout=90), 'app')
+        run.tasks.append(task)
+        wait_for('the test release agent', lambda: run.agent_start(task.session), timeout=30)
+        added = run.cli('webhook', 'add', 'test-relay', receiver.url, '--auth', 'hmac', '--events', 'needs_you',
+                        '--secret-stdin', stdin=secret)
+        approve_webhook_in_the_sheet(run, 'test-relay')
+        run.seed_policy(unblocking='- Wait for the user to answer task questions themselves.')
+        run.open_coordinator()
+        question = ask_checked(run, task, '--fleet-version', '0.2.12', '--fleet-targets', 'test-computer')
+
+        def submit():
+            message = '\n'.join(('toastty-task-answer-v1', added['id'].upper(), task.id.upper(), question.upper(), 'approve'))
+            signature = hmac.digest(secret.encode(), message.encode(), 'sha256').hex()
+            return run.run_cli('task', 'answer', task.id, question, 'approve', '--webhook', added['id'], stdin=signature)
+
+        run.check('the signed answer is refused before the owner grants it', submit().returncode != 0)
+        driver = run.root / 'ax-drive'
+        pid = str(run.instance.process.pid)
+
+        def ax(*arguments):
+            return subprocess.run([str(driver), pid, *arguments], capture_output=True, text=True, timeout=30)
+
+        with FOCUS_LOCK:
+            run.cli('coordinator', 'open')
+            ax('activate')
+            button = 'coordinator.task-approval.allow-bot'
+            wait_for('the bot menu on the fleet approval card', lambda: ax('frame', button).returncode == 0, timeout=30)
+            frame = ax('frame', 'coordinator.chat')
+            if frame.returncode == 0:
+                rect = ','.join(frame.stdout.split())
+                subprocess.run(['screencapture', '-x', '-R', rect, str(run.artifacts / 'fleet-question.png')],
+                               capture_output=True, timeout=15)
+            for command in (('click', button), ('click-label', 'test-relay'), ('click-label', 'Allow these checks')):
+                done = ax(*command)
+                require(done.returncode == 0, f'The approval card did not offer {command[-1]}: {done.stderr}')
+
+        accepted = submit()
+        require(accepted.returncode == 0, f'The signed answer was refused: {accepted.stdout} {accepted.stderr}')
+        messages = wait_for('the test release task to receive the bot approval',
+                            lambda: [event['text'] for event in run.messages(task) if '[Toastty task answer]' in event['text']],
+                            timeout=30)
+        run.check('the task receives the bot, decision and exact fleet', len(messages) == 1
+                  and all(word in messages[0] for word in ('Approved via test-relay', '0.2.12', 'test-computer')), messages)
+        run.check('a second submission of the same answer is refused', submit().returncode != 0)
+    finally:
+        receiver.close()
+
+
+signed_task_answer.prepare = lambda run: run.project('app', release=True)  # noqa: E731
 
 
 def sender_reply_webhook(run):
@@ -3533,6 +3659,8 @@ SCENARIOS = {
     'question-settled': question_settled,
     'question-open': question_open,
     'approval-passed-on': approval_passed_on,
+    'checked-task-answer': checked_task_answer,
+    'signed-task-answer': signed_task_answer,
     'ci-failed': ci_failed,
     'ci-rerun-passes': ci_rerun_passes,
     'ci-rerun-fails': ci_rerun_fails,

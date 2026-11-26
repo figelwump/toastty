@@ -847,7 +847,7 @@ final class AppControlExecutor {
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch,
              .taskUnwatch, .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply,
-             .taskWaiting, .taskMarkDone, .taskArchive, .taskReleaseComplete:
+             .taskAnswer, .taskWaiting, .taskMarkDone, .taskArchive, .taskReleaseComplete:
             return try runTaskAction(action, args: args)
 
         case .webhookAdd, .webhookSet, .webhookRemove, .webhookTest:

@@ -771,7 +771,15 @@ session, where the Claude login is readable.
   auto mode, where Claude Code's classifier also judges each command and can
   refuse `toastty task request-merge`.
 
-The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
+The `checked-task-answer` scenario uses Accessibility to approve a task
+question in Coordinator chat. With `--permission-mode auto`, it checks that
+the task receives the app's recorded answer while the real Claude Code
+Coordinator runs in auto mode. The `signed-task-answer` scenario grants
+an approved test webhook access to a disposable release's fleet question,
+then submits the signed answer through the CLI and checks replay
+rejection. Both scenarios need an unlocked validation desktop.
+
+The other scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
 `review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `approval-passed-on`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
