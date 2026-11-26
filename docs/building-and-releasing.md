@@ -301,7 +301,11 @@ must find the parts it talks to already updated. Do the steps in this order:
 5. **Release the Mac app.** Build the DMG with `scripts/release/release.sh`,
    write the release notes with a `## Highlights` section, and publish with
    `scripts/release/publish-github-release.sh`. Only `--publish` changes the
-   update feed, so existing users get the update at that point.
+   update feed, so existing users get the update at that point. Right before
+   `--publish`, the release agent asks the repository owner "publish now?"
+   and publishes only after a plain yes to that question, also when the
+   release approval already covers publication; see
+   [Publish now?](../.agents/skills/toastty-publish/SKILL.md#publish-now).
 6. **Publish the website change.** Merge its pull request into `main` after the
    Mac release is live, then confirm on toastty.dev that the change shows. For
    `0.10.0` the website change is two stacked pull requests that land together:
@@ -446,6 +450,8 @@ The script also records the canonical `artifacts/release/<version>-<build>/relea
 ## Publish a draft GitHub Release
 
 After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately and update the Sparkle appcast at `https://updates.toastty.dev/appcast.xml`.
+
+`--publish` makes the release visible to users: the latest GitHub release, which the website's Download links open, and the Sparkle update feed. Without `--dry-run`, the script refuses `--publish` unless `--confirm-publish` is also given. Pass `--confirm-publish` only after the repository owner answered a plain yes to "publish now?" for this version and build. A draft release and `--publish --dry-run` need no confirmation.
 
 Prerequisites:
 - `gh` is installed and authenticated for the target repo
