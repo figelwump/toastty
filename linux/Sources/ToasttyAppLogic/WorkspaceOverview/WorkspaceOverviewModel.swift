@@ -40,6 +40,8 @@ struct WorkspaceOverviewModel {
     /// The workspace's tasks, every stage.
     var items: [TaskBoardItem]
     var recent: [RecentTask]
+    /// Everything older than Recent, in the same activity order.
+    var pastItems: ArraySlice<TaskBoardItem> { items.dropFirst(recent.count) }
     var scratchpads: [Scratchpad]
     var openCount: Int
     var finishedCount: Int

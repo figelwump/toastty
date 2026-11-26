@@ -11,11 +11,9 @@ import Foundation
 ///
 /// - a header with the workspace's title and folder, **Terminal** (its own
 ///   tabs) and **New Task**;
-/// - **About**: the synopsis an agent wrote, or one Toastty makes from the
-///   tasks;
-/// - **Recently**: the latest tasks and what each did (its agent's last
-///   reply, kept after the session ends, else the request);
-/// - **Tasks**: the workspace's tasks in the Tasks view's groups;
+/// - **Recent**: the five most recently active tasks;
+/// - **Past Tasks**: the rest, with the same inline description and
+///   continuation controls as Recent;
 /// - on the right, the workspace's kept Scratchpads, with a preview of the
 ///   selected one, Open (in the right panel) and Delete.
 ///
@@ -48,6 +46,7 @@ final class WorkspaceOverviewPage {
     private(set) var workspaceID: UUID?
     private(set) var selectedScratchpadID: UUID?
     private var drawn: Drawn?
+    private var expandedTasks: Set<TaskBoardItem.Subject> = []
     private var serviceToken: UUID?
     /// Leaves the page for the workspace's own tabs.
     var onClose: (() -> Void)?
@@ -57,26 +56,24 @@ final class WorkspaceOverviewPage {
         var workspaceID: UUID
         var title: String
         var subtitle: String
-        var synopsis: WorkspaceOverviewModel.Synopsis
-        var recent: [Recent]
-        var tasks: [TasksPage.ListItem]
-        var taskMenus: [TaskBoardItem.Subject: [[TaskBoardPresentation.MenuItem]]]
+        var recent: [TaskRow]
+        var past: [TaskRow]
         var scratchpads: [WorkspaceOverviewModel.Scratchpad]
         var selectedScratchpadID: UUID?
     }
 
-    struct Recent: Equatable {
-        var subject: TaskBoardItem.Subject
-        var title: String
-        var mark: TaskStageMarkKind
-        var status: String
-        var pullRequest: Int?
-        var age: String?
-        var outcome: String?
-        var outcomeIsRequest: Bool
-        var taskSpaceWorkspaceID: UUID?
-        /// The finished task Continue starts a new task from.
-        var continuesTaskID: UUID?
+    private struct TaskRow: Equatable {
+        let summary: TasksPage.Row
+        let description: String?
+        let continuesTaskID: UUID?
+        let menu: [[TaskBoardPresentation.MenuItem]]
+
+        @MainActor init(_ item: TaskBoardItem, now: Date, isTriageConfigured: Bool) {
+            summary = TasksPage.row(.init(item: item), selectedID: nil, now: now)
+            description = TasksPage.taskDescription(item)
+            continuesTaskID = TaskBoardPresentation.canContinueAsNewTask(item) ? item.taskID : nil
+            menu = TaskBoardPresentation.menuItems(item, isTriageConfigured: isTriageConfigured)
+        }
     }
 
     init(ui: TasksUI, windowID: UUID, webServices: (any WebPanelServices)?) {
@@ -235,6 +232,10 @@ final class WorkspaceOverviewPage {
     // MARK: - Render
 
     func render(workspaceID: UUID?, isShown: Bool) {
+        if self.workspaceID != workspaceID {
+            expandedTasks.removeAll()
+            drawn = nil
+        }
         self.workspaceID = workspaceID
         guard isShown, let workspaceID,
               let model = WorkspaceOverviewModel.make(workspaceID: workspaceID, service: ui.logic.workspaceOverview) else { return }
@@ -244,27 +245,27 @@ final class WorkspaceOverviewPage {
         }
         if selectedScratchpadID == nil { selectedScratchpadID = model.scratchpads.first?.entry.documentID }
         let now = Date()
+        let isTriageConfigured = ui.coordinator.isTriageConfigured
+        func row(_ item: TaskBoardItem) -> TaskRow {
+            TaskRow(item, now: now, isTriageConfigured: isTriageConfigured)
+        }
         let next = Drawn(
             workspaceID: workspaceID,
             title: model.title,
             subtitle: Self.subtitle(model),
-            synopsis: model.synopsis,
-            recent: model.recent.map { Self.recent($0, now: now) },
-            tasks: TasksPage.listItems(
-                TasksViewSections.make(model.items), selectedID: nil,
-                isDoneExpanded: true, isArchivedExpanded: true, now: now
-            ),
-            taskMenus: Dictionary(model.items.map { item in
-                (item.id, TaskBoardPresentation.menuItems(item, isTriageConfigured: ui.coordinator.isTriageConfigured))
-            }, uniquingKeysWith: { first, _ in first }),
+            recent: model.recent.map { row($0.item) },
+            past: model.pastItems.map(row),
             scratchpads: model.scratchpads,
             selectedScratchpadID: selectedScratchpadID
         )
-        guard next != drawn else { return }
+        let previous = drawn
+        guard next != previous else { return }
         drawn = next
         Gtk.setLabel(titleLabel, next.title)
         Gtk.setLabel(subtitleLabel, next.subtitle)
-        rebuildMain(next)
+        if previous?.workspaceID != workspaceID || previous?.recent != next.recent || previous?.past != next.past {
+            rebuildMain(next)
+        }
         rebuildScratchpads(next)
     }
 
@@ -279,148 +280,36 @@ final class WorkspaceOverviewPage {
         return parts.joined(separator: " · ")
     }
 
-    static func recent(_ recent: WorkspaceOverviewModel.RecentTask, now: Date) -> Recent {
-        let item = recent.item
-        return Recent(
-            subject: item.id,
-            title: item.title,
-            mark: TaskStageMarkKind(item),
-            status: TaskBoardPresentation.tasksViewStatusLine(item, now: now),
-            pullRequest: item.pullRequest?.number,
-            age: item.activityAt > .distantPast ? TaskAge.label(since: item.activityAt, now: now) : nil,
-            outcome: recent.outcome.map(Self.plainExcerpt),
-            outcomeIsRequest: recent.outcomeIsRequest,
-            taskSpaceWorkspaceID: item.taskSpaceWorkspaceID,
-            continuesTaskID: TaskBoardPresentation.canContinueAsNewTask(item) ? item.taskID : nil
-        )
-    }
-
-    /// The first lines of an agent's markdown reply, as plain text.
-    static func plainExcerpt(_ text: String) -> String {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.isEmpty == false && $0.hasPrefix("```") == false && $0.hasPrefix("|") == false }
-            .map { line -> String in
-                var line = line
-                while let first = line.first, "#>-*".contains(first) { line.removeFirst() }
-                return line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-            }
-        return WorkspaceOverviewStore.clipped(lines.prefix(4).joined(separator: " "), to: 360)
-    }
-
     // MARK: - Main column
 
     private func rebuildMain(_ drawn: Drawn) {
+        expandedTasks.formIntersection((drawn.recent + drawn.past).compactMap {
+            $0.description == nil ? nil : $0.summary.subject
+        })
         Gtk.removeAllChildren(mainBox)
-
-        let about = makeCard("About")
-        Gtk.setName(about.card, "workspace.overview.about")
-        let synopsis = Gtk.label(drawn.synopsis.text, classes: ["workspace-overview-synopsis"], ellipsize: false)
-        gtk_label_set_wrap(cast(synopsis), 1)
-        gtk_label_set_selectable(cast(synopsis), 1)
-        Gtk.setName(synopsis, "workspace.overview.synopsis")
-        Gtk.append(about.body, synopsis)
-        let caption: String
-        if drawn.synopsis.isWritten {
-            caption = "Written by an agent" + (drawn.synopsis.updatedAt.map { " · \(TaskAge.label(since: $0, now: Date()))" } ?? "")
-        } else {
-            caption = "Made from the tasks. Ask an agent to describe this workspace and it writes one here."
-        }
-        let captionLabel = Gtk.label(caption, classes: ["tasks-why"], ellipsize: false)
-        gtk_label_set_wrap(cast(captionLabel), 1)
-        Gtk.append(about.body, captionLabel)
-        Gtk.append(mainBox, about.card)
-
-        let recent = makeCard("Recently")
-        Gtk.setName(recent.card, "workspace.overview.recent")
-        if drawn.recent.isEmpty {
-            Gtk.append(recent.body, Gtk.label("No tasks yet. New Task starts one here.", classes: ["tasks-why"], ellipsize: false))
-        }
-        for (index, entry) in drawn.recent.enumerated() {
-            Gtk.append(recent.body, makeRecentRow(entry, index: index))
-        }
-        Gtk.append(mainBox, recent.card)
-
-        let tasks = makeCard("Tasks")
-        Gtk.setName(tasks.card, "workspace.overview.tasks")
-        let rows = drawn.tasks.filter { if case .row = $0 { return true } else { return false } }
-        if rows.isEmpty {
-            Gtk.append(tasks.body, Gtk.label("No tasks in this workspace.", classes: ["tasks-why"], ellipsize: false))
-        } else {
-            for item in drawn.tasks {
-                switch item {
-                case .header(let title, _, let count, let style, _, _):
-                    guard count > 0 else { continue }
-                    let line = Gtk.hbox(spacing: 8, classes: ["tasks-group"])
-                    if style.isEmpty == false { Gtk.addClasses(line, [style]) }
-                    Gtk.append(line, Gtk.label(title, classes: ["tasks-group-title"], ellipsize: false))
-                    Gtk.append(line, Gtk.label("\(count)", classes: ["tasks-group-count"], ellipsize: false))
-                    Gtk.append(tasks.body, line)
-                case .lane:
-                    continue
-                case .row(let row):
-                    Gtk.append(tasks.body, makeTaskRow(row, menu: drawn.taskMenus[row.subject] ?? []))
-                }
-            }
-        }
-        Gtk.append(mainBox, tasks.card)
+        Gtk.append(mainBox, makeTaskSection(
+            "Recent", name: "recent", rows: drawn.recent, empty: "No tasks yet. New Task starts one here."
+        ))
+        Gtk.append(mainBox, makeTaskSection("Past Tasks", name: "past", rows: drawn.past, empty: "No past tasks yet."))
     }
 
-    private func makeCard(_ title: String) -> (card: WidgetPtr, body: WidgetPtr) {
+    private func makeTaskSection(_ title: String, name: String, rows: [TaskRow], empty: String) -> WidgetPtr {
+        let name = "workspace.overview.\(name)"
         let card = Gtk.vbox(classes: ["tasks-card", "workspace-overview-card"])
+        Gtk.setName(card, name)
         Gtk.append(card, Gtk.label(title.uppercased(), classes: ["tasks-card-title"]))
         Gtk.append(card, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL))
-        let body = Gtk.vbox(spacing: 8, classes: ["tasks-card-body"])
+        let body = Gtk.vbox(spacing: 2, classes: ["tasks-card-body"])
+        if rows.isEmpty {
+            let label = Gtk.label(empty, classes: ["tasks-why"], ellipsize: false)
+            Gtk.margins(label, 6)
+            Gtk.append(body, label)
+        }
+        for (index, row) in rows.enumerated() {
+            Gtk.append(body, makeTaskRow(row, name: "\(name).\(index)"))
+        }
         Gtk.append(card, body)
-        return (card, body)
-    }
-
-    private func makeRecentRow(_ entry: Recent, index: Int) -> WidgetPtr {
-        let line = Gtk.hbox(spacing: 10, classes: ["tasks-row", "workspace-overview-recent"])
-        Gtk.setName(line, "workspace.overview.recent.\(index)")
-        Gtk.append(line, TaskMarkWidget.make(entry.mark))
-        let text = Gtk.vbox(spacing: 3)
-        gtk_widget_set_hexpand(text, 1)
-        Gtk.append(text, Gtk.label(entry.title, classes: ["tasks-row-title"]))
-        let detail = Gtk.hbox(spacing: 8)
-        if let number = entry.pullRequest {
-            Gtk.append(detail, Gtk.label("PR #\(number)", classes: ["task-pr-tag"], ellipsize: false))
-        }
-        let status = Gtk.label(entry.status, classes: ["tasks-row-status"])
-        gtk_widget_set_hexpand(status, 1)
-        Gtk.append(detail, status)
-        Gtk.append(text, detail)
-        if let outcome = entry.outcome {
-            let label = Gtk.label(
-                entry.outcomeIsRequest ? "Asked: \(outcome)" : outcome,
-                classes: ["workspace-overview-outcome"], ellipsize: false
-            )
-            gtk_label_set_wrap(cast(label), 1)
-            gtk_label_set_lines(cast(label), 3)
-            gtk_label_set_ellipsize(cast(label), PANGO_ELLIPSIZE_END)
-            Gtk.append(text, label)
-        }
-        Gtk.append(line, text)
-        if let age = entry.age {
-            let label = Gtk.label(age, classes: ["tasks-row-age"], ellipsize: false)
-            gtk_widget_set_valign(label, GTK_ALIGN_START)
-            Gtk.append(line, label)
-        }
-        var continueButton: WidgetPtr?
-        if let taskID = entry.continuesTaskID {
-            let button = Gtk.button("Continue", classes: ["flat", "workspace-overview-continue"])
-            continueButton = button
-            gtk_widget_set_valign(button, GTK_ALIGN_START)
-            gtk_widget_set_tooltip_text(button, "Continue as New Task: start a new task with this task's context attached")
-            Gtk.setName(button, "workspace.overview.recent.\(index).continue")
-            Signal.connect(button, "clicked") { [weak self] in
-                self?.continueTask(taskID)
-            }
-            Gtk.append(line, button)
-        }
-        addOpen(line, subject: entry.subject, taskSpace: entry.taskSpaceWorkspaceID, excluding: continueButton)
-        return line
+        return card
     }
 
     /// Opens New Task with the finished task's context attached.
@@ -428,13 +317,51 @@ final class WorkspaceOverviewPage {
         TaskActions.runFromMenu(.continueAsNewTask(taskID: taskID), coordinator: ui.coordinator) { _ in }
     }
 
-    private func makeTaskRow(_ row: TasksPage.Row, menu: [[TaskBoardPresentation.MenuItem]]) -> WidgetPtr {
-        let line = Gtk.hbox(spacing: 10, classes: ["tasks-row"])
-        Gtk.setClass(line, "child", row.isChild)
-        let name = "workspace.overview.task.\(TasksPage.rowName(row.subject))"
-        Gtk.setName(line, name)
-        gtk_widget_set_tooltip_text(line, row.accessibleLabel)
-        Gtk.append(line, TaskMarkWidget.make(row.mark))
+    private func makeTaskRow(_ entry: TaskRow, name: String) -> WidgetPtr {
+        let row = entry.summary
+        let container = Gtk.vbox(classes: ["workspace-overview-row"])
+        Gtk.setName(container, name)
+        let line = Gtk.hbox(spacing: 4)
+        Gtk.append(container, line)
+        if let description = entry.description {
+            let label = Gtk.label(description, classes: ["tasks-detail-text", "workspace-overview-description"], ellipsize: false)
+            gtk_label_set_wrap(cast(label), 1)
+            gtk_label_set_wrap_mode(cast(label), PANGO_WRAP_WORD_CHAR)
+            gtk_label_set_selectable(cast(label), 1)
+            Gtk.setName(label, "\(name).description")
+            Gtk.append(container, label)
+
+            let toggle = gtk_toggle_button_new()!
+            Gtk.addClasses(toggle, ["flat", "workspace-overview-disclosure"])
+            Gtk.setName(toggle, "\(name).expand")
+            gtk_widget_set_valign(toggle, GTK_ALIGN_CENTER)
+            let icon = Gtk.image("pan-end-symbolic", pixelSize: 12)
+            gtk_button_set_child(cast(toggle), icon)
+            let expanded = expandedTasks.contains(row.subject)
+            gtk_toggle_button_set_active(cast(toggle), expanded.gboolean)
+            Self.showDescription(expanded, title: row.title, label: label, toggle: toggle, icon: icon)
+            Signal.connect(toggle, "toggled") { [weak self] in
+                guard let self else { return }
+                let expanded = gtk_toggle_button_get_active(cast(toggle)).bool
+                if expanded { self.expandedTasks.insert(row.subject) } else { self.expandedTasks.remove(row.subject) }
+                Self.showDescription(expanded, title: row.title, label: label, toggle: toggle, icon: icon)
+            }
+            Gtk.append(line, toggle)
+        } else {
+            let spacer = Gtk.hbox()
+            gtk_widget_set_size_request(spacer, 26, -1)
+            Gtk.append(line, spacer)
+        }
+
+        // Opening the task and disclosing its description are separate
+        // controls. Selecting or copying the text can't navigate away.
+        let open = gtk_button_new()!
+        Gtk.addClasses(open, ["flat", "workspace-overview-open"])
+        Gtk.setName(open, "\(name).open")
+        gtk_widget_set_hexpand(open, 1)
+        gtk_widget_set_tooltip_text(open, row.accessibleLabel)
+        let summary = Gtk.hbox(spacing: 10)
+        Gtk.append(summary, TaskMarkWidget.make(row.mark))
         let text = Gtk.vbox(spacing: 3)
         gtk_widget_set_hexpand(text, 1)
         Gtk.append(text, Gtk.label(row.title, classes: row.isBold ? ["tasks-row-title", "unread"] : ["tasks-row-title"]))
@@ -447,26 +374,38 @@ final class WorkspaceOverviewPage {
         let status = Gtk.label(row.statusLine, classes: ["tasks-row-status"])
         gtk_widget_set_hexpand(status, 1)
         Gtk.append(detail, status)
-        Gtk.append(text, detail)
-        Gtk.append(line, text)
         if let age = row.age {
-            let label = Gtk.label(age, classes: ["tasks-row-age"], ellipsize: false)
-            gtk_widget_set_valign(label, GTK_ALIGN_START)
-            Gtk.append(line, label)
+            Gtk.append(detail, Gtk.label(age, classes: ["tasks-row-age"], ellipsize: false))
         }
-        let options = makeTaskMenu(menu, name: name, title: row.title)
-        if let options {
-            Gtk.append(line, options)
+        Gtk.append(text, detail)
+        Gtk.append(summary, text)
+        gtk_button_set_child(cast(open), summary)
+        Signal.connect(open, "clicked") { [weak self] in
+            self?.open(subject: row.subject, taskSpace: row.taskSpaceWorkspaceID)
+        }
+        Gtk.append(line, open)
+        if let taskID = entry.continuesTaskID {
+            let button = Gtk.button("Continue", classes: ["suggested-action", "task-success-action"])
+            gtk_widget_set_valign(button, GTK_ALIGN_CENTER)
+            gtk_widget_set_tooltip_text(button, "Continue as New Task: start a new task with this task's context attached")
+            Gtk.setName(button, "\(name).continue")
+            Signal.connect(button, "clicked") { [weak self] in
+                self?.continueTask(taskID)
+            }
+            Gtk.append(line, button)
+        }
+        if let menu = makeTaskMenu(entry.menu, name: name, title: row.title) {
+            gtk_widget_set_valign(menu, GTK_ALIGN_CENTER)
+            Gtk.append(line, menu)
             let click = gtk_gesture_click_new()!
             gtk_gesture_single_set_button(cast(click), guint(GDK_BUTTON_SECONDARY))
             Signal.connectPress(click) { _, _, _ in
                 gtk_gesture_set_state(cast(click), GTK_EVENT_SEQUENCE_CLAIMED)
-                gtk_menu_button_popup(cast(options))
+                gtk_menu_button_popup(cast(menu))
             }
             gtk_widget_add_controller(line, cast(click))
         }
-        addOpen(line, subject: row.subject, taskSpace: row.taskSpaceWorkspaceID, excluding: options)
-        return line
+        return container
     }
 
     private func makeTaskMenu(
@@ -504,38 +443,10 @@ final class WorkspaceOverviewPage {
         return button
     }
 
-    func automationTaskMenu(_ index: Int, action: String?) -> Bool {
-        let subjects = drawn?.tasks.compactMap { item -> TaskBoardItem.Subject? in
-            if case .row(let row) = item { return row.subject }
-            return nil
-        } ?? []
-        guard subjects.indices.contains(index) else { return false }
-        let name = "workspace.overview.task.\(TasksPage.rowName(subjects[index]))"
-        guard let menu = Gtk.find(named: "\(name).menu", in: root), gtk_widget_get_mapped(menu) != 0 else { return false }
-        if let action {
-            guard let button = Gtk.find(named: "\(name).\(action)", in: menu), gtk_widget_get_mapped(button) != 0 else { return false }
-            return gtk_widget_activate(button) != 0
-        }
-        gtk_menu_button_popup(cast(menu))
-        return true
-    }
-
-    /// A click opens the task's space when it is open, else the task in the
-    /// Tasks view.
-    /// A press on `excluding` (the row's Continue or menu button) is the button's.
-    private func addOpen(_ line: WidgetPtr, subject: TaskBoardItem.Subject, taskSpace: UUID?, excluding: WidgetPtr? = nil) {
-        let click = gtk_gesture_click_new()!
-        gtk_gesture_single_set_button(cast(click), guint(GDK_BUTTON_PRIMARY))
-        Signal.connectPress(click) { [weak self] _, x, y in
-            guard let self else { return }
-            if let excluding, let picked = gtk_widget_pick(line, x, y, GTK_PICK_DEFAULT),
-               picked == excluding || gtk_widget_is_ancestor(picked, excluding).bool {
-                return
-            }
-            gtk_gesture_set_state(cast(click), GTK_EVENT_SEQUENCE_CLAIMED)
-            self.open(subject: subject, taskSpace: taskSpace)
-        }
-        gtk_widget_add_controller(line, cast(click))
+    private static func showDescription(_ expanded: Bool, title: String, label: WidgetPtr, toggle: WidgetPtr, icon: WidgetPtr) {
+        Gtk.setVisible(label, expanded)
+        gtk_image_set_from_icon_name(cast(icon), expanded ? "pan-down-symbolic" : "pan-end-symbolic")
+        gtk_widget_set_tooltip_text(toggle, "\(expanded ? "Hide" : "Show") description for \(title)")
     }
 
     func open(subject: TaskBoardItem.Subject, taskSpace: UUID?) {
@@ -572,7 +483,6 @@ final class WorkspaceOverviewPage {
     func selectScratchpad(_ documentID: UUID) {
         guard selectedScratchpadID != documentID else { return }
         selectedScratchpadID = documentID
-        drawn = nil
         ui.scheduleRender()
     }
 
@@ -670,7 +580,8 @@ final class WorkspaceOverviewPage {
 
     func automationOpenRecent(_ index: Int) -> Bool {
         guard let recent = drawn?.recent, recent.indices.contains(index) else { return false }
-        open(subject: recent[index].subject, taskSpace: recent[index].taskSpaceWorkspaceID)
+        let row = recent[index].summary
+        open(subject: row.subject, taskSpace: row.taskSpaceWorkspaceID)
         return true
     }
 
@@ -682,15 +593,40 @@ final class WorkspaceOverviewPage {
         return true
     }
 
+    func automationTaskMenu(_ index: Int, action: String?) -> Bool {
+        guard let drawn, index >= 0, index < drawn.recent.count + drawn.past.count else { return false }
+        let name = index < drawn.recent.count ? "workspace.overview.recent.\(index)"
+            : "workspace.overview.past.\(index - drawn.recent.count)"
+        guard let menu = Gtk.find(named: "\(name).menu", in: root), gtk_widget_get_mapped(menu) != 0 else { return false }
+        if let action {
+            if action == "close" {
+                guard let popover = gtk_menu_button_get_popover(cast(menu)), gtk_widget_get_mapped(widget(popover)) != 0 else { return false }
+                gtk_menu_button_popdown(cast(menu))
+                return true
+            }
+            guard let button = Gtk.find(named: "\(name).\(action)", in: menu), gtk_widget_get_mapped(button) != 0 else { return false }
+            return gtk_widget_activate(button) != 0
+        }
+        gtk_menu_button_popup(cast(menu))
+        return true
+    }
+
     var automationSummary: [String: String] {
         guard let drawn else { return ["overviewScratchpads": "0"] }
-        let rows = drawn.tasks.filter { if case .row = $0 { return true } else { return false } }
+        let rowNames = drawn.recent.indices.map { "workspace.overview.recent.\($0)" }
+            + drawn.past.indices.map { "workspace.overview.past.\($0)" }
+        let expanded = rowNames.filter {
+            Gtk.find(named: "\($0).description", in: mainBox).map { gtk_widget_get_mapped($0).bool } ?? false
+        }
         return [
             "overviewWorkspace": drawn.title.replacingOccurrences(of: " ", with: "_"),
-            "overviewSynopsis": drawn.synopsis.isWritten ? "agent" : "toastty",
             "overviewRecent": String(drawn.recent.count),
-            "overviewContinuable": String(drawn.recent.filter { $0.continuesTaskID != nil }.count),
-            "overviewTasks": String(rows.count),
+            "overviewPast": String(drawn.past.count),
+            "overviewContinuable": String((drawn.recent + drawn.past).filter { $0.continuesTaskID != nil }.count),
+            "overviewExpanded": String(expanded.count),
+            "overviewDescription": expanded.first
+                .flatMap { Gtk.find(named: "\($0).description", in: mainBox) }
+                .flatMap { gtk_label_get_text(cast($0)) }.map { String(cString: $0) } ?? "",
             "overviewScratchpads": String(drawn.scratchpads.count),
             "overviewScratchpadTabs": String(adw_tab_view_get_n_pages(padTabs.view)),
             "overviewSelectedScratchpad": String(selectedScratchpadID.flatMap { automationScratchpadIDs.firstIndex(of: $0) } ?? -1),

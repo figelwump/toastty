@@ -151,6 +151,7 @@ extension LinuxAppController {
         //     workspace-page continue 0      # the latest task's Continue button
         //     workspace-page task-menu 0     # open the first task row's actions
         //     workspace-page task-menu 0 markDone  # activate a visible action
+        //     workspace-page task-menu 0 close     # close the visible menu
         //     expect workspacePage=shown overviewScratchpads=1 keepButton=kept
         AutomationScript.extensionCommands["workspace-page"] = { [weak ui] app, argument, script in
             guard let ui, let window = app.selectedWindowController(), let feature = ui.feature(windowID: window.windowID) else {
@@ -234,6 +235,7 @@ extension TasksPage {
             "tasksRows": String(rows.count),
             "tasksGroups": groups.joined(separator: ","),
             "tasksSelected": rows.first(where: \.isSelected)?.title ?? "",
+            "tasksDetailDescription": automationDetailDescription ?? "",
             "tasksMarks": rows.map { TaskMarkWidget.cssClass($0.mark) }.joined(separator: ","),
             "tasksMarkWidths": automationMarkWidths.map(String.init).joined(separator: ","),
         ]

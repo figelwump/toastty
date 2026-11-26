@@ -176,7 +176,7 @@ final class WorkspaceTaskControl {
         }
         if let primary = next.primary {
             let title = primary == .merge && !next.compact ? next.link.map { "Merge PR #\($0.number)" } ?? primary.title : primary.title
-            let button = Gtk.button(title, classes: ["suggested-action"])
+            let button = Gtk.button(title, classes: ["suggested-action", "task-success-action"])
             gtk_widget_set_tooltip_text(button, primary.help)
             Gtk.setName(button, "workspace.task-control.primary")
             Signal.connect(button, "clicked") { [weak self] in
