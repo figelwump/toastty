@@ -15,34 +15,26 @@ final class WorkspaceTaskControl {
     private weak var controller: LinuxWindowController?
     private var rendered: Presentation?
 
-    private enum Action: Equatable {
-        case openPullRequest
-        case task(TaskBoardPresentation.DetailAction)
-    }
+    private typealias DetailAction = TaskBoardPresentation.DetailAction
+    private typealias MenuItem = TaskBoardPresentation.MenuItem
 
     private struct Presentation: Equatable {
         let taskID: UUID
         let link: WorkspacePullRequestLink?
-        /// The primary button's title, or the state the control shows
-        /// without one ("Done", "Merging PR #42…").
-        let title: String
-        var primary: Action?
-        var menu: [TaskBoardPresentation.DetailAction] = []
-        var progress = false
-        var done = false
+        var primary: DetailAction?
+        var menu: [MenuItem] = []
+        var progress: String?
+        var status: String?
         var help: String?
+        var done = false
         /// Why GitHub would not merge the pull request yet.
         var blocker: PullRequestMergeBlocker?
         /// A narrow column: Open PR shows as an icon, Merge drops the
         /// number, and the blocker shows as its dot.
         var compact = false
 
-        var canMerge: Bool {
-            offers(.merge)
-        }
-
-        func offers(_ action: TaskBoardPresentation.DetailAction) -> Bool {
-            primary == .task(action) || menu.contains(action)
+        func offers(_ item: MenuItem) -> Bool {
+            menu.contains(item) || primary.map { .action($0, taskID: taskID) } == item
         }
     }
 
@@ -65,107 +57,74 @@ final class WorkspaceTaskControl {
         guard let windowID = controller?.windowID,
               state.window(id: windowID)?.showsTasksView != true,
               let workspace = state.workspaceSelection(in: windowID)?.workspace,
-              workspace.parentWorkspaceID != nil,
               let taskID = workspace.taskID,
-              ui.coordinator.records.record(id: taskID) != nil else { return nil }
+              let item = ui.board.item(
+                  taskSpace: workspace, statuses: ui.sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+              ), item.taskID == taskID else { return nil }
 
-        let runtime = ui.sessionRuntimeStore
-        let item = ui.board.item(taskSpace: workspace, statuses: runtime.workspaceStatuses(for: workspace.id))
-        let request = runtime.workspaceMergeRequests[workspace.id]
-        if let link = WorkspaceMergePresentation.pullRequestLink(in: workspace),
-           let merge = WorkspaceMergePresentation.make(
-               workspace: workspace,
-               request: request,
-               isCheckingMerge: item?.merge == .checking,
-               isTaskMerged: item?.hasMerged == true,
-               pullRequestState: runtime.pullRequestStateCache?.state(for: link)
-           ) {
-            var result = Presentation(taskID: taskID, link: link, title: merge.title)
-            switch merge {
-            case .ready(_, _, let blocker):
-                // While GitHub reports a blocker, the status takes Merge's
-                // place and Merge stays in the menu.
-                result.primary = blocker == nil ? .task(.merge) : nil
-                result.menu = blocker == nil ? [] : [.merge]
-                result.menu += [.mergeWithoutChecks, .archive]
-                result.help = TaskBoardPresentation.DetailAction.merge.help
-                result.blocker = blocker
-            case .merging, .cleaningUp, .closing:
-                result.progress = true
-            case .cleanupFailed(_, let reason):
-                result = Presentation(taskID: taskID, link: link, title: "Cleanup Stopped")
-                result.menu = [.cleanUp, .keepAsIs]
-                result.help = reason
-            case .done:
-                result = Presentation(taskID: taskID, link: link, title: "Done")
-                result.done = true
-                result.menu = item?.cleanupHeldUntil != nil ? [.closeTaskSpace] : [.archive]
-            }
-            return result
+        var result = Presentation(taskID: taskID, link: item.pullRequest)
+        result.menu = TaskBoardPresentation.menuItems(
+            item, currentWorkspaceID: workspace.id, isTriageConfigured: ui.coordinator.isTriageConfigured
+        ).joined().filter { entry in
+            if case .openPullRequest = entry { return false } // It gets its own button.
+            return true
+        }
+        if result.menu.contains(.action(.merge, taskID: taskID)) {
+            result.blocker = item.pullRequestState?.mergeBlocker
+            if result.blocker == nil { result.primary = .merge }
+        } else if result.menu.contains(.action(.markDone, taskID: taskID)) {
+            result.primary = .markDone
+        }
+        if let primary = result.primary {
+            result.menu.removeAll { $0 == .action(primary, taskID: taskID) }
         }
 
-        switch item?.stage {
-        case .needsYou(.readyForReview):
-            return Presentation(
-                taskID: taskID, link: nil, title: "Complete Task", primary: .task(.markDone),
-                help: "Mark this task done and close its task space"
-            )
-        case .done:
-            return Presentation(taskID: taskID, link: nil, title: "Done", menu: [.archive], done: true)
+        let pr = result.link.map { " PR #\($0.number)" } ?? ""
+        switch item.merge {
+        case .checking?, .merging?: result.progress = "Merging\(pr)…"
+        case .waitingForChecks?: result.progress = "Waiting for Checks\(pr)…"
+        case .cleaningUp?: result.progress = "Cleaning Up\(pr)…"
+        case nil: break
+        }
+        switch item.stage {
+        case .done, .toShip:
+            result.status = "Done"
+            result.done = true
+        case .needsYou(.cleanupStopped(let reason)):
+            result.status = "Cleanup Stopped"
+            result.help = reason
         default:
-            return Presentation(taskID: taskID, link: nil, title: "Archive Task…", primary: .task(.archive))
+            break
         }
+        return result.link != nil || result.primary != nil || result.menu.isEmpty == false
+            || result.progress != nil || result.status != nil ? result : nil
     }
 
-    func canMerge(_ state: AppState) -> Bool { presentation(state)?.canMerge == true }
+    func canMerge(_ state: AppState) -> Bool {
+        guard let current = presentation(state) else { return false }
+        return current.offers(.action(.merge, taskID: current.taskID))
+    }
 
     func performMergeShortcut() -> Bool {
-        guard let current = presentation(ui.store.state), current.canMerge else { return false }
-        perform(.task(.merge), expected: current)
+        guard let current = presentation(ui.store.state) else { return false }
+        return perform(.action(.merge, taskID: current.taskID), expected: current)
+    }
+
+    @discardableResult
+    private func perform(_ item: MenuItem, expected: Presentation) -> Bool {
+        // A stale control must not act on another task or PR, or offer an
+        // action the current task no longer allows.
+        guard let controller, isOffered(item, matching: expected) else { return false }
+        ui.runWorkspaceTaskMenuItem(item, windowID: controller.windowID, parent: controller.window) { [weak self] in
+            self?.isOffered(item, matching: expected) == true
+        }
         return true
     }
 
-    private func perform(_ action: Action, expected: Presentation, fromPrimaryButton: Bool = false) {
-        // A menu or delayed click must not act on a different task or PR
-        // after a workspace selection, or merge when the button now opens the PR.
+    private func isOffered(_ item: MenuItem, matching expected: Presentation) -> Bool {
         guard let current = presentation(ui.store.state),
-              current.taskID == expected.taskID, current.link == expected.link,
-              !fromPrimaryButton || current.primary == action else { return }
-        switch action {
-        case .openPullRequest:
-            if let url = current.link.flatMap({ URL(string: $0.url) }) {
-                _ = DesktopLauncher.open(url, parent: controller?.window)
-            }
-        case .task(.markDone):
-            guard current.offers(.markDone) else { return }
-            confirmComplete(taskID: current.taskID)
-        case .task(let action):
-            guard current.offers(action) else { return }
-            TaskActions.perform(action.failureTitle) {
-                try TaskActions.run(action, taskID: current.taskID, coordinator: ui.coordinator)
-            }
-        }
-    }
-
-    private func confirmComplete(taskID: UUID) {
-        guard let controller, let record = ui.coordinator.records.record(id: taskID) else { return }
-        TaskActions.perform("Unable to Complete Task") {
-            let check = try ui.coordinator.completeCheck(taskID: taskID)
-            guard check.unsavedDocuments == 0 else {
-                throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
-            }
-            Dialogs.confirm(
-                parent: controller.window, heading: "Complete “\(record.title)”?",
-                body: TaskActions.completeSummary(check).joined(separator: "\n"),
-                confirmLabel: "Complete Task", destructive: false, confirmIsDefault: true
-            ) { [weak self] in
-                guard let self, let current = self.presentation(self.ui.store.state),
-                      current.taskID == taskID, current.offers(.markDone) else { return }
-                TaskActions.perform("Unable to Complete Task") {
-                    try self.ui.coordinator.complete(taskID: taskID)
-                }
-            }
-        }
+              current.taskID == expected.taskID, current.link == expected.link else { return false }
+        return current.offers(item)
     }
 
     func render(_ state: AppState) {
@@ -192,13 +151,13 @@ final class WorkspaceTaskControl {
             gtk_widget_set_tooltip_text(status, "\(blocker.label): GitHub would not merge \(pullRequest) yet")
             Gtk.append(root, status)
         }
-        if next.progress {
+        if let progress = next.progress {
             let spinner = gtk_spinner_new()!
             gtk_spinner_start(cast(spinner))
-            gtk_widget_set_tooltip_text(spinner, next.title)
+            gtk_widget_set_tooltip_text(spinner, progress)
             Gtk.append(root, spinner)
             if !next.compact {
-                Gtk.append(root, Gtk.label(next.title, classes: ["dim-label"], ellipsize: false))
+                Gtk.append(root, Gtk.label(progress, classes: ["dim-label"], ellipsize: false))
             }
         }
         if let link = next.link {
@@ -208,56 +167,54 @@ final class WorkspaceTaskControl {
             gtk_widget_set_tooltip_text(button, "Open PR #\(link.number) (\(link.displayName)) in the browser")
             Gtk.setName(button, "workspace.task-control.open-pr")
             Signal.connect(button, "clicked") { [weak self] in
-                self?.perform(.openPullRequest, expected: next)
+                guard let self, let current = self.presentation(self.ui.store.state),
+                      current.taskID == next.taskID, current.link == link,
+                      let url = URL(string: link.url) else { return }
+                _ = DesktopLauncher.open(url, parent: self.controller?.window)
             }
             Gtk.append(root, button)
         }
         if let primary = next.primary {
-            let suggested = primary == .task(.merge) || primary == .task(.markDone)
-            let title = next.compact && primary == .task(.merge) ? "Merge" : next.title
-            let button = Gtk.button(title, classes: suggested ? ["suggested-action"] : [])
-            if let help = next.help { gtk_widget_set_tooltip_text(button, help) }
+            let title = primary == .merge && !next.compact ? next.link.map { "Merge PR #\($0.number)" } ?? primary.title : primary.title
+            let button = Gtk.button(title, classes: ["suggested-action"])
+            gtk_widget_set_tooltip_text(button, primary.help)
             Gtk.setName(button, "workspace.task-control.primary")
             Signal.connect(button, "clicked") { [weak self] in
-                self?.perform(primary, expected: next, fromPrimaryButton: true)
+                self?.perform(.action(primary, taskID: next.taskID), expected: next)
             }
             Gtk.append(root, button)
         }
         if !next.menu.isEmpty {
             let button = gtk_menu_button_new()!
             Gtk.setName(button, "workspace.task-control.options")
-            if next.primary != nil || next.blocker != nil {
-                gtk_menu_button_set_icon_name(cast(button), "view-more-symbolic")
-                gtk_widget_set_tooltip_text(button, "More ways to finish this task")
-            } else {
-                // Done or a stopped cleanup: the state is the menu's label.
-                gtk_menu_button_set_label(cast(button), next.title)
+            if let status = next.status, next.progress == nil {
+                gtk_menu_button_set_label(cast(button), status)
                 if next.done { Gtk.addClasses(button, ["workspace-task-done"]) }
-                gtk_widget_set_tooltip_text(button, next.help ?? next.title)
+                gtk_widget_set_tooltip_text(button, next.help ?? status)
+            } else {
+                gtk_menu_button_set_icon_name(cast(button), "view-more-symbolic")
+                gtk_widget_set_tooltip_text(button, "More task actions")
             }
             Gtk.addClasses(button, ["flat"])
             let popover = gtk_popover_new()!
             let entries = Gtk.vbox()
-            for action in next.menu {
-                let title: String
-                switch action {
-                case .merge: title = next.link.map { "Merge PR #\($0.number)" } ?? action.title
-                case .archive: title = "Archive Task…"
-                case .cleanUp: title = "Retry Clean Up"
-                case .keepAsIs: title = "Don’t Clean Up"
-                default: title = action.title
+            for item in next.menu {
+                let entry = Gtk.button(item.title, classes: ["flat"])
+                if case .action(let action, _, _) = item {
+                    Gtk.setName(entry, "workspace.task-control.\(action)")
+                    gtk_widget_set_tooltip_text(entry, action.help)
                 }
-                let entry = Gtk.button(title, classes: ["flat"])
-                Gtk.setName(entry, "workspace.task-control.\(action)")
                 Signal.connect(entry, "clicked") { [weak self] in
                     gtk_popover_popdown(cast(popover))
-                    self?.perform(.task(action), expected: next)
+                    self?.perform(item, expected: next)
                 }
                 Gtk.append(entries, entry)
             }
             gtk_popover_set_child(cast(popover), entries)
             gtk_menu_button_set_popover(cast(button), popover)
             Gtk.append(root, button)
+        } else if let status = next.status, next.progress == nil {
+            Gtk.append(root, Gtk.label(status, classes: ["dim-label"], ellipsize: false))
         }
         // Sets the task's buttons apart from the agent buttons after them.
         let separator = gtk_separator_new(GTK_ORIENTATION_VERTICAL)!
@@ -273,7 +230,7 @@ final class WorkspaceTaskControl {
            let label = gtk_button_get_label(cast(button)) {
             return String(cString: label).components(separatedBy: " #")[0]
         }
-        if rendered?.progress == true { return "progress" }
+        if rendered?.progress != nil { return "progress" }
         if rendered?.done == true { return "done" }
         if let button = Gtk.find(named: "workspace.task-control.open-pr", in: root),
            gtk_widget_get_mapped(button) != 0 {

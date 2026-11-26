@@ -149,6 +149,8 @@ extension LinuxAppController {
         //     workspace-page delete 0        # delete kept Scratchpad 0, past its dialog
         //     workspace-page recent 0        # click the latest task's row
         //     workspace-page continue 0      # the latest task's Continue button
+        //     workspace-page task-menu 0     # open the first task row's actions
+        //     workspace-page task-menu 0 markDone  # activate a visible action
         //     expect workspacePage=shown overviewScratchpads=1 keepButton=kept
         AutomationScript.extensionCommands["workspace-page"] = { [weak ui] app, argument, script in
             guard let ui, let window = app.selectedWindowController(), let feature = ui.feature(windowID: window.windowID) else {
@@ -189,6 +191,12 @@ extension LinuxAppController {
             case "continue":
                 guard let index, feature.overviewPage.automationContinueRecent(index) else {
                     script.reportFailure("workspace-page continue: no finished row \(parts.dropFirst().first ?? "")")
+                    return
+                }
+            case "task-menu":
+                guard let index,
+                      feature.overviewPage.automationTaskMenu(index, action: parts.dropFirst(2).first) else {
+                    script.reportFailure("workspace-page task-menu: unavailable \(parts.dropFirst().joined(separator: " "))")
                     return
                 }
             default:

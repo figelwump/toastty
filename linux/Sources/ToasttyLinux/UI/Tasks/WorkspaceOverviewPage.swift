@@ -60,6 +60,7 @@ final class WorkspaceOverviewPage {
         var synopsis: WorkspaceOverviewModel.Synopsis
         var recent: [Recent]
         var tasks: [TasksPage.ListItem]
+        var taskMenus: [TaskBoardItem.Subject: [[TaskBoardPresentation.MenuItem]]]
         var scratchpads: [WorkspaceOverviewModel.Scratchpad]
         var selectedScratchpadID: UUID?
     }
@@ -253,6 +254,9 @@ final class WorkspaceOverviewPage {
                 TasksViewSections.make(model.items), selectedID: nil,
                 isDoneExpanded: true, isArchivedExpanded: true, now: now
             ),
+            taskMenus: Dictionary(model.items.map { item in
+                (item.id, TaskBoardPresentation.menuItems(item, isTriageConfigured: ui.coordinator.isTriageConfigured))
+            }, uniquingKeysWith: { first, _ in first }),
             scratchpads: model.scratchpads,
             selectedScratchpadID: selectedScratchpadID
         )
@@ -356,7 +360,7 @@ final class WorkspaceOverviewPage {
                 case .lane:
                     continue
                 case .row(let row):
-                    Gtk.append(tasks.body, makeTaskRow(row))
+                    Gtk.append(tasks.body, makeTaskRow(row, menu: drawn.taskMenus[row.subject] ?? []))
                 }
             }
         }
@@ -424,10 +428,11 @@ final class WorkspaceOverviewPage {
         TaskActions.runFromMenu(.continueAsNewTask(taskID: taskID), coordinator: ui.coordinator) { _ in }
     }
 
-    private func makeTaskRow(_ row: TasksPage.Row) -> WidgetPtr {
+    private func makeTaskRow(_ row: TasksPage.Row, menu: [[TaskBoardPresentation.MenuItem]]) -> WidgetPtr {
         let line = Gtk.hbox(spacing: 10, classes: ["tasks-row"])
         Gtk.setClass(line, "child", row.isChild)
-        Gtk.setName(line, "workspace.overview.task.\(TasksPage.rowName(row.subject))")
+        let name = "workspace.overview.task.\(TasksPage.rowName(row.subject))"
+        Gtk.setName(line, name)
         gtk_widget_set_tooltip_text(line, row.accessibleLabel)
         Gtk.append(line, TaskMarkWidget.make(row.mark))
         let text = Gtk.vbox(spacing: 3)
@@ -449,13 +454,75 @@ final class WorkspaceOverviewPage {
             gtk_widget_set_valign(label, GTK_ALIGN_START)
             Gtk.append(line, label)
         }
-        addOpen(line, subject: row.subject, taskSpace: row.taskSpaceWorkspaceID)
+        let options = makeTaskMenu(menu, name: name, title: row.title)
+        if let options {
+            Gtk.append(line, options)
+            let click = gtk_gesture_click_new()!
+            gtk_gesture_single_set_button(cast(click), guint(GDK_BUTTON_SECONDARY))
+            Signal.connectPress(click) { _, _, _ in
+                gtk_gesture_set_state(cast(click), GTK_EVENT_SEQUENCE_CLAIMED)
+                gtk_menu_button_popup(cast(options))
+            }
+            gtk_widget_add_controller(line, cast(click))
+        }
+        addOpen(line, subject: row.subject, taskSpace: row.taskSpaceWorkspaceID, excluding: options)
         return line
+    }
+
+    private func makeTaskMenu(
+        _ sections: [[TaskBoardPresentation.MenuItem]], name: String, title: String
+    ) -> WidgetPtr? {
+        guard !sections.isEmpty else { return nil }
+        let button = gtk_menu_button_new()!
+        Gtk.setName(button, "\(name).menu")
+        Gtk.addClasses(button, ["flat"])
+        gtk_menu_button_set_icon_name(cast(button), "view-more-symbolic")
+        gtk_widget_set_tooltip_text(button, "Actions for \(title)")
+        let popover = gtk_popover_new()!
+        let entries = Gtk.vbox()
+        for (index, section) in sections.enumerated() {
+            if index > 0 { Gtk.append(entries, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL)) }
+            for item in section {
+                let entry = Gtk.button(item.title, classes: item.isDestructive ? ["flat", "destructive-action"] : ["flat"])
+                if case .action(let action, _, _) = item {
+                    Gtk.setName(entry, "\(name).\(action)")
+                    gtk_widget_set_tooltip_text(entry, action.help)
+                }
+                Signal.connect(entry, "clicked") { [weak self, workspaceID] in
+                    gtk_popover_popdown(cast(popover))
+                    guard let self, let parent = gtk_widget_get_ancestor(self.root, gtk_window_get_type()) else { return }
+                    self.ui.runWorkspaceTaskMenuItem(item, windowID: self.windowID, parent: parent) { [weak self] in
+                        guard let self else { return false }
+                        return self.workspaceID == workspaceID && gtk_widget_get_mapped(self.root) != 0
+                    }
+                }
+                Gtk.append(entries, entry)
+            }
+        }
+        gtk_popover_set_child(cast(popover), entries)
+        gtk_menu_button_set_popover(cast(button), popover)
+        return button
+    }
+
+    func automationTaskMenu(_ index: Int, action: String?) -> Bool {
+        let subjects = drawn?.tasks.compactMap { item -> TaskBoardItem.Subject? in
+            if case .row(let row) = item { return row.subject }
+            return nil
+        } ?? []
+        guard subjects.indices.contains(index) else { return false }
+        let name = "workspace.overview.task.\(TasksPage.rowName(subjects[index]))"
+        guard let menu = Gtk.find(named: "\(name).menu", in: root), gtk_widget_get_mapped(menu) != 0 else { return false }
+        if let action {
+            guard let button = Gtk.find(named: "\(name).\(action)", in: menu), gtk_widget_get_mapped(button) != 0 else { return false }
+            return gtk_widget_activate(button) != 0
+        }
+        gtk_menu_button_popup(cast(menu))
+        return true
     }
 
     /// A click opens the task's space when it is open, else the task in the
     /// Tasks view.
-    /// A press on `excluding` (the row's Continue button) is the button's.
+    /// A press on `excluding` (the row's Continue or menu button) is the button's.
     private func addOpen(_ line: WidgetPtr, subject: TaskBoardItem.Subject, taskSpace: UUID?, excluding: WidgetPtr? = nil) {
         let click = gtk_gesture_click_new()!
         gtk_gesture_single_set_button(cast(click), guint(GDK_BUTTON_PRIMARY))
