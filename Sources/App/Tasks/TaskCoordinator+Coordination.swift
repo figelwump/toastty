@@ -268,7 +268,7 @@ extension TaskCoordinator {
 
     /// Types `text` and presses Return, with image paths kept as text so
     /// that the Return submits it (`AgentPasteText`).
-    private func deliver(
+    func deliver(
         _ text: String, to session: TaskSessionInfo, taskID: UUID, automaticPromptTurnEnd: Date? = nil
     ) -> TerminalInputDeliveryResult {
         let text = AgentPasteText.keepingImagePathsAsText(text)
@@ -416,8 +416,10 @@ extension TaskCoordinator {
             sessions?.session($0.key)?.isActive == true
         }
         unconfirmedDeliveryTimes = unconfirmedDeliveryTimes.filter { sessions?.session($0.key)?.isActive == true }
-        // A `--steer` message was meant for the agent's turn, so it goes
-        // before a watch's line.
+        // An answer to the task's question goes first: a turn that another
+        // message starts would clear the question. A `--steer` message was
+        // meant for the agent's turn, so it goes before a watch's line.
+        deliverApprovalAnswers(at: at)
         deliverQueuedMessages(at: at, steer: true)
         // Building the board walks every task, so only a pass with a pending
         // watch that needs it does so, and only once. Archived is read from
@@ -478,12 +480,14 @@ extension TaskCoordinator {
     /// message for each open prompt. A provider can show an interaction
     /// while its hooks report ready, or keep reporting ready after an
     /// automatic submission starts the next turn. A `task send --steer`
-    /// message that waits takes the prompt first (unless `forSteer`: the
-    /// call that types it), and one that it typed there took it.
-    func automaticPromptTurnEnd(for session: TaskSessionInfo, forSteer: Bool = false) -> Date? {
+    /// message that waits takes the prompt first, unless `yieldsToSteer`
+    /// is false: for the call that types it, and for an answer to the
+    /// task's question, which goes before it. One that `--steer` typed
+    /// there took the prompt.
+    func automaticPromptTurnEnd(for session: TaskSessionInfo, yieldsToSteer: Bool = true) -> Date? {
         guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
               promptOccupant(of: session) == nil,
-              forSteer || hasWaitingSteerMessage(for: session) == false else { return nil }
+              yieldsToSteer == false || hasWaitingSteerMessage(for: session) == false else { return nil }
         let turnEnd = session.lastTurnEndedAt ?? .distantPast
         if let steeredAt = sessions.lastSteerTypedAt(panelID: session.panelID), steeredAt > turnEnd { return nil }
         if let previous = automaticPromptDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
@@ -562,7 +566,9 @@ extension TaskCoordinator {
     /// Whether a watch or a queued message still has a line to type.
     private var hasActiveWatches: Bool {
         waitWatches.isEmpty == false
-            || records.records.contains { $0.activeWatches.isEmpty == false || $0.waitingMessages.isEmpty == false }
+            || records.records.contains {
+                $0.activeWatches.isEmpty == false || $0.waitingMessages.isEmpty == false || $0.lastApprovalAnswer?.delivery == .queued
+            }
     }
 
     // MARK: - Wakes of waiting tasks
@@ -779,7 +785,7 @@ extension TaskCoordinator {
                       mergeDeliveryTasks[record.id] == nil, record.waiting?.wakeIsDue(at: at) != true else { continue }
             }
             guard let session = liveAgentSession(of: record),
-                  let turnEnd = automaticPromptTurnEnd(for: session, forSteer: steer) else { continue }
+                  let turnEnd = automaticPromptTurnEnd(for: session, yieldsToSteer: steer == false) else { continue }
             // Marked first, as a wake is, so that a quit between the typing
             // and the save never types it again.
             func settle(_ outcome: TaskQueuedMessage.Outcome?) {

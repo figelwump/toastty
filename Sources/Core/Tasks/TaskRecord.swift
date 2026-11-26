@@ -81,6 +81,8 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// clears when an agent in the task space starts new work, which is
     /// usually the user's reply.
     public var replyRequest: TaskReplyRequest?
+    public var fleetAnswerGrant: TaskFleetAnswerGrant?
+    public var lastApprovalAnswer: TaskApprovalAnswer?
     /// Set by an agent whose task waits on something outside Toastty, such
     /// as an email reply or a date (`task.waiting`). The task rests in Idle
     /// with the reason, and a task with child tasks does not finish through
@@ -280,13 +282,41 @@ public struct TaskExternalRef: Codable, Equatable, Sendable {
 /// An agent's mark that its turn ended with a question for the user
 /// (`task.needs-reply`).
 public struct TaskReplyRequest: Codable, Equatable, Sendable {
+    public struct Origin: Codable, Equatable, Sendable {
+        public let sessionID: String
+        public let conversationID: String?
+        public let provider: String
+
+        public init(sessionID: String, conversationID: String?, provider: String) {
+            self.sessionID = sessionID
+            self.conversationID = conversationID
+            self.provider = provider
+        }
+
+        public func matches(sessionID: String, conversationID: String?, provider: String) -> Bool {
+            guard self.provider == provider else { return false }
+            return self.sessionID == sessionID
+                || (self.conversationID != nil && self.conversationID == conversationID)
+        }
+    }
+
     public var askedAt: Date
     /// The question in a few words, which the task's row shows.
     public var question: String?
+    /// Only explicit approval questions take a checked Approve or Decline.
+    public var approvalID: UUID?
+    public var fleetChecks: TaskFleetChecks?
+    public var approvalOrigin: Origin?
 
-    public init(askedAt: Date, question: String? = nil) {
+    public init(
+        askedAt: Date, question: String? = nil, approvalID: UUID? = nil,
+        fleetChecks: TaskFleetChecks? = nil, approvalOrigin: Origin? = nil
+    ) {
         self.askedAt = askedAt
         self.question = question
+        self.approvalID = approvalID
+        self.fleetChecks = fleetChecks
+        self.approvalOrigin = approvalOrigin
     }
 }
 

@@ -890,7 +890,9 @@ toastty task request-merge <task-id>
 toastty task cancel-merge [<task-id>]
 toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
-toastty task needs-reply [<task-id>] [--question <text>]
+toastty task needs-reply [<task-id>] [--question <text>] [--approval]
+toastty task needs-reply --fleet-version <version> --fleet-targets <id,id>
+toastty task answer <task-id> <question-id> <approve|decline> --webhook <id> < signature.txt
 toastty task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]

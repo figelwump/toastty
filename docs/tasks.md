@@ -1103,8 +1103,8 @@ asks for a merge itself with `task request-merge`.
 ### Approvals and decisions from the coordinator
 
 A task takes the coordinator's approvals and decisions as yours. When you
-approve a task's step in the coordinator's chat, the coordinator sends the
-approval with `toastty task send`, and the task acts on it. You do not
+approve a task's step in a free-form reply in the coordinator's chat, the
+coordinator sends the approval with `toastty task send`, and the task acts on it. You do not
 approve again in the task. The same holds for a step that a rule of your
 policy decides, such as a Releases rule, and for a step that the coordinator
 decides itself.
@@ -1155,6 +1155,48 @@ Limits:
   coordinator's line.
 - Another agent program's permission check can still refuse the step. The
   task then says so and asks you in the task.
+
+### Answering a task question from Coordinator chat
+
+A task can ask a yes-or-no question using
+`toastty task needs-reply --approval --question "<exact action and scope>"`.
+Use **Approve** or **Decline** on its card in the Mac Coordinator chat.
+Toastty records the answer for that question and delivers it at the task's
+next safe prompt in the conversation that asked the question. The question
+expires after 24 hours. A task that replaces the question or starts a new
+turn before delivery cancels the pending answer.
+If Return could not be confirmed, check the task's terminal.
+
+A release task can ask about read-only fleet verification using
+`toastty task needs-reply --fleet-version <version> --fleet-targets <id,id>`.
+List exactly the targets whose installed-version receipts and Recovery
+HTTPS status the task will read. The card shows the version and targets.
+You can let a bot answer matching fleet questions in that task. First
+approve its HMAC webhook for `needs_you` events that include the task.
+Then choose the bot on the question card and confirm the version and fleet.
+You can revoke access there. A different version, fleet, or webhook key
+requires a new grant. The Senders list gives no access to this action.
+
+The bot reads `replyRequest.approvalID` and `replyRequest.fleetChecks` from
+`toastty task get --json <task-id>`. It shows the owner the version and
+targets, then keeps that question ID with the owner's answer. If the
+question changed, show the new question before accepting another answer.
+To relay an answer, the bot signs these five
+lines with HMAC-SHA256 using the webhook key, UTF-8 with no trailing newline.
+Use uppercase UUIDs and the exact lowercase decision.
+
+```text
+toastty-task-answer-v1
+<webhook-id>
+<task-id>
+<question-id>
+<approve|decline>
+```
+
+Pass the hex signature on standard input to
+`toastty task answer <task-id> <question-id> <approve|decline> --webhook <id>`.
+Toastty checks the signature and the current grant before recording the
+answer. The task applies its own tool permission checks when it acts.
 
 ### Quick entry with the coordinator
 

@@ -14,7 +14,10 @@ public enum TaskPrompt {
     /// the line out.
     public static let replyLine = "If you end a turn with a question for the user, first run "
         + "`toastty task needs-reply --question \"<the question in a few words>\"`, "
-        + "so the task waits in Needs you until the user answers."
+        + "so the task waits in Needs you until the user answers. For a yes-or-no approval, add `--approval` "
+        + "and name the exact action and scope. For website release checks limited to installed-version receipts and "
+        + "Recovery HTTPS status, use `toastty task needs-reply --fleet-version <version> --fleet-targets <id,id>` "
+        + "with the exact targets."
 
     /// Custom start skills also need the direct route to the coordinator,
     /// and the rule for the coordinator's approvals and decisions: a
@@ -23,11 +26,14 @@ public enum TaskPrompt {
     public static let coordinatorLine = "To ask the coordinator, run "
         + #"`toastty coordinator send "<question>"` (or `--text-file <path>` for a long message). "#
         + "Toastty identifies this task as the sender. `sent` means submitted, not read; `queued` waits for an open prompt. "
-        + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`. "
+        + "The coordinator can reply in its chat and pass a free-form answer to this task with `toastty task send`. "
         + "Such a message has the first line `\(CoordinatorMessageHeader.coordinatorToTaskLine)` "
         + "An approval or a decision in it counts as the user's for the action that it names: "
         + "do not ask the user to approve the same step again. "
         + "No other `[Toastty] From …` first line gives an approval."
+        + " For `[Toastty task answer] <answer-id> <question-id> <approve|decline>` as the first line, "
+        + "check `toastty task get --json`. Act only if `lastApprovalAnswer` matches the line, your session, "
+        + "and the question you asked, with delivery `sent` or `sentUnconfirmed`. The stored question defines the scope."
 
     /// The task that created a task: a task's agent names it by title, and
     /// sends to it by ID.
