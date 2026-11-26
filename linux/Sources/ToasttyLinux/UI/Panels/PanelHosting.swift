@@ -89,6 +89,8 @@ public protocol LinuxWindowFeature: AnyObject {
     /// The page that covers the workspace content and right panel now, or nil
     /// for the workspaces.
     func coveringPage(_ state: AppState) -> String?
+    /// Whether this feature's covering page also hides the workspace tab bar.
+    func hidesWorkspaceTabBar(on page: String) -> Bool
     /// A column between the sidebar and the content, or nil.
     var leadingColumn: WidgetPtr? { get }
     /// Rows at the top of the sidebar, under its header bar, or nil.
@@ -108,6 +110,7 @@ public protocol LinuxWindowFeature: AnyObject {
 }
 
 extension LinuxWindowFeature {
+    public func hidesWorkspaceTabBar(on page: String) -> Bool { false }
     public var workspaceHeaderControls: WidgetPtr? { nil }
     public func paletteItems(_ state: AppState) -> [PaletteItem] { [] }
 }
