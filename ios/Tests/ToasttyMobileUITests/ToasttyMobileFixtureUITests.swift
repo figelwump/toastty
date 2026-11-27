@@ -3040,16 +3040,26 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "tab-only-composer-row", of: app)
     }
 
-    func testDisconnectedExecutionProfileIsLastReported() {
+    func testReconnectingKeepsExecutionProfileAndWorkspaceTabLabels() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"]
         )
         openFixtureConversation(in: app)
+
+        let status = app.descendants(matching: .any)["toastty-mobile-conversation-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertEqual(status.label, "Reconnecting to your Mac")
+
         let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 5))
-        XCTAssertTrue(profile.label.hasPrefix("Last reported. Model: "))
-        XCTAssertTrue(app.staticTexts["toastty-mobile-workspace-tab"].label.hasPrefix("Last reported. Mac tab: "))
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+        XCTAssertEqual(
+            profile.label,
+            "Model: claude-opus-long-provider-model-identifier-for-accessibility-layout. Reasoning: high"
+        )
+        XCTAssertEqual(
+            app.staticTexts["toastty-mobile-workspace-tab"].label,
+            "Mac tab: Release preparation — changelog, signing, and TestFlight verification"
+        )
     }
 
     private func topOfKeyboardObstruction(_ keyboard: XCUIElement) -> CGFloat {
