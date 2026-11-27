@@ -938,8 +938,8 @@ final class AppControlExecutor {
                 try validateTabParameter(args, descriptor: AppControlActionID.taskSend.descriptor)
                 return try prepareTaskSteerSend(args: args)
             }
-            if let (coordinator, taskID, text) = preparation {
-                return try await finishTaskSteerSend(coordinator, taskID: taskID, text: text)
+            if let (coordinator, taskID, text, from) = preparation {
+                return try await finishTaskSteerSend(coordinator, taskID: taskID, text: text, from: from)
             }
         }
         if AppControlActionID.resolve(rawID) == .taskArchive {

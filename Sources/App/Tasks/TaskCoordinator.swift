@@ -146,12 +146,13 @@ protocol TaskSessionProviding: AnyObject {
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
     /// Gives `text` to the agent in the panel under Toastty's input checks,
     /// for `task send --steer`: typed at an open prompt, typed into a
-    /// running turn that can read it, or held for the next open prompt.
-    /// Nothing is typed into a permission prompt or a question.
-    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure>
-    /// Whether `deliverSteering` holds messages for the panel's next open
-    /// prompt. Toastty's other messages leave that prompt to them.
-    func hasHeldSteerMessages(panelID: UUID) -> Bool
+    /// running turn that can read it, or not typed (`.mustWait`), for the
+    /// next open prompt. Nothing is typed into a permission prompt or a
+    /// question.
+    /// `mayTypeAtPrompt`: see `TaskSteerSender.send`.
+    func deliverSteering(
+        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+    ) async -> Result<TaskSteerDelivery, TaskSteerFailure>
     /// When `deliverSteering` last typed into the panel. A prompt that it
     /// typed at after the turn ended is taken, also while the agent's hooks
     /// still report it open.
@@ -182,10 +183,11 @@ protocol TaskSessionProviding: AnyObject {
 extension TaskSessionProviding {
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
-    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+    func deliverSteering(
+        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+    ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
         .failure(.stateUnknown)
     }
-    func hasHeldSteerMessages(panelID: UUID) -> Bool { false }
     func lastSteerTypedAt(panelID: UUID) -> Date? { nil }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }
     func scope(sessionID: String) -> Set<UUID>? { nil }

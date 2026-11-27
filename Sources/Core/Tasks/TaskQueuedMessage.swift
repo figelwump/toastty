@@ -1,8 +1,9 @@
 import Foundation
 
-/// A message that `task send --queue` left for a task's agent. Toastty
-/// types it at the agent's next open prompt, never into a running turn, a
-/// permission prompt, a question or text that someone typed at the prompt.
+/// A message that `task send --queue` left for a task's agent, or that
+/// `task send --steer` could not type at once. Toastty types it at the
+/// agent's next open prompt, never into a running turn, a permission
+/// prompt, a question or text that someone typed at the prompt.
 ///
 /// It is saved on the record of the task it is for, as a watch is saved on
 /// the record of the task it notifies. So it waits across an agent restart
@@ -18,6 +19,13 @@ public struct TaskQueuedMessage: Codable, Equatable, Identifiable, Sendable {
     /// The sender, as `task get` names it.
     public var from: String
     public var queuedAt: Date
+    /// `true` for a `task send --steer` message. It goes before Toastty's
+    /// other messages, as a message for the agent's current turn would
+    /// have, and waits only for an open prompt: not for the task's
+    /// question, a turn that a quit cut off, or a finished task, at which
+    /// a `--steer` send to an open prompt also types at once. `nil` for
+    /// `--queue`.
+    public var steer: Bool?
     /// `nil` while the message waits.
     public var outcome: Outcome?
 
@@ -48,15 +56,19 @@ public struct TaskQueuedMessage: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    public init(id: UUID = UUID(), text: String, from: String, queuedAt: Date, outcome: Outcome? = nil) {
+    public init(
+        id: UUID = UUID(), text: String, from: String, queuedAt: Date, steer: Bool = false, outcome: Outcome? = nil
+    ) {
         self.id = id
         self.text = text
         self.from = from
         self.queuedAt = queuedAt
+        self.steer = steer ? true : nil
         self.outcome = outcome
     }
 
     public var isWaiting: Bool { outcome == nil }
+    public var isSteer: Bool { steer == true }
 
     /// The message after it left the queue, without its text.
     public func settled(_ outcome: Outcome) -> TaskQueuedMessage {
@@ -77,11 +89,13 @@ extension TaskRecord {
         (queuedMessages ?? []).filter(\.isWaiting)
     }
 
-    /// Drops the waiting messages, with the reason, and keeps them as
-    /// dropped for their senders to read.
-    public mutating func dropWaitingMessages(reason: String, at: Date) {
+    /// Drops the waiting messages that `matching` picks, with the reason,
+    /// and keeps them as dropped for their senders to read.
+    public mutating func dropWaitingMessages(
+        reason: String, at: Date, matching: (TaskQueuedMessage) -> Bool = { _ in true }
+    ) {
         queuedMessages = queuedMessages?.map { message in
-            message.isWaiting ? message.settled(.init(kind: .dropped, at: at, reason: reason)) : message
+            message.isWaiting && matching(message) ? message.settled(.init(kind: .dropped, at: at, reason: reason)) : message
         }
     }
 

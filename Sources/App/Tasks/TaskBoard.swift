@@ -765,6 +765,11 @@ final class TaskBoardStore: ObservableObject {
         return TaskBoard.items(all, in: windowID, state: store.state)
     }
 
+    /// The item for one task, from the kept board.
+    func item(taskID: UUID) -> TaskBoardItem? {
+        currentBoard()?.item(.task(taskID))
+    }
+
     /// The item for one open task space, given the statuses the caller
     /// already read. `nil` when the task system is off. A task that
     /// coordinates child tasks reads their task spaces' statuses too, since

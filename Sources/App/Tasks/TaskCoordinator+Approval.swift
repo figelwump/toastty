@@ -89,7 +89,10 @@ extension TaskCoordinator {
                 }
             }
             guard let session = liveAgentSession(of: record, ownAgentOnly: true) else { continue }
-            guard wasInterruptedAtQuit(record) == false, let turnEnd = automaticPromptTurnEnd(for: session) else { continue }
+            // It goes before a waiting `--steer` message, whose turn would
+            // clear the question.
+            guard wasInterruptedAtQuit(record) == false,
+                  let turnEnd = automaticPromptTurnEnd(for: session, yieldsToSteer: false) else { continue }
             guard expects(session, for: request) else {
                 if let origin = request.approvalOrigin, origin.conversationID != nil,
                    origin.provider == session.agent.rawValue, session.nativeConversationID == nil {

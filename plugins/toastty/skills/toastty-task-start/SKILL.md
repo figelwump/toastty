@@ -377,7 +377,7 @@ toastty task create "<one-line summary>" --start-work \
   `toastty task get <task-id>`, or add `--wait` to wait until its agent starts.
 - The new tasks record this one as their parent. Coordinate them from here.
 - Toastty tells each new task which task created it, as a link, and how to
-  report to it with `toastty task send`. In the brief, say what to report:
+  report to it with `toastty task send --steer`. In the brief, say what to report:
   the paths of the new task's verification report and evidence files, such as
   screenshots and test output.
 

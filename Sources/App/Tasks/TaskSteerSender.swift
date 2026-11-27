@@ -8,27 +8,39 @@ enum TaskSteerDelivery: Equatable {
     case sent
     /// Typed and submitted into the agent's running turn.
     case steered
-    /// Held by Toastty until the agent's next open prompt. `position`
-    /// counts from 1.
-    case queued(position: Int)
+    /// Nothing was typed: the agent cannot take the message now. The
+    /// caller saves it on the task for the agent's next open prompt
+    /// (`TaskCoordinator.sendSteering`).
+    case mustWait
 
-    /// The name `task.send` reports.
+    /// The name `task.send` reports for a typed message.
     var name: String {
         switch self {
         case .sent: "sent"
         case .steered: "steered"
-        case .queued: "queued"
+        case .mustWait: "queued"
         }
     }
 
-    /// What `task.send` tells its caller, who may pass it on to a person.
+    /// What `task.send` tells its caller about a typed message, who may
+    /// pass it on to a person.
     var message: String {
         switch self {
         case .sent: "The agent was at its prompt. Toastty typed the message there."
         case .steered: "The agent was in a turn. Toastty typed the message into that turn."
-        case .queued: "Toastty holds the message and types it when the agent's turn ends. Nothing is typed until then."
+        case .mustWait: "Nothing was typed."
         }
     }
+}
+
+/// What `task send --steer` did with a message.
+enum TaskSteerSendOutcome {
+    /// Typed now, at the agent's open prompt or into its turn.
+    case typed(TaskSteerDelivery, session: TaskSessionInfo)
+    /// Saved on the task for the agent's next open prompt. The message's
+    /// `outcome` says whether Toastty already typed it. `position` counts
+    /// from 1 while it waits. `session` is the agent it was sent to.
+    case saved(TaskQueuedMessage, position: Int?, session: TaskSessionInfo)
 }
 
 /// Why `task send --steer` gave the agent nothing, or cannot say that it did.
@@ -39,9 +51,6 @@ enum TaskSteerFailure: Error, Equatable {
     case unavailable
     /// The text was typed, but the terminal did not confirm the Return key.
     case uncertain
-    /// Toastty already holds its maximum of waiting messages for the agent.
-    /// Nothing was added.
-    case queueFull
     /// A person typed in the agent's terminal, and that text can still be
     /// in the agent's prompt. Nothing was typed.
     case typedInTerminal
@@ -70,15 +79,16 @@ struct TaskSteerAgentView: Equatable {
 /// It types through the panel's conversation, the path of a phone send, so
 /// the check and the typing are one step: an open prompt takes the message,
 /// and a running turn of an agent that can read during a turn takes it as a
-/// steer. In every other case this class holds the message and types it at
-/// the agent's next open prompt.
+/// steer. In every other case it types nothing and returns `.mustWait`: the
+/// task coordinator saves the message on the task, so that it waits across
+/// a relaunch, and types it at the agent's next open prompt.
 ///
 /// The conversation's view comes from the agent's transcript. It can be
 /// behind, and a conversation that nothing followed before first reads its
 /// whole transcript, with every earlier turn's open prompt on the way. So
-/// nothing is typed, now or later, unless the state that the agent's own
-/// hooks report agrees with it. That is also why held messages stay here
-/// and not in the conversation's own queue, which types on its view alone.
+/// nothing is typed unless the state that the agent's own hooks report
+/// agrees with it. That is also why a message that must wait does not go to
+/// the conversation's own queue, which types on its view alone.
 @MainActor
 final class TaskSteerSender {
     /// How long a send waits for the two views of the agent to agree. A
@@ -86,41 +96,33 @@ final class TaskSteerSender {
     /// its transcript.
     static let settleTimeout: Duration = .seconds(5)
     static let settlePollInterval: Duration = .milliseconds(100)
-    /// How often a held message looks for the agent's open prompt.
-    static let heldPollInterval: Duration = .milliseconds(500)
-    static let maximumHeldMessages = RemoteConversationInputControl.maximumQueuedMessages
 
-    private struct Held {
+    private struct Message {
         var id: String
         var text: String
-        /// The agent session the message is for. A later session in the
-        /// same panel does not get it.
+        /// The agent session the message is for.
         var sessionID: String
-    }
-
-    private struct Panel {
-        var subscription: any LocalConversationSubscription
-        var held: [Held] = []
-        var delivery: Task<Void, Never>?
     }
 
     /// What one look at the agent decided.
     private enum Step {
         case typed(TaskSteerDelivery)
         case failed(TaskSteerFailure)
-        case hold
-        /// Toastty cannot tell yet what the agent does. `holdAtDeadline`
-        /// says that holding the message is safe if that does not change.
-        case undecided(holdAtDeadline: Bool)
+        /// The agent cannot take the message now, and can later.
+        case mustWait
+        /// Toastty cannot tell yet what the agent does. `waitAtDeadline`
+        /// says that the message can wait for the next open prompt if that
+        /// does not change.
+        case undecided(waitAtDeadline: Bool)
     }
 
     weak var access: (any LocalConversationAccess)?
     /// What the hooks and the terminal report for a panel's agent now, or
     /// `nil` when no agent runs there.
     private let agent: @MainActor (UUID) -> TaskSteerAgentView?
-    /// One entry for each panel that got a message. It stays until
+    /// The conversation of each panel that got a message. It stays until
     /// `releasePanels` finds its agent gone.
-    private var panels: [UUID: Panel] = [:]
+    private var subscriptions: [UUID: any LocalConversationSubscription] = [:]
     /// When this class last typed a message into each panel. The hooks can
     /// report the open prompt for a moment after that, so Toastty's other
     /// messages read it to leave the prompt to this one.
@@ -138,24 +140,30 @@ final class TaskSteerSender {
         self.agent = agent
     }
 
-    func send(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+    /// `mayTypeAtPrompt` says whether an open prompt is still free of
+    /// Toastty's other messages: one that waits goes first, and one that
+    /// was typed there took it. While it is not, the send waits as for an
+    /// undecided state, and then the message must wait.
+    func send(
+        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool = { true }
+    ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
         guard let access else { return .failure(.stateUnknown) }
         guard let sessionID = agent(panelID)?.sessionID else { return .failure(.unavailable) }
-        if panels[panelID] == nil {
-            panels[panelID] = Panel(subscription: access.subscribeToConversation(inPanel: panelID))
+        if subscriptions[panelID] == nil {
+            subscriptions[panelID] = access.subscribeToConversation(inPanel: panelID)
         }
         // One ID for every try: a try that types marks it as done, so no
         // later try can type the message again.
-        let message = Held(id: UUID().uuidString, text: text, sessionID: sessionID)
+        let message = Message(id: UUID().uuidString, text: text, sessionID: sessionID)
         let deadline = ContinuousClock.now + settleTimeout
         while true {
-            var step = look(panelID: panelID, message: message, isHeld: false)
-            if case .undecided(let holdAtDeadline) = step {
+            var step = look(panelID: panelID, message: message, mayTypeAtPrompt: mayTypeAtPrompt)
+            if case .undecided(let waitAtDeadline) = step {
                 if ContinuousClock.now < deadline, Task.isCancelled == false {
                     try? await Task.sleep(for: Self.settlePollInterval)
                     continue
                 }
-                step = holdAtDeadline ? .hold : .failed(.stateUnknown)
+                step = waitAtDeadline ? .mustWait : .failed(.stateUnknown)
             }
             switch step {
             case .typed(let delivery):
@@ -164,17 +172,12 @@ final class TaskSteerSender {
             case .failed(let failure):
                 if failure == .uncertain { typedAt[panelID] = now() }
                 return .failure(failure)
-            case .hold:
-                return hold(message, panelID: panelID)
+            case .mustWait:
+                return .success(.mustWait)
             case .undecided:
                 return .failure(.stateUnknown)
             }
         }
-    }
-
-    /// The messages that wait for the panel's agent, oldest first.
-    func heldTexts(panelID: UUID) -> [String] {
-        panels[panelID]?.held.map(\.text) ?? []
     }
 
     /// When this class last typed a message into the panel, also one whose
@@ -183,98 +186,38 @@ final class TaskSteerSender {
         typedAt[panelID]
     }
 
-    /// Forgets the panels that `isGone` names, with the messages that wait
-    /// for them: panels with no agent any more.
+    /// Forgets the panels that `isGone` names: panels with no agent any
+    /// more.
     func releasePanels(where isGone: (UUID) -> Bool) {
-        for (panelID, panel) in panels where isGone(panelID) {
-            panel.delivery?.cancel()
-            panel.subscription.cancel()
-            panels[panelID] = nil
+        for (panelID, subscription) in subscriptions where isGone(panelID) {
+            subscription.cancel()
+            subscriptions[panelID] = nil
             typedAt[panelID] = nil
         }
-    }
-
-    // MARK: - Held messages
-
-    private func hold(_ message: Held, panelID: UUID) -> Result<TaskSteerDelivery, TaskSteerFailure> {
-        guard var panel = panels[panelID] else { return .failure(.unavailable) }
-        guard panel.held.count < Self.maximumHeldMessages else { return .failure(.queueFull) }
-        panel.held.append(message)
-        if panel.delivery == nil {
-            panel.delivery = Task { [weak self] in
-                while Task.isCancelled == false {
-                    try? await Task.sleep(for: Self.heldPollInterval)
-                    guard Task.isCancelled == false, let self, self.deliverHeld(panelID: panelID) else { return }
-                }
-            }
-        }
-        panels[panelID] = panel
-        return .success(.queued(position: panel.held.count))
-    }
-
-    /// Types the oldest held message if the agent is at its open prompt.
-    /// Returns whether messages still wait.
-    private func deliverHeld(panelID: UUID) -> Bool {
-        guard let message = panels[panelID]?.held.first else {
-            panels[panelID]?.delivery = nil
-            return false
-        }
-        guard let current = agent(panelID), current.sessionID == message.sessionID else {
-            // The message's agent ended. Another one can run in the panel
-            // now, with messages of its own behind this one.
-            let sessionID = agent(panelID)?.sessionID
-            let before = panels[panelID]?.held.count ?? 0
-            panels[panelID]?.held.removeAll { $0.sessionID != sessionID }
-            let kept = panels[panelID]?.held.count ?? 0
-            ToasttyLog.info("Dropped the messages held for a task's agent that ended", category: .tasks, metadata: [
-                "panel_id": panelID.uuidString,
-                "count": String(before - kept),
-            ])
-            if kept > 0 { return true }
-            panels[panelID]?.delivery = nil
-            return false
-        }
-        switch look(panelID: panelID, message: message, isHeld: true) {
-        case .typed, .failed(.uncertain):
-            // Typed, or typed without a confirmed Return: not typed again.
-            typedAt[panelID] = now()
-            panels[panelID]?.held.removeFirst()
-            ToasttyLog.info("Typed a message held for a task's agent", category: .tasks, metadata: [
-                "panel_id": panelID.uuidString,
-                "session_id": message.sessionID,
-            ])
-        case .failed, .hold, .undecided:
-            break
-        }
-        if panels[panelID]?.held.isEmpty == false { return true }
-        panels[panelID]?.delivery = nil
-        return false
     }
 
     // MARK: - One look
 
     /// One look at the agent, with no suspension between reading the state
-    /// and typing. A held message is typed only at an open prompt.
-    private func look(panelID: UUID, message: Held, isHeld: Bool) -> Step {
+    /// and typing.
+    private func look(panelID: UUID, message: Message, mayTypeAtPrompt: () -> Bool) -> Step {
         // The message is for one agent session. Another one can run in the
         // panel after a wait.
-        guard let panel = panels[panelID], let agent = agent(panelID), agent.state != .notRunning,
+        guard let subscription = subscriptions[panelID], let agent = agent(panelID), agent.state != .notRunning,
               agent.sessionID == message.sessionID else {
             return .failed(.unavailable)
         }
-        let subscription = panel.subscription
         // The conversation knows of typing in the terminal only from the
         // time Toastty followed the panel. Text typed before that, and
         // after the agent's latest turn started, can still be in the
         // agent's prompt: no later turn took it. A message typed now would
-        // be added to it, and a message that waits would be typed into it
-        // when the turn ends.
+        // be added to it.
         if let typedAt = agent.userTypedAt, typedAt < subscription.followedSince ?? now(),
            typedAt > agent.latestTurnStartedAt ?? .distantPast {
             return .failed(.typedInTerminal)
         }
         guard let summary = subscription.snapshot(at: now())?.summary else {
-            return .undecided(holdAtDeadline: false)
+            return .undecided(waitAtDeadline: false)
         }
 
         func request(_ mode: RemoteMessageDeliveryMode, _ epoch: RemoteInputEpoch) -> RemoteMessageSendResult {
@@ -288,39 +231,40 @@ final class TaskSteerSender {
         }
 
         if agent.showsDialog {
-            return .hold
+            return .mustWait
         }
         switch (summary.inputAvailability, agent.state) {
         case (_, .waiting), (.pendingInteraction, _):
             // A permission prompt or a question is on screen, by either
             // view. Typed text could answer it.
-            return .hold
+            return .mustWait
         case (.openPrompt(let epoch), .idle):
-            // Messages that wait go first.
-            guard isHeld || panel.held.isEmpty else { return .hold }
+            // The transcript can show the prompt open for a moment after
+            // Toastty typed another message there.
+            guard mayTypeAtPrompt() else { return .undecided(waitAtDeadline: true) }
             switch request(.prompt, epoch) {
             case .accepted, .duplicate: return .typed(.sent)
             case .uncertain: return .failed(.uncertain)
             case .rejected(.surfaceUnavailable), .rejected(.notBound): return .failed(.unavailable)
-            case .rejected, .queued: return .undecided(holdAtDeadline: true)
+            case .rejected, .queued: return .undecided(waitAtDeadline: true)
             }
         case (.openPrompt, .busy):
             // The hooks say that the agent works, and its transcript does
             // not show the turn yet.
-            return .undecided(holdAtDeadline: true)
+            return .undecided(waitAtDeadline: true)
         case (.unavailable(reason: .working), .busy):
-            guard isHeld == false, let control = summary.inputControl else { return .hold }
+            guard let control = summary.inputControl else { return .mustWait }
             // The conversation does not show the running turn yet.
-            guard let turnEpoch = control.turnEpoch else { return .undecided(holdAtDeadline: true) }
+            guard let turnEpoch = control.turnEpoch else { return .undecided(waitAtDeadline: true) }
             // The agent cannot read during a turn, or someone typed in
             // this turn's terminal.
-            guard control.canSteer else { return .hold }
+            guard control.canSteer else { return .mustWait }
             switch request(.steer, turnEpoch) {
             case .accepted, .duplicate: return .typed(.steered)
             case .uncertain: return .failed(.uncertain)
             case .rejected(.surfaceUnavailable), .rejected(.notBound): return .failed(.unavailable)
             // The turn did not take it. The message waits for its end.
-            case .rejected, .queued: return .hold
+            case .rejected, .queued: return .mustWait
             }
         case (.unavailable(reason: .working), .idle),
              (.unavailable(reason: .interrupted), .idle),
@@ -329,14 +273,14 @@ final class TaskSteerSender {
             // conversation is behind, as while it first reads its
             // transcript, and the prompt opens in a moment; or the prompt
             // holds text that someone typed, and stays closed.
-            return .undecided(holdAtDeadline: true)
+            return .undecided(waitAtDeadline: true)
         case (.unavailable(reason: .interrupted), .busy),
              (.localDraft, .busy):
-            return .hold
+            return .mustWait
         default:
             // The agent starts, ended or failed, or Toastty does not follow
             // its conversation.
-            return .undecided(holdAtDeadline: false)
+            return .undecided(waitAtDeadline: false)
         }
     }
 }

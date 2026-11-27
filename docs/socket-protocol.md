@@ -444,12 +444,15 @@ Notable action-specific behavior:
   - optional `args.steer=true` checks the agent before it types, and types
     nothing into a permission prompt or a question. The result adds
     `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
-    running turn of a Claude Code or Codex agent) or `queued` (held for the
-    agent's next open prompt, with `queuePosition` and `delivered` false).
+    running turn of a Claude Code or Codex agent) or `queued` (saved on the
+    task for the agent's next open prompt, also after a relaunch, with
+    `messageID`, `queuePosition` and `delivered` false; `task.get` lists it
+    under `queuedMessages` with `steer: true`).
     Send it through `app_control.run_action`: it can wait up to 5 seconds for
     the agent's state. It returns `INVALID_PAYLOAD`, with nothing typed, when
     Toastty cannot tell what the agent does, when text that someone typed can
-    still be in the agent's prompt, and when 5 messages already wait. See
+    still be in the agent's prompt, and, for a message that must wait, when 10
+    messages already wait or the task was archived. See
     [Coordinate tasks](tasks.md#coordinate-tasks).
   - returns `taskID`, `sessionID`, `panelID`, and `delivered`. A task with no
     running agent, empty text, or a message that was typed but may not have

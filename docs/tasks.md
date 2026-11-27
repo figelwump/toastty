@@ -544,7 +544,10 @@ spawned it. A task
 created from an agent in another task's task space records that task as its
 parent (`parentTaskID`). The new task's first message names the parent as a
 link, `[title](toastty://task/<parent-id>)`, and says how to report to it with
-`toastty task send <parent-id>`.
+`toastty task send <parent-id> --steer`. The parent's agent is often in a turn,
+and reads a steered report there. Toastty saves the report for the parent's
+next prompt when typing it now would join a draft or answer a prompt. If the
+send fails, the child sends the report again with `--queue`.
 
 ## Work in a git worktree
 
@@ -732,11 +735,19 @@ worktree.
   | --- | --- |
   | `sent` | The agent was at its open prompt. Toastty typed the message there. |
   | `steered` | A Claude Code or Codex agent was in a turn. Toastty typed the message into that turn. Claude Code reads it after its active tool calls finish, or when the turn ends. |
-  | `queued` | Toastty holds the message and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt, a question or a dialog of Claude Code's own is on screen. `queuePosition` counts from 1. |
+  | `queued` | Toastty saved the message on the task and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt, a question or a dialog of Claude Code's own is on screen. `queuePosition` counts from 1. The result also has the `messageID`. |
 
-  Toastty holds at most 5 messages for an agent. It loses them when Toastty
-  quits or the agent restarts, and reports neither. The command fails, with
-  nothing typed, in these cases:
+  A `--steer` message that must wait is saved on the task as a `--queue`
+  message is (below), so it survives a restart of the agent and of Toastty,
+  and goes to the agent that works on the task then. `task get` lists it
+  under `queuedMessages` with `steer: true`. It goes before Toastty's other
+  messages: one for each open prompt, oldest first, and before a watch,
+  wake, merge or `--queue` message. A later `--steer` send waits behind it.
+  It waits only for an open prompt, as a `--steer` send to an open prompt
+  types at once: not for the task's question, a turn that a quit cut off,
+  or a task that merged or is Done. Toastty drops it, with the reason, only
+  when the task is archived. Up to 10 messages of both kinds wait for one
+  task. The command fails, with nothing typed, in these cases:
   - Toastty cannot tell what the agent does: it does not follow that agent's
     conversation, or the agent starts, ended or failed.
   - Someone typed in the task's terminal since the agent's latest turn
@@ -744,7 +755,8 @@ worktree.
     text can still be in the agent's prompt, and Toastty does not add to it.
     Toastty follows every agent's conversation while Remote Access is on,
     and otherwise from the first `--steer` send to the task.
-  - 5 messages already wait.
+  - The message must wait and 10 messages already wait, or the task was
+    archived.
 
   The message is not your typing, so `lastUserInputAt` does not move. Toastty
   learns of a permission prompt from the agent's hooks, a short time after the
@@ -770,7 +782,7 @@ worktree.
   (`task needs-reply`), since a new turn clears that question, and while a
   quit cut off the agent's turn, until that turn goes on. Toastty types one
   message for each open prompt, oldest first, after its own watch, wake and
-  merge messages and after any message that `--steer` holds. The message
+  merge messages and after any `--steer` message that waits. The message
   survives a restart of the agent and of Toastty, and goes to the agent that
   works on the task then.
 
@@ -778,7 +790,8 @@ worktree.
   message under `queuedMessages` has its `messageID`, `from`, `queuedAt`, and
   `state`: `queued`, `sent`, `sentUnconfirmed` or `dropped`, with the time in
   `at`. Toastty drops the waiting messages, with the reason, when the task
-  merges, ships, is marked Done or is archived first, and lists a message
+  merges, ships, is marked Done, finishes through its child tasks or is
+  archived first, and lists a message
   for 24 hours after it leaves the queue. To read the agent's answer, watch
   the task `--until idle` after the send: that watch fires only once no
   queued message waits, after the turn that read yours. Up to 10 messages
@@ -793,7 +806,7 @@ Watch conditions:
 
 | Condition | Holds when |
 | --- | --- |
-| `idle` | The agent finished a turn after the watch was made, and no message from `task send --queue` waits for it. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
+| `idle` | The agent finished a turn after the watch was made, and no message from `task send --queue`, or from `--steer` that had to wait, waits for it. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
 | `waiting` | The agent waits for an approval or an answer. |
 | `ready-for-review` | The task's pull request waits for review, or its agent marked work without a pull request ready. |
 | `merged` | Its pull request merged. |
@@ -824,7 +837,7 @@ reports idle or ready at its prompt. Toastty waits while it detects what makes
 a plain `task send` fail: a permission prompt, a question, a dialog of Claude
 Code's own, or text that may still be in the prompt. Watches, scheduled
 wakes, merge messages and queued messages share one automatic submission per
-prompt, and leave it to a message that `--steer` holds.
+prompt, and leave it to a `--steer` message that waits.
 `toastty task watches` lists watches, with `--task` or
 `--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.
 Delivered watches stay listed for up to a day.
