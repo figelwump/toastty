@@ -347,7 +347,7 @@ extension TaskCoordinator {
                               record.mergeFailure == nil, record.startWork?.state != .running,
                               self.liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == expectedSessionID,
                               self.promptOccupant(of: session) == nil,
-                              self.sessions?.hasHeldSteerMessages(panelID: source.panelID) == false else { return false }
+                              !self.hasWaitingSteerMessage(for: session) else { return false }
                         return launcher.claudeRecoveryPromptIsFree(source: source)
                     },
                     adoptPanel: { panelID, sessionID in
