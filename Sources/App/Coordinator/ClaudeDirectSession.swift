@@ -7,7 +7,7 @@ import RemoteProtocol
 /// Off unless the user turns it on: a prototype for the user's own use.
 ///
 /// Turn it on with
-/// `defaults write <Toastty's defaults domain> toastty.coordinator.claudeDirectSession -bool YES`,
+/// `defaults write com.GiantThings.toastty toastty.coordinator.claudeDirectSession -bool YES`,
 /// or for one run with `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1`. The
 /// next start of the coordinator uses it.
 enum CoordinatorDirectSessionSetting {

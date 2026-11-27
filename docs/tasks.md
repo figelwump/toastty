@@ -1467,6 +1467,78 @@ relaunch resumes does not show it.
   `toastty:` link, is plain text. Other links open only `http` and `https`
   pages, in your browser.
 
+### A direct session for a Claude coordinator (prototype)
+
+Off by default. With it on, Toastty starts the coordinator's Claude Code
+agent as a process of its own and exchanges JSON messages with it
+(`claude -p --input-format stream-json --output-format stream-json`). No
+agent runs in the coordinator's terminal, and Toastty types nothing there.
+The chat, quick entry, `coordinator send`, the digests and a paired iPhone
+work as before. This is a prototype for your own use. The terminal stays the
+default, and Codex and the other agents always use it.
+
+Turn it on, then restart the coordinator:
+
+```bash
+defaults write com.GiantThings.toastty toastty.coordinator.claudeDirectSession -bool YES
+```
+
+`TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1` in the app's environment does
+the same for one run, and `0` forces the terminal. To go back, turn the
+setting off and relaunch Toastty: the same conversation then resumes in the
+terminal.
+
+What is different from the terminal:
+
+- **A message is given as data.** Each message has its own ID, and Claude
+  Code returns that ID when it takes the message. Toastty does not compare
+  text to learn whether a message arrived, and does not wait for a prompt
+  to settle.
+- **A turn's end is a fact.** Claude Code reports each turn's end and the
+  messages that the turn answered. The next message can go at once. A Stop
+  is a request: the turn runs until Claude Code reports its end. A message
+  that Claude Code already held when you stopped starts its own turn.
+- **Compaction is a state.** Claude Code says when it compacts. The
+  summary it writes is not a message, and the next message starts one
+  turn.
+- **A permission request or a question is a request with an ID.** It takes
+  one answer: the first that fits, from the Mac or a paired iPhone. An
+  iPhone that may approve requests answers with the card it has today.
+  The Mac's chat has no buttons for a permission request yet. Until it
+  has, set the coordinator's rules so that it does not ask, or answer from
+  the iPhone.
+- **The terminal of the coordinator's panel is a plain shell.** Keys typed
+  there are not a draft and do not reach the agent.
+
+Before the first message, Toastty checks three things and fails the start
+with the reason when one does not hold:
+
+1. Claude Code uses your Claude plan sign-in. Toastty removes
+   `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the process's
+   environment, and stops a turn that would bill an API key.
+2. Claude Code offers Toastty's coordinator skill, when Toastty delivered
+   its skills to this launch.
+3. Claude Code's start reached Toastty through the hooks.
+
+A Claude Code that reads no sign-in, hooks or skills, as `--bare` does,
+fails these checks. An agent profile whose arguments ask for such a mode
+is refused.
+
+After a relaunch, Toastty goes on with the same conversation: it shows the
+history from Claude Code's transcript file and starts the process with
+`--resume`. When the process ends by itself, the coordinator's row shows
+why, and Open Coordinator goes on with the conversation. Restart
+Coordinator starts a new one. Quitting Toastty ends the process.
+
+Limits of the prototype:
+
+- Text appears one whole message at a time, as with the terminal.
+- A sign-in, and Claude Code commands that open a dialog, need a terminal:
+  turn the setting off for them.
+- The usage-limit recovery of a terminal coordinator does not run.
+- A process that outlives a crash of Toastty ends when its input closes,
+  after the work it has in hand.
+
 ### The coordinator's dock
 
 The dock shows the coordinator's chat in a column between the sidebar and
