@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP_NAME="Toastty"
 PUBLISH_MODE="draft"
+PUBLISH_CONFIRMED=0
 DRY_RUN=0
 CREATE_TAG=0
 NOTES_FILE=""
@@ -46,6 +47,8 @@ usage() {
 Create a GitHub Release for an existing Toastty DMG.
 
 Default behavior is to create a draft release. Pass --publish to publish immediately.
+--publish makes the release live, so it also needs --confirm-publish, which
+says that the user answered a plain yes to "publish now?" for this release.
 
 Required environment:
   TOASTTY_VERSION
@@ -53,6 +56,8 @@ Required environment:
 
 Options:
   --publish          Publish immediately instead of creating a draft release
+  --confirm-publish  Required with --publish (except with --dry-run): the user
+                     answered a plain yes to "publish now?" for this release
   --create-tag       Create and push the release tag from recorded release metadata
   --dry-run          Print the git/gh commands without creating a tag or release
   --notes-file <path>
@@ -120,6 +125,10 @@ parse_args() {
         PUBLISH_MODE="publish"
         shift
         ;;
+      --confirm-publish)
+        PUBLISH_CONFIRMED=1
+        shift
+        ;;
       --create-tag)
         CREATE_TAG=1
         shift
@@ -157,6 +166,18 @@ parse_args() {
         ;;
     esac
   done
+}
+
+# --publish makes the GitHub release, the update feed and the website's
+# Download link point to this build. Refuse it before any check or network
+# call unless the caller says the user answered "publish now?" with a yes.
+require_publish_confirmation() {
+  if [[ "$PUBLISH_CONFIRMED" == "1" && "$PUBLISH_MODE" != "publish" ]]; then
+    fail "--confirm-publish applies only with --publish"
+  fi
+  if [[ "$PUBLISH_MODE" == "publish" && "$DRY_RUN" != "1" && "$PUBLISH_CONFIRMED" != "1" ]]; then
+    fail "--publish makes Toastty $TOASTTY_VERSION build $TOASTTY_BUILD_NUMBER live for users. Ask the user \"publish now?\" right before this step, and add --confirm-publish only after their plain yes to that question."
+  fi
 }
 
 detect_default_repo() {
@@ -806,6 +827,7 @@ require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
 
 parse_args "$@"
+require_publish_confirmation
 validate_build_number
 validate_version_string
 resolve_defaults

@@ -255,6 +255,34 @@ class PublishNotesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Dry run release command", result.stdout)
 
+    def publish_live(self, *extra):
+        self.notes.write_text(VALID_NOTES)
+        return run([str(self.root / "scripts/release/publish-github-release.sh"),
+                    "--create-tag", "--repo", "example/toastty", "--publish", *extra],
+                   env=self.env, cwd=self.root)
+
+    def test_live_publish_without_the_users_yes_stops_first(self):
+        result = self.publish_live()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Ask the user "publish now?"', result.stderr)
+        self.assertIn("--confirm-publish", result.stderr)
+        self.assertFalse(self.gh_log.exists(), "publication contacted GitHub")
+        tags = run(["git", "-C", str(self.root), "tag"]).stdout
+        self.assertEqual(tags, "", "publication created a tag")
+
+    def test_live_publish_with_the_users_yes_goes_on_to_github(self):
+        # The fake gh refuses every call, so the run stops at the sign-in
+        # check: past the confirmation and before any tag.
+        result = self.publish_live("--confirm-publish")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("gh is not authenticated", result.stderr)
+        self.assertNotIn("publish now?", result.stderr)
+
+    def test_confirmation_without_publish_stops(self):
+        result = self.publish(VALID_NOTES, "--confirm-publish")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--confirm-publish applies only with --publish", result.stderr)
+
     def assert_publication_blocked(self, diagnostic):
         result = self.publish(VALID_NOTES)
         self.assertNotEqual(result.returncode, 0)

@@ -32,6 +32,9 @@ checklist in the release pull request or handoff:
    older phone shows a task alert's text, but a tap only opens the app, and
    while the app is open no banner shows.
 5. Release the Mac app: this skill, then `../toastty-publish/SKILL.md`.
+   Right before the release goes live, ask the user "publish now?" and wait
+   for a plain yes, as `../toastty-publish/SKILL.md` ("Publish now?")
+   describes. No release approval skips this question.
 6. Publish the website change: merge its pull request into `main` after the
    Mac release is live, then check toastty.dev. For `0.10.0` that is the
    website text change (#392) and the "Tasks and the Coordinator" section
@@ -95,7 +98,7 @@ then; the iPhone real-device check uses that build.
    - `artifacts/release/<version>-<build>/sparkle-metadata.env`
    - `artifacts/release/<version>-<build>/release-notes.md`
    - `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
-14. If the user's release approval already covers publication, do not ask again: open `../toastty-publish/SKILL.md` and follow that workflow. If the approval did not cover publication, stop after the build-and-draft handoff, and continue into publication only when the user asks.
+14. If the user's release approval already covers publication, do not ask for that approval again: open `../toastty-publish/SKILL.md` and follow that workflow. It still stops right before the release goes live and asks the user "publish now?". If the approval did not cover publication, stop after the build-and-draft handoff, and continue into publication only when the user asks.
 
 ## Important invariants
 
