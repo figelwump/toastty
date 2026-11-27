@@ -1470,9 +1470,20 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
             return
         }
 
+        guard let destinationURL = webKitRequestURL(
+            from: navigationAction,
+            getter: #selector(getter: WKNavigationAction.request)
+        ) else {
+            decisionHandler(.cancel)
+            return
+        }
+
         switch GettingStartedActionNavigationPolicy.decision(
-            for: navigationAction.request.url,
-            sourceFrameURL: navigationAction.sourceFrame.request.url,
+            for: destinationURL,
+            sourceFrameURL: webKitRequestURL(
+                from: navigationAction.sourceFrame,
+                getter: #selector(getter: WKFrameInfo.request)
+            ),
             sourceFrameIsMainFrame: navigationAction.sourceFrame.isMainFrame
         ) {
         case .allow:
@@ -1491,14 +1502,14 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
             ToasttyLog.warning(
                 "Ignored unsupported Toastty page action",
                 category: .state,
-                metadata: ["url": navigationAction.request.url?.absoluteString ?? "missing"]
+                metadata: ["url": destinationURL.absoluteString]
             )
             decisionHandler(.cancel)
             return
         }
 
         switch BrowserLinkRoutingRules.navigationPolicyDecision(
-            url: navigationAction.request.url,
+            url: destinationURL,
             navigationType: navigationAction.navigationType,
             modifierFlags: effectiveModifierFlags(for: navigationAction),
             targetFrameIsNil: navigationAction.targetFrame == nil
@@ -1509,6 +1520,12 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
             _ = openSecondaryURL(url)
             decisionHandler(.cancel)
         }
+    }
+
+    private func webKitRequestURL(from object: NSObject, getter: Selector) -> URL? {
+        // Older WebKit can return nil despite the nonnull declaration.
+        // Read the Objective-C object before Swift can bridge it to URLRequest.
+        (object.perform(getter)?.takeUnretainedValue() as? NSURLRequest)?.url
     }
 }
 

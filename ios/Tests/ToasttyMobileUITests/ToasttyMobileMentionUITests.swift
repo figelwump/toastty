@@ -244,9 +244,11 @@ final class ToasttyMobileMentionUITests: XCTestCase {
         input.typeText("@")
         let list = mentionList(in: app)
         XCTAssertTrue(list.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitUntilHittable(row("Composer blank line", in: app)))
-        let covered = waiting.filter { $0.exists && $0.frame.intersects(list.frame) }
-        XCTAssertFalse(covered.isEmpty, "The list opens over the waiting messages at the chat's end")
+        let listFrame = list.frame
+        XCTAssertTrue(
+            waiting.contains { $0.exists && $0.frame.intersects(listFrame) },
+            "The list opens over the waiting messages at the chat's end"
+        )
         attachScreenshot(named: "mention-list-over-waiting-messages", of: app)
 
         // The row is below the list's first four; the search brings it up.

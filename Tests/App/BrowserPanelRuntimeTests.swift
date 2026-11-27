@@ -1,6 +1,7 @@
 @testable import ToasttyApp
 import AppKit
 import CoreState
+import ObjectiveC
 import WebKit
 import XCTest
 
@@ -170,6 +171,115 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.automationState().navigationState, .idle)
     }
 
+    func testBrowserNavigationHandlesMissingWebKitRequests() async throws {
+        let runtime = makeRuntime()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        runtime.attachHost(to: container, attachment: .next())
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        let destinationGetter = try XCTUnwrap(class_getInstanceMethod(
+            WKNavigationAction.self, #selector(getter: WKNavigationAction.request)
+        ))
+        let sourceGetter = try XCTUnwrap(class_getInstanceMethod(
+            WKFrameInfo.self, #selector(getter: WKFrameInfo.request)
+        ))
+
+        let checked = expectation(description: "Browser decided policy for missing WebKit requests")
+        let interceptor = NavigationActionInterceptor { webView, action in
+            XCTAssertEqual(self.navigationPolicies(
+                runtime, webView: webView, action: action, withMissingRequestFrom: destinationGetter
+            ), [.cancel])
+            XCTAssertEqual(self.navigationPolicies(
+                runtime, webView: webView, action: action, withMissingRequestFrom: sourceGetter
+            ), [.allow])
+            checked.fulfill()
+        }
+        webView.navigationDelegate = interceptor
+        XCTAssertTrue(runtime.loadUserEnteredURL("data:text/html,<title>First</title>"))
+        await fulfillment(of: [checked], timeout: 5)
+        withExtendedLifetime(interceptor) {}
+
+        webView.navigationDelegate = runtime
+        XCTAssertTrue(runtime.loadUserEnteredURL("data:text/html,<title>Retry</title>"))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().title, "Retry")
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+    }
+
+    func testGettingStartedActionDispatchesFromLivePage() async throws {
+        let panelID = UUID()
+        let runtime = BrowserPanelRuntime(
+            panelID: panelID, metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        runtime.attachHost(to: container, attachment: .next())
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        XCTAssertTrue(runtime.loadUserEnteredURL("toastty://getting-started/"))
+        try await waitForNavigation(runtime)
+        XCTAssertEqual(runtime.automationState().navigationState, .finished)
+
+        let clickActionLink = """
+            (() => {
+                const link = document.querySelector('a[data-action="open-shortcut-reference"]');
+                if (!link) return false;
+                link.click();
+                return true;
+            })()
+            """
+        let nativeAction = GettingStartedPanelRequest.performNativeAction(panelID: panelID, action: .openShortcutReference)
+        let sourceGetter = try XCTUnwrap(class_getInstanceMethod(
+            WKFrameInfo.self, #selector(getter: WKFrameInfo.request)
+        ))
+        let blocked = expectation(description: "Getting Started action cancelled when the source request is missing")
+        let interceptor = NavigationActionInterceptor { webView, action in
+            let observer = NotificationCenter.default.addObserver(
+                forName: .toasttyShowAgentGetStartedFlow, object: nil, queue: nil
+            ) {
+                if ($0.object as? GettingStartedPanelRequest) == nativeAction {
+                    XCTFail("A source with no request must not dispatch a native action")
+                }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            XCTAssertEqual(self.navigationPolicies(
+                runtime, webView: webView, action: action, withMissingRequestFrom: sourceGetter
+            ), [.cancel])
+            blocked.fulfill()
+        }
+        webView.navigationDelegate = interceptor
+        let firstClick = try await webView.evaluateJavaScript(clickActionLink)
+        XCTAssertEqual(firstClick as? Bool, true)
+        await fulfillment(of: [blocked], timeout: 5)
+        withExtendedLifetime(interceptor) {}
+
+        webView.navigationDelegate = runtime
+        let dispatched = expectation(forNotification: .toasttyShowAgentGetStartedFlow, object: nil) {
+            ($0.object as? GettingStartedPanelRequest) == nativeAction
+        }
+        let clicked = try await webView.evaluateJavaScript(clickActionLink)
+        XCTAssertEqual(clicked as? Bool, true)
+        await fulfillment(of: [dispatched], timeout: 5)
+        XCTAssertEqual(webView.url?.absoluteString, "toastty://getting-started/")
+    }
+
+    private func navigationPolicies(
+        _ runtime: BrowserPanelRuntime,
+        webView: WKWebView,
+        action: WKNavigationAction,
+        withMissingRequestFrom getter: Method
+    ) -> [WKNavigationActionPolicy] {
+        // Inject nil only during the synchronous call into the real navigation delegate.
+        let missingRequest: @convention(block) (AnyObject) -> NSURLRequest? = { _ in nil }
+        let replacement = imp_implementationWithBlock(missingRequest)
+        let original = method_setImplementation(getter, replacement)
+        defer {
+            method_setImplementation(getter, original)
+            imp_removeBlock(replacement)
+        }
+        var policies: [WKNavigationActionPolicy] = []
+        runtime.webView(webView, decidePolicyFor: action) { policies.append($0) }
+        return policies
+    }
+
     private func waitForNavigation(
         _ runtime: BrowserPanelRuntime,
         allowingIdle: Bool = false
@@ -237,6 +347,7 @@ final class BrowserPanelRuntimeTests: XCTestCase {
 
     func testGettingStartedActionNavigationPolicyWhitelistsNativeActions() throws {
         let trustedSourceURL = try XCTUnwrap(URL(string: "toastty://getting-started/#onboarding"))
+        let externalSourceURL = try XCTUnwrap(URL(string: "https://example.com"))
 
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
@@ -273,7 +384,7 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
                 for: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts")),
-                sourceFrameURL: try XCTUnwrap(URL(string: "https://example.com")),
+                sourceFrameURL: externalSourceURL,
                 sourceFrameIsMainFrame: true
             ),
             .allow
@@ -291,11 +402,14 @@ final class BrowserPanelRuntimeTests: XCTestCase {
 
     func testGettingStartedActionNavigationPolicyRejectsUntrustedSources() throws {
         let actionURL = try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles"))
+        let externalSourceURL = try XCTUnwrap(URL(string: "https://example.com"))
+        let assetSourceURL = try XCTUnwrap(URL(string: "toastty://getting-started/asset.js"))
+        let trustedSourceURL = try XCTUnwrap(URL(string: "toastty://getting-started/"))
 
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
                 for: actionURL,
-                sourceFrameURL: try XCTUnwrap(URL(string: "https://example.com")),
+                sourceFrameURL: externalSourceURL,
                 sourceFrameIsMainFrame: true
             ),
             .ignore
@@ -311,7 +425,7 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
                 for: actionURL,
-                sourceFrameURL: try XCTUnwrap(URL(string: "toastty://getting-started/asset.js")),
+                sourceFrameURL: assetSourceURL,
                 sourceFrameIsMainFrame: true
             ),
             .ignore
@@ -319,7 +433,7 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
                 for: actionURL,
-                sourceFrameURL: try XCTUnwrap(URL(string: "toastty://getting-started/")),
+                sourceFrameURL: trustedSourceURL,
                 sourceFrameIsMainFrame: false
             ),
             .ignore
@@ -812,5 +926,25 @@ final class BrowserPanelRuntimeTests: XCTestCase {
             first: .slot(slotID: UUID(), panelID: firstPanelID),
             second: .slot(slotID: UUID(), panelID: secondPanelID)
         )
+    }
+}
+
+@MainActor
+private final class NavigationActionInterceptor: NSObject, WKNavigationDelegate {
+    private var inspect: (@MainActor (WKWebView, WKNavigationAction) -> Void)?
+
+    init(_ inspect: @escaping @MainActor (WKWebView, WKNavigationAction) -> Void) {
+        self.inspect = inspect
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        let inspect = self.inspect
+        self.inspect = nil
+        inspect?(webView, navigationAction)
+        decisionHandler(.cancel)
     }
 }
