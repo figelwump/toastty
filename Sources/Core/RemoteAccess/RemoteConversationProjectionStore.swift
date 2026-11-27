@@ -240,6 +240,13 @@ public final class RemoteConversationProjectionStore {
         return emitted
     }
 
+    /// See `ConversationProjector.hostReadsTurnState`.
+    public func setHostReadsTurnState(_ value: Bool, for conversationID: RemoteConversationID) {
+        guard var projector = projectorsByID[conversationID], projector.hostReadsTurnState != value else { return }
+        projector.setHostReadsTurnState(value)
+        projectorsByID[conversationID] = projector
+    }
+
     @discardableResult
     public func completePromptStabilization(
         for conversationID: RemoteConversationID,
@@ -303,6 +310,7 @@ public final class RemoteConversationProjectionStore {
             // binding can reconstruct its current state.
             at: previous.providerAuthorityEstablishedAt ?? date
         )
+        replacement.setHostReadsTurnState(previous.hostReadsTurnState)
         replacement.noteBinding(reason: .projectionRebuilt, bindingID: bindingID, at: date)
         projectorsByID[conversationID] = replacement
         // The caller re-ingests the provider file, which rebuilds the grants

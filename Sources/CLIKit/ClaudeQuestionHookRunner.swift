@@ -127,34 +127,7 @@ enum ClaudeQuestionHookParser {
     }
 
     private static func parseQuestions(_ value: AutomationJSONValue?) -> [RemoteInteractionQuestion]? {
-        guard case .array(let rawQuestions)? = value, (1...4).contains(rawQuestions.count) else { return nil }
-        var questions: [RemoteInteractionQuestion] = []
-        for (index, rawQuestion) in rawQuestions.enumerated() {
-            guard case .object(let question) = rawQuestion,
-                  Set(question.keys).isSubset(of: ["question", "header", "options", "multiSelect"]),
-                  let text = question.string("question"),
-                  let header = question.string("header"),
-                  let multiSelect = question.bool("multiSelect"),
-                  case .array(let rawOptions)? = question["options"],
-                  (2...4).contains(rawOptions.count) else { return nil }
-            let questionID = "q\(index)"
-            var options: [RemotePendingInteraction.Option] = []
-            for (optionIndex, rawOption) in rawOptions.enumerated() {
-                guard case .object(let option) = rawOption,
-                      Set(option.keys).isSubset(of: ["label", "description", "preview"]),
-                      let label = option.string("label"),
-                      option["description"] == nil || option.string("description") != nil,
-                      option["preview"] == nil || option.string("preview") != nil else { return nil }
-                options.append(.init(
-                    id: "\(questionID):o\(optionIndex)",
-                    label: label,
-                    detail: option.string("description"),
-                    preview: option.string("preview")
-                ))
-            }
-            questions.append(.init(id: questionID, header: header, question: text, options: options, multiSelect: multiSelect))
-        }
-        return ClaudeQuestionValidation.validateQuestions(questions) ? questions : nil
+        ClaudeQuestionValidation.questions(fromToolInput: value)
     }
 }
 

@@ -54,6 +54,11 @@ public struct ConversationProjector: Sendable {
     /// read on a timer. A user message from before this time belongs to
     /// that finished turn. It is history, not the start of a new turn.
     private var lastTurnEndedAt: Date?
+    /// The host runs the agent's process and reads each turn's start and end
+    /// from it (`ClaudeStreamSession`). A turn end is then a fact, not a
+    /// report that can come early, so the prompt opens with it: there is no
+    /// composer that still has to reset, and no stabilization window.
+    public private(set) var hostReadsTurnState = false
 
     private var currentEpoch: RemoteInputEpoch
     /// A confirmed managed-runtime bootstrap may authorize the first prompt
@@ -216,7 +221,7 @@ public struct ConversationProjector: Sendable {
                 currentEpoch = currentEpoch.next()
                 switch reason {
                 case .completed:
-                    if provider == .claude {
+                    if provider == .claude, hostReadsTurnState == false {
                         pendingPromptStabilizationToken = ConversationPromptStabilizationToken(
                             observationFingerprint: observation.fingerprint
                         )
@@ -229,6 +234,11 @@ public struct ConversationProjector: Sendable {
                     } else {
                         transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
                     }
+                case .aborted where hostReadsTurnState:
+                    // The agent's process reported the end of the stopped
+                    // turn. It takes the next message now.
+                    transition(to: .interrupted, availability: .unavailable(reason: .interrupted), at: observation.timestamp, emitting: &emitted)
+                    transition(to: .awaitingInput, availability: .openPrompt(epoch: currentEpoch), at: observation.timestamp, emitting: &emitted)
                 case .aborted:
                     // An aborted turn returns to the composer, but that is
                     // inferred, not authoritative. Keep the prompt closed
@@ -266,6 +276,20 @@ public struct ConversationProjector: Sendable {
     }
 
     // MARK: - Host runtime facts
+
+    /// Says whether the host reads the turn state from the agent's own
+    /// process; see `hostReadsTurnState`. A pending stabilization window is
+    /// left to end as it started.
+    public mutating func setHostReadsTurnState(_ value: Bool) {
+        hostReadsTurnState = value
+    }
+
+    /// The identity of an interaction with this provider call ID, as
+    /// `ingest` gives it. A host that resolves an interaction itself names
+    /// it with this.
+    public static func interactionID(provider: AgentKind, providerCallID: String) -> RemotePendingInteraction.ID {
+        RemotePendingInteraction.ID(rawValue: "\(provider.rawValue):call:\(providerCallID)")
+    }
 
     /// Records a runtime binding change decided by the host (launch, native
     /// resume, runtime exit, projection rebuild). Every binding change mints a
@@ -710,7 +734,7 @@ public struct ConversationProjector: Sendable {
             return RemotePendingInteraction.ID(rawValue: "\(provider.rawValue):approval:\(approvalID)")
         }
         if let callID = observation.providerCallID {
-            return RemotePendingInteraction.ID(rawValue: "\(provider.rawValue):call:\(callID)")
+            return interactionID(provider: provider, providerCallID: callID)
         }
         return RemotePendingInteraction.ID(rawValue: "\(provider.rawValue):fp:\(fingerprint)")
     }
