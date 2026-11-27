@@ -53,6 +53,9 @@ extension TaskWebhookService {
         var unanswered: (key: String, delivered: CoordinatorWakeState.Delivered)?
         /// The wake turns in a row that ended with an error.
         var failures = 0
+        var recoveringModel = false
+        var attemptedFailure: (sessionID: String, turnEndedAt: Date?)?
+        var recoveredFailureAt: Date?
 
         /// Toastty types no digest until a turn of the coordinator ends
         /// without an error. The changes keep waiting.
@@ -154,22 +157,94 @@ extension TaskWebhookService {
     /// does not run gets nothing: the digest stays here. So does a digest
     /// while wake turns keep failing (`CoordinatorWakeTurns.stopped`).
     func wakeCoordinator(at: Date) {
+        if var wake = coordinatorWake, wake.fableWakeInFlight != nil {
+            // During this app run, wait for the current digest's result.
+            guard coordinatorWakeTurns.unanswered == nil else { return }
+            wake.recoverUnconfirmedFableWake(at: at)
+            coordinatorWake = wake
+            saveOutbox()
+        }
+        if recoverCoordinatorModelIfNeeded(at: at) { return }
         guard coordinatorWakeTurns.stopped == false else { return }
-        guard let coordinator, var wake = coordinatorWake, let digest = wake.digest(now: at) else { return }
+        guard let coordinator, var wake = coordinatorWake,
+              let digest = wake.digest(now: at, recoveredFailureAt: coordinatorWakeTurns.recoveredFailureAt) else { return }
         guard let result = try? coordinator.send(digest, queueWhenHeld: false), result.wasTyped else { return }
         let taskCount = wake.changes.count
         let isRetry = wake.failedTurnAt != nil
         let delivered = wake.markDelivered(digest, at: at)
         coordinatorWake = wake
         coordinatorWakeTurns.unanswered = (CoordinatorWakeState.digestKey(digest), delivered)
-        // Saved at once: after a quit, a digest that was typed is not
-        // typed again.
+        // Save delivery and the temporary model's pending turn together.
         saveOutbox()
         ToasttyLog.info("Typed a wake digest into the coordinator", category: .tasks, metadata: [
             "task_count": String(taskCount),
             "submit_confirmed": result == .sent ? "true" : "false",
             "after_failed_turn": isRetry ? "true" : "false",
         ])
+    }
+
+    /// Hold digests while the coordinator's model cannot answer. Recover
+    /// from the app, since the failed agent cannot run a recovery command.
+    private func recoverCoordinatorModelIfNeeded(at: Date) -> Bool {
+        if coordinatorWakeTurns.recoveringModel { return true }
+        guard let coordinator, let source = coordinator.session, var wake = coordinatorWake,
+              source.workspaceID == wake.workspaceID else { return false }
+        let selection: (nativeID: UUID, model: String, effort: String?, fallback: CoordinatorWakeState.FableFallback?)
+        if let quota = source.status?.claudeFableQuota {
+            let attempted = coordinatorWakeTurns.attemptedFailure
+            guard attempted?.sessionID != source.sessionID || attempted?.turnEndedAt != source.lastTurnEndedAt,
+                  coordinator.canRecoverClaude(source) else { return true }
+            let fallback = CoordinatorWakeState.FableFallback(
+                nativeSessionID: quota.nativeSessionID,
+                returnAt: quota.resetsAt,
+                preferredEffort: wake.fableFallback?.preferredEffort ?? coordinator.configuredFableEffort
+            )
+            selection = (quota.nativeSessionID, ClaudeFableQuota.fallbackModel, ClaudeFableQuota.fallbackEffort, fallback)
+            coordinatorWakeTurns.attemptedFailure = (source.sessionID, source.lastTurnEndedAt)
+        } else {
+            guard var fallback = wake.fableFallback, let returnAt = fallback.returnAt, at >= returnAt,
+                  [.idle, .ready].contains(source.status?.kind),
+                  coordinator.isRunningFallbackClaude(source, nativeID: fallback.nativeSessionID),
+                  coordinator.canRecoverClaude(source) else { return false }
+            selection = (fallback.nativeSessionID, ClaudeFableQuota.preferredModel, fallback.preferredEffort, nil)
+            // Persist a bounded retry even if Toastty quits during the attempt.
+            fallback.returnAt = at.addingTimeInterval(60 * 60)
+            wake.fableFallback = fallback
+            coordinatorWake = wake
+            saveOutbox()
+        }
+        coordinatorWakeTurns.recoveringModel = true
+        Task { @MainActor [weak self, weak coordinator] in
+            guard let self, let coordinator, self.coordinatorWake?.workspaceID == source.workspaceID else { return }
+            defer {
+                if self.coordinatorWake?.workspaceID == source.workspaceID {
+                    self.coordinatorWakeTurns.recoveringModel = false
+                }
+            }
+            do {
+                try await coordinator.resumeClaudeAfterQuota(
+                    source: source, nativeID: selection.nativeID, model: selection.model,
+                    effort: selection.effort,
+                    beforeRetiring: {
+                        if let fallback = selection.fallback {
+                            self.coordinatorWake?.fableFallback = fallback
+                            self.saveOutbox()
+                        }
+                    }
+                )
+                guard self.coordinatorWake?.workspaceID == source.workspaceID else { return }
+                self.coordinatorWakeTurns.failures = 0
+                self.coordinatorWakeTurns.recoveredFailureAt = self.coordinatorWake?.failedTurnAt
+                self.coordinatorWake?.fableFallback = selection.fallback
+                self.saveOutbox()
+            } catch {
+                ToasttyLog.warning("Coordinator model recovery stopped", category: .tasks, metadata: [
+                    "session_id": source.sessionID, "reason": error.localizedDescription,
+                ])
+                self.notifyUser("Coordinator model recovery paused", error.localizedDescription)
+            }
+        }
+        return true
     }
 
     /// A turn of the coordinator's agent ended. A turn that ends without an
@@ -188,7 +263,13 @@ extension TaskWebhookService {
                 ToasttyLog.info("A coordinator turn ended without an error; wake digests go again", category: .tasks)
             }
             coordinatorWakeTurns.failures = 0
-            if startedByDigest { coordinatorWakeTurns.unanswered = nil }
+            if startedByDigest {
+                coordinatorWakeTurns.unanswered = nil
+                if coordinatorWake?.fableWakeInFlight != nil {
+                    coordinatorWake?.fableWakeInFlight = nil
+                    saveOutbox()
+                }
+            }
             return
         }
         guard startedByDigest, let unanswered = coordinatorWakeTurns.unanswered, var wake = coordinatorWake else { return }
@@ -250,6 +331,7 @@ extension TaskWebhookService {
         }
         // Whole seconds, as the digest and the status print the time.
         wake.setRequestedWake(date.map { Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)) })
+        wake.fableWakeInFlight?.scheduledCheck = nil
         coordinatorWake = wake
         // The coordinator decided its next check in the last digest's turn,
         // also when it cleared it: a failure of that turn does not tell the

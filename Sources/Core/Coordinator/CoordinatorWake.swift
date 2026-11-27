@@ -119,11 +119,31 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// typed.
     public private(set) var failedTurnAt: Date?
 
+    /// Which saved coordinator conversation is temporarily running on
+    /// Opus. An unknown reset time leaves it on Opus.
+    public struct FableFallback: Codable, Equatable, Sendable {
+        public var nativeSessionID: UUID
+        public var returnAt: Date?
+        public var preferredEffort: String?
+
+        public init(nativeSessionID: UUID, returnAt: Date?, preferredEffort: String?) {
+            self.nativeSessionID = nativeSessionID
+            self.returnAt = returnAt
+            self.preferredEffort = preferredEffort
+        }
+    }
+
+    public var fableFallback: FableFallback?
+    /// A wake submitted while the coordinator is on its temporary model.
+    /// Keep what it told until Toastty observes how the turn ended.
+    public var fableWakeInFlight: Delivered?
+    private var recoveredUnconfirmedWake: Bool?
+
     /// What a typed digest told the coordinator: its changes, and the time
     /// the coordinator set that had come. The app keeps it until the turn
     /// the digest started ends, so that a turn that fails can tell it
     /// again.
-    public struct Delivered: Equatable, Sendable {
+    public struct Delivered: Codable, Equatable, Sendable {
         public var changes: [TaskChange]
         public var scheduledCheck: Date?
     }
@@ -230,6 +250,8 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         changes = []
         requestedWakeAt = nil
         failedTurnAt = nil
+        recoveredUnconfirmedWake = nil
+        if fableFallback != nil { fableWakeInFlight = delivered }
         lastWakeAt = at
         lastDigestKey = Self.digestKey(digest)
         return delivered
@@ -246,6 +268,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// next digest says that the turn failed, and is not typed before
     /// `failedTurnRetryDelay` has passed.
     public mutating func tellAgain(_ delivered: Delivered, failedAt: Date) {
+        fableWakeInFlight = nil
         var restored: [TaskChange] = []
         for told in delivered.changes {
             guard let index = changes.firstIndex(where: { $0.taskID == told.taskID }) else {
@@ -262,6 +285,14 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
             requestedWakeAt = delivered.scheduledCheck
         }
         failedTurnAt = failedAt
+    }
+
+    /// A quit may prevent Toastty from observing a wake turn's outcome.
+    /// Ask the coordinator to reconcile current state before acting again.
+    public mutating func recoverUnconfirmedFableWake(at now: Date) {
+        guard let delivered = fableWakeInFlight else { return }
+        tellAgain(delivered, failedAt: now)
+        recoveredUnconfirmedWake = true
     }
 
     /// Whether a told line's stage wake still holds for the task's newer
@@ -361,12 +392,15 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// lists every change that waits, also the ones that wake nothing on
     /// their own. It names tasks, stages and alerts only: never an agent's
     /// reply, a prompt, a question or an attachment.
-    public func digest(now: Date) -> String? {
-        if let failedTurnAt, now < failedTurnAt.addingTimeInterval(Self.failedTurnRetryDelay) { return nil }
+    public func digest(now: Date, recoveredFailureAt: Date? = nil) -> String? {
+        if let failedTurnAt, recoveredFailureAt != failedTurnAt,
+           now < failedTurnAt.addingTimeInterval(Self.failedTurnRetryDelay) { return nil }
         let dueTimer = requestedWakeAt.flatMap { $0 <= now ? $0 : nil }
         guard changes.contains(where: \.wakes) || dueTimer != nil else { return nil }
         var lines = [Self.digestHeader]
-        if let failedTurnAt {
+        if recoveredUnconfirmedWake == true {
+            lines.append("- Toastty quit before confirming the previous wake. Check current task state before acting on these changes again.")
+        } else if let failedTurnAt {
             lines.append("- Your turn for Toastty's last wake ended with an error at \(Self.timestamp(failedTurnAt)). Its changes are listed again.")
         }
         lines += changes.prefix(Self.maximumListedTasks).map(Self.line)
@@ -415,6 +449,9 @@ extension CoordinatorWakeState {
         lastDigestKey = try container.decodeIfPresent(String.self, forKey: .lastDigestKey)
         quietDigestKeys = try container.decodeIfPresent([String].self, forKey: .quietDigestKeys) ?? []
         failedTurnAt = try container.decodeIfPresent(Date.self, forKey: .failedTurnAt)
+        fableFallback = try container.decodeIfPresent(FableFallback.self, forKey: .fableFallback)
+        fableWakeInFlight = try container.decodeIfPresent(Delivered.self, forKey: .fableWakeInFlight)
+        recoveredUnconfirmedWake = try container.decodeIfPresent(Bool.self, forKey: .recoveredUnconfirmedWake)
     }
 }
 

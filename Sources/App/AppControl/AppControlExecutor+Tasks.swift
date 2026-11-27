@@ -5,7 +5,7 @@ import RemoteProtocol
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+        case .taskCreate, .taskRetry, .taskRecoverFable, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskAnswer, .taskWaiting,
              .taskMarkDone, .taskArchive, .taskRelease, .taskReleaseComplete, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
              .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
@@ -33,6 +33,19 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.retry(taskID: record.id) }
             return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskRecoverFable:
+            guard messageSender() == .coordinator else {
+                throw AutomationSocketError.invalidPayload("Only the coordinator can request a Fable quota recovery.")
+            }
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            guard let sessionID = args.taskString("expectedSessionID") else {
+                throw AutomationSocketError.invalidPayload("expectedSessionID is required")
+            }
+            try perform { try coordinator.recoverFableTask(taskID: record.id, expectedSessionID: sessionID) }
+            return .init(didMutateState: true, result: [
+                "taskID": .string(record.id.uuidString),
+                "recovering": .bool(true),
+            ])
         case .taskStartWork:
             let request = TaskStartWorkRequest(
                 branchPrefix: args.taskString("branchPrefix"),
@@ -587,6 +600,8 @@ extension AppControlExecutor {
             "sessionID": optional(status.session?.sessionID),
             "panelID": optional(status.session?.panelID.uuidString),
             "summary": optional(status.session?.status?.summary),
+            "failure": optional(status.session?.status?.claudeFableQuota == nil ? nil : "claudeFableQuota"),
+            "recoveringModel": .bool(coordinator.recoveringFableTasks.contains(record.id)),
             "changedAt": optional(status.changedAt.map { ISO8601DateFormatter().string(from: $0) }),
             "lastTurnEndedAt": optional(status.session?.lastTurnEndedAt.map { ISO8601DateFormatter().string(from: $0) }),
             "interruptedAtQuit": .bool(coordinator.wasInterruptedAtQuit(record)),
