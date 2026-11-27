@@ -313,6 +313,19 @@ The Claude check also saves its transcript files, then removes the project
 directory and trust entry for its temporary working directory. Other provider
 history for that directory can remain in the validation account.
 
+### Terminal window cleanup for GUI checks
+
+The `--gui-session` launcher closes its own Terminal window at the end of each
+check. The command below builds a disposable app on the validation Mac and
+opens and closes test windows through Terminal. It verifies that the PTYs are
+released and existing windows stay open. It uses a fixture in place of a
+provider login.
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope head \
+  --validation-command 'python3 scripts/automation/terminal-gui-session-self-test.py'
+```
+
 ### Task send with steer
 
 ```bash

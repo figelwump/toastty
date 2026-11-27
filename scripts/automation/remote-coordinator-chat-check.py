@@ -95,13 +95,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import uuid
+
+from terminal_gui_session import gui_session
 
 HERE = Path(__file__).parent
 NAME = 'remote-coordinator-chat-check'
@@ -231,40 +232,24 @@ def run_in_gui_session(arguments, name=NAME, script=__file__):
     broker.mkdir()
     binary = broker / 'ax-drive'
     compile_ax_drive(binary)
-    done, output = artifacts / f'{name}-gui.exit', artifacts / f'{name}-gui.log'
-    done.unlink(missing_ok=True)
-    command = ' '.join([
-        'cd', shlex.quote(os.getcwd()), '&&',
-        f"TOASTTY_APP_BUNDLE={shlex.quote(os.environ['TOASTTY_APP_BUNDLE'])}",
-        f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
-        f'TOASTTY_AX_BROKER={shlex.quote(str(broker))}',
-        *(f'{key}={shlex.quote(os.environ[key])}' for key in ('TOASTTY_EVIDENCE_CAPTURE',) if key in os.environ),
-        'python3', shlex.quote(str(Path(script).resolve())), *map(shlex.quote, arguments),
-        '>', shlex.quote(str(output)), '2>&1;',
-        'echo $? >', shlex.quote(str(done)), '; exit',
-    ])
-    # Terminal types the command into a new shell. A terminal keeps at most
-    # 1024 characters for a shell that does not read yet, and drops the rest
-    # with the Return key, so the shell then waits for good. The long command
-    # goes into a file, and Terminal types a short one.
-    launcher = artifacts / f'{name}-gui.command'
-    launcher.write_text(command.removesuffix('; exit') + '\n')
-    do_script = f'tell application "Terminal" to do script {json.dumps(f"/bin/zsh {shlex.quote(str(launcher))}; exit")}'
-    subprocess.run(['osascript', '-e', do_script], check=True, capture_output=True, timeout=30)
-    deadline = time.time() + 2400
-    while not done.exists():
-        require(time.time() < deadline, 'The GUI-session check did not finish')
-        for request in sorted(broker.glob('*.request')):
-            arguments = json.loads(request.read_text())
-            completed = subprocess.run([str(binary), *arguments], capture_output=True, text=True, timeout=60)
-            temporary = request.with_suffix('.answering')
-            temporary.write_text(json.dumps(dict(code=completed.returncode, output=completed.stdout + completed.stderr)))
-            request.unlink()
-            os.replace(temporary, request.with_suffix('.answer'))
-        time.sleep(0.05)
-    print(output.read_text())
-    shutil.rmtree(broker, ignore_errors=True)
-    raise SystemExit(int(done.read_text().strip() or 1))
+    environment = {'TOASTTY_AX_BROKER': broker}
+    if 'TOASTTY_EVIDENCE_CAPTURE' in os.environ:
+        environment['TOASTTY_EVIDENCE_CAPTURE'] = os.environ['TOASTTY_EVIDENCE_CAPTURE']
+    with gui_session(name, script, arguments, environment) as (done, output):
+        deadline = time.time() + 2400
+        while not done.exists():
+            require(time.time() < deadline, 'The GUI-session check did not finish')
+            for request in sorted(broker.glob('*.request')):
+                arguments = json.loads(request.read_text())
+                completed = subprocess.run([str(binary), *arguments], capture_output=True, text=True, timeout=60)
+                temporary = request.with_suffix('.answering')
+                temporary.write_text(json.dumps(dict(code=completed.returncode, output=completed.stdout + completed.stderr)))
+                request.unlink()
+                os.replace(temporary, request.with_suffix('.answer'))
+            time.sleep(0.05)
+        print(output.read_text())
+        shutil.rmtree(broker, ignore_errors=True)
+        raise SystemExit(int(done.read_text().strip() or 1))
 
 
 # MARK: - The check
