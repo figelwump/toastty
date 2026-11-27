@@ -160,6 +160,7 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
     private var errorEnded = false
     private var exitStatus: Int32?
     private var didReportExit = false
+    private var orphanGuard: ChildProcessOrphanGuard?
 
     private static let errorOutputLimit = 16 * 1024
     /// A line longer than this is not a message that this host reads. It is
@@ -212,6 +213,19 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
             outputPipe.fileHandleForReading.readabilityHandler = nil
             errorPipe.fileHandleForReading.readabilityHandler = nil
             throw error
+        }
+        // A session with no guard still works. `/bin/sh` is always there,
+        // so only a system with no room for one more process gets here.
+        if let orphanGuard = try? ChildProcessOrphanGuard(childProcessIdentifier: process.processIdentifier) {
+            // A process that ended at once has its exit report behind it.
+            let processEnded = lock.withLock {
+                guard isRunning else { return true }
+                self.orphanGuard = orphanGuard
+                return false
+            }
+            if processEnded {
+                orphanGuard.release()
+            }
         }
     }
 
@@ -292,7 +306,12 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
     }
 
     private func receiveExit(_ status: Int32) {
-        lock.withLock { isRunning = false }
+        let orphanGuard = lock.withLock {
+            isRunning = false
+            defer { self.orphanGuard = nil }
+            return self.orphanGuard
+        }
+        orphanGuard?.release()
         exitStatus = status
         reportExitIfComplete()
         // A descendant that keeps the pipes open must not hold the exit
@@ -311,5 +330,75 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
         errorPipe.fileHandleForReading.readabilityHandler = nil
         let tail = String(decoding: errorOutput.suffix(Self.errorOutputLimit), as: UTF8.self)
         onEvent(.exited(status: exitStatus, errorOutput: tail))
+    }
+}
+
+/// Ends a child process when the app ends with no chance to end it, as at a
+/// crash. Claude Code does not end at the close of its input while a turn
+/// runs. Without this, it would go on with the turn with no host to answer
+/// its requests, and the next launch of the app would resume the same
+/// conversation in a second process.
+///
+/// A small shell process waits on a pipe whose other end only the app
+/// holds. The system closes that end when the app ends, in any way. The
+/// shell then reads the end of the pipe and signals the child: SIGTERM, and
+/// SIGKILL for a child that is still there 5 seconds later.
+final class ChildProcessOrphanGuard: @unchecked Sendable {
+    /// `$1` is the child's process ID. A word on the pipe before its end
+    /// means that the app released the guard: the child ended.
+    static let script = """
+    IFS= read -r word
+    [ -n "$word" ] && exit 0
+    kill -TERM "$1" 2>/dev/null || exit 0
+    tries=0
+    while [ "$tries" -lt 50 ] && kill -0 "$1" 2>/dev/null; do sleep 0.1; tries=$((tries + 1)); done
+    kill -KILL "$1" 2>/dev/null
+    exit 0
+    """
+
+    private let pipe = Pipe()
+    private let process = Process()
+    private let lock = NSLock()
+    private var isClosed = false
+
+    init(childProcessIdentifier: Int32) throws {
+        let hostEnd = pipe.fileHandleForWriting.fileDescriptor
+        // No other child of the app may hold this end: the pipe would stay
+        // open after the app's end. And a write to a guard that is gone
+        // gives an error, not a signal that would end the app.
+        _ = fcntl(hostEnd, F_SETFD, FD_CLOEXEC)
+        _ = fcntl(hostEnd, F_SETNOSIGPIPE, 1)
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", Self.script, "toastty-child-guard", String(childProcessIdentifier)]
+        process.environment = ["PATH": "/usr/bin:/bin"]
+        process.standardInput = pipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        try? pipe.fileHandleForReading.close()
+    }
+
+    /// The child ended. The guard ends too and signals nothing: the
+    /// child's process ID can belong to another process later.
+    func release() {
+        close(releasing: true)
+    }
+
+    /// What the system does at the app's end: it closes the app's end of
+    /// the pipe with nothing written. Tests call this in place of a crash.
+    func closeAsAtTheAppsEnd() {
+        close(releasing: false)
+    }
+
+    private func close(releasing: Bool) {
+        let wasClosed = lock.withLock {
+            defer { isClosed = true }
+            return isClosed
+        }
+        guard wasClosed == false else { return }
+        if releasing {
+            try? pipe.fileHandleForWriting.write(contentsOf: Data("released\n".utf8))
+        }
+        try? pipe.fileHandleForWriting.close()
     }
 }

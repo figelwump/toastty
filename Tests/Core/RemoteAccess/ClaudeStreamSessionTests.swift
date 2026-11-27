@@ -732,6 +732,52 @@ struct ClaudeStreamProcessTests {
         #expect(process.processIdentifier == nil)
     }
 
+    // MARK: - The app ends without ending the process
+
+    /// The second process ignores SIGTERM, as a busy one can for a while.
+    @Test(arguments: [("exec sleep 60", SIGTERM), ("trap '' TERM; exec sleep 60", SIGKILL)])
+    func theGuardEndsAProcessThatTheAppLeftBehind(script: String, signal: Int32) async throws {
+        let child = try Self.child(script)
+        defer { if child.isRunning { _ = kill(child.processIdentifier, SIGKILL) } }
+        let orphanGuard = try ChildProcessOrphanGuard(childProcessIdentifier: child.processIdentifier)
+        // The shell needs a moment to set its trap.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(child.isRunning)
+
+        orphanGuard.closeAsAtTheAppsEnd()
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+        while child.isRunning, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try #require(child.isRunning == false)
+        #expect(child.terminationReason == .uncaughtSignal)
+        #expect(child.terminationStatus == signal)
+    }
+
+    @Test func aReleasedGuardSignalsNothing() async throws {
+        let child = try Self.child("exec sleep 60")
+        defer { if child.isRunning { _ = kill(child.processIdentifier, SIGKILL) } }
+        let orphanGuard = try ChildProcessOrphanGuard(childProcessIdentifier: child.processIdentifier)
+
+        orphanGuard.release()
+        // A second close, as when the guard's owner goes away, adds nothing.
+        orphanGuard.closeAsAtTheAppsEnd()
+
+        try await Task.sleep(for: .seconds(1))
+        #expect(child.isRunning)
+    }
+
+    private static func child(_ script: String) throws -> Process {
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.arguments = ["-c", script]
+        child.standardOutput = FileHandle.nullDevice
+        child.standardError = FileHandle.nullDevice
+        try child.run()
+        return child
+    }
+
     final class Events: @unchecked Sendable {
         private let lock = NSLock()
         private var events: [ClaudeStreamProcess.Event] = []

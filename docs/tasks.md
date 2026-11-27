@@ -1530,7 +1530,11 @@ After a relaunch, Toastty goes on with the same conversation: it shows the
 history from Claude Code's transcript file and starts the process with
 `--resume`. When the process ends by itself, the coordinator's row shows
 why, and Open Coordinator goes on with the conversation. Restart
-Coordinator starts a new one. Quitting Toastty ends the process.
+Coordinator starts a new one. Quitting Toastty ends the process. A crash
+of Toastty ends it too, within a few seconds: a small guard process waits
+for the end of the app and then stops Claude Code, so a turn does not go on
+with nobody to read it. The message of a turn that a crash cut off is not
+sent again.
 
 Limits of the prototype:
 
@@ -1542,8 +1546,6 @@ Limits of the prototype:
 - A sign-in, and Claude Code commands that open a dialog, need a terminal:
   turn the setting off for them.
 - The usage-limit recovery of a terminal coordinator does not run.
-- A process that outlives a crash of Toastty ends when its input closes,
-  after the work it has in hand.
 
 ### The coordinator's dock
 
