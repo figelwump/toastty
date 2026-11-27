@@ -364,7 +364,7 @@ When the profile ID is `claude`, Toastty:
 2. **Creates a hook script** that calls `toastty session ingest-agent-event --source claude-hooks`
 3. **Resolves existing Claude settings** — if the profile's `argv` includes `--settings`, Toastty reads and merges with those settings rather than replacing them
 4. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
-   - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
+   - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume. A `compact` start refreshes this metadata and preserves the conversation and its current input state.
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
    - `StopFailure` — fires in place of `Stop` when an API error (rate limit, overload, authentication, output limit) ends the turn. Toastty shows **Error** with Claude's error text and ends the turn, so the next message can be typed
