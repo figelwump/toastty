@@ -29,9 +29,56 @@ protocol CoordinatorAgentLaunching: AnyObject {
     /// `project_doc_max_bytes` that the coordinator's start and resume
     /// add. `nil` when they can, or when the profile is not Codex's.
     func codexArgvLackingProjectDocMaxBytes(profileID: String) -> [String]?
+
+    /// Plans the launch that `launchCoordinator` types, and types nothing:
+    /// the coordinator runs the planned command as a process of Toastty's
+    /// own (`ClaudeDirectSession`). The session exists when this returns.
+    func planCoordinatorLaunch(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?
+    ) async throws -> ManagedAgentLaunchPlan
+}
+
+extension CoordinatorAgentLaunching {
+    func planCoordinatorLaunch(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?
+    ) async throws -> ManagedAgentLaunchPlan {
+        throw CoordinatorError("This launcher cannot plan a launch without a terminal.")
+    }
 }
 
 extension AgentLaunchService: CoordinatorAgentLaunching {
+    func planCoordinatorLaunch(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?
+    ) async throws -> ManagedAgentLaunchPlan {
+        try await planLaunchWithoutTerminal(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort
+        )
+    }
+
     func launchCoordinator(
         profileID: String,
         workspaceID: UUID,
@@ -199,6 +246,24 @@ final class CoordinatorController: ObservableObject {
     private let revealDocumentLine: (UUID, Int) -> Bool
     private let terminalReadinessTimeout: Duration
     private let now: () -> Date
+    /// Whether the next start of a Claude coordinator is a direct session;
+    /// see `CoordinatorDirectSessionSetting`.
+    private let directSessionEnabled: () -> Bool
+    /// What a terminal of the panel gets on top of the app's environment.
+    private let terminalEnvironment: (UUID) -> [String: String]
+    /// How long a direct session may take to answer the start request, and
+    /// then to report its start through Toastty's hooks.
+    private let directSessionStartTimeout: Duration
+    /// The coordinator's agent as a process of Toastty's own, while one
+    /// runs. See `ClaudeDirectSession`.
+    private var directSession: ClaudeDirectSession?
+
+    /// Takes the direct session's observations and gives it its input. Set
+    /// once the app has it. A coordinator whose direct session Toastty
+    /// quit with resumes it then.
+    var directSessionHost: (any DirectConversationSessionHost)? {
+        didSet { resumeDirectSessionAfterRelaunch() }
+    }
 
     private struct FailedStart {
         var workspaceID: UUID
@@ -499,7 +564,10 @@ final class CoordinatorController: ObservableObject {
         revealDocumentLine: @escaping (UUID, Int) -> Bool = { _, _ in false },
         terminalReadinessTimeout: Duration = .seconds(10),
         now: @escaping () -> Date = Date.init,
-        defaults: UserDefaults? = nil
+        defaults: UserDefaults? = nil,
+        directSessionEnabled: @escaping () -> Bool = { false },
+        terminalEnvironment: @escaping (UUID) -> [String: String] = { _ in [:] },
+        directSessionStartTimeout: Duration = .seconds(30)
     ) {
         chatReadThrough = CoordinatorChatReadThrough(defaults: defaults)
         self.defaults = defaults
@@ -519,6 +587,9 @@ final class CoordinatorController: ObservableObject {
         self.revealDocumentLine = revealDocumentLine
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
+        self.directSessionEnabled = directSessionEnabled
+        self.terminalEnvironment = terminalEnvironment
+        self.directSessionStartTimeout = directSessionStartTimeout
         // First, so that a coordinator whose mark the layout lost comes
         // back as one the layout restored.
         restoreWorkspaceMark()
@@ -548,6 +619,11 @@ final class CoordinatorController: ObservableObject {
             if previousState.coordinator != nextState.coordinator {
                 self?.syncConversationSubscription()
                 self?.saveWorkspaceRecord()
+                // A direct session goes with its terminal panel.
+                if let self, let directSession = self.directSession,
+                   directSession.panelID != nextState.coordinator?.panelID, self.isStarting == false {
+                    self.endDirectSession(directSession)
+                }
             }
             let workspaceID = nextState.coordinatorWorkspaceID
             guard previousState.coordinatorWorkspaceID != workspaceID else { return }
@@ -594,7 +670,16 @@ final class CoordinatorController: ObservableObject {
     /// there is no coordinator.
     private func saveWorkspaceRecord() {
         guard let workspaceFileURL else { return }
-        let record = location.map { CoordinatorWorkspaceRecord(workspaceID: $0.workspaceID, panelID: $0.panelID) }
+        let record = location.map { location in
+            CoordinatorWorkspaceRecord(
+                workspaceID: location.workspaceID,
+                panelID: location.panelID,
+                // The conversation belongs to its terminal panel.
+                directSession: location.panelID != nil && location.panelID == savedWorkspaceRecord?.panelID
+                    ? savedWorkspaceRecord?.directSession
+                    : nil
+            )
+        }
         guard record != savedWorkspaceRecord else { return }
         do {
             if let record {
@@ -1327,6 +1412,15 @@ final class CoordinatorController: ObservableObject {
         // Toastty made this folder and wrote every file in it, so the agent
         // need not ask the user whether to trust it.
         await trustFolder(config.agent, directory)
+        if directSessionEnabled(), config.agent == AgentKind.claude.rawValue {
+            return try await launchDirectSession(
+                location,
+                config: config,
+                directory: directory,
+                launcher: launcher,
+                replacingBusyTerminal: replacingBusyTerminal
+            )
+        }
         let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
         let result: AgentLaunchResult
         do {
@@ -1348,6 +1442,10 @@ final class CoordinatorController: ObservableObject {
             throw error
         }
         adoptReplacement(terminal, workspaceID: location.workspaceID)
+        // The agent runs in the terminal now. A direct session that ran
+        // before it is over, and its saved conversation is not this one.
+        if let directSession { endDirectSession(directSession) }
+        clearDirectSessionRecord()
         noteStartedSession(result.sessionID)
         checkInstructionsLimit(in: sessionRuntimeStore.sessionRegistry)
         ToasttyLog.info("Started the coordinator's agent", category: .tasks, metadata: [
@@ -1357,6 +1455,268 @@ final class CoordinatorController: ObservableObject {
             "requested_action": replacingBusyTerminal ? "restart" : "open",
         ])
         return result.sessionID
+    }
+
+    // MARK: - Direct session
+
+    /// The panel whose saved agent Toastty resumes as a direct session
+    /// after a relaunch. The terminal of that panel starts no agent.
+    func resumesAsDirectSession(panelID: UUID) -> Bool {
+        directSessionEnabled()
+            && savedWorkspaceRecord?.panelID == panelID
+            && savedWorkspaceRecord?.directSession != nil
+    }
+
+    /// Starts the coordinator's Claude agent as a process of Toastty's own.
+    /// The launch plan is the one a terminal launch types, so the agent
+    /// gets the same settings, hooks, skills and model. Nothing is typed.
+    ///
+    /// The start counts only after three checks, each before any message
+    /// goes to the agent: Claude Code uses the Claude plan sign-in, it
+    /// offers Toastty's coordinator skill when Toastty delivered it, and
+    /// its start reached Toastty through the hooks. A Claude Code that
+    /// reads no sign-in, hooks or skills by default fails these, with the
+    /// reason, in place of work billed another way.
+    private func launchDirectSession(
+        _ location: CoordinatorLocation,
+        config: TasksConfig.Coordinator,
+        directory: String,
+        launcher: any CoordinatorAgentLaunching,
+        replacingBusyTerminal: Bool
+    ) async throws -> String {
+        guard let directSessionHost else {
+            throw CoordinatorError("Toastty is not ready to run the coordinator without a terminal yet. Try again.")
+        }
+        // `open` goes on with the conversation that this coordinator's
+        // direct session had, after a relaunch or after its process ended.
+        // `restart` starts a new conversation.
+        var resume: CoordinatorWorkspaceRecord.DirectSession?
+        if replacingBusyTerminal == false, let saved = savedWorkspaceRecord?.directSession,
+           savedWorkspaceRecord?.panelID == location.panelID {
+            if FileManager.default.fileExists(atPath: saved.transcriptPath) {
+                resume = saved
+            } else {
+                ToasttyLog.warning("The coordinator's saved conversation has no transcript; starting a new one", category: .tasks, metadata: [
+                    "transcript_path": saved.transcriptPath,
+                ])
+            }
+        }
+        let previous = directSession
+        let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
+        let plan: ManagedAgentLaunchPlan
+        do {
+            plan = try await launcher.planCoordinatorLaunch(
+                profileID: config.agent,
+                workspaceID: location.workspaceID,
+                panelID: terminal.panelID,
+                cwd: directory,
+                environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
+                model: config.model,
+                reasoningEffort: config.effort
+            )
+        } catch {
+            abandonReplacement(terminal)
+            throw error
+        }
+        sessionRuntimeStore.markDirectSession(sessionID: plan.sessionID)
+        // A plan for the same panel ended the session of the process that
+        // ran there.
+        if let previous, previous.panelID == terminal.panelID {
+            endDirectSession(previous)
+        }
+
+        let session = ClaudeDirectSession(
+            panelID: terminal.panelID,
+            sessionID: plan.sessionID,
+            requirements: ClaudeStreamSession.Requirements(
+                requiresPlanSignIn: true,
+                anyOfCommands: plan.environment[ToasttyLaunchContextEnvironment.skillsRootKey] == nil
+                    ? []
+                    : Self.coordinatorSkillCommands
+            ),
+            host: directSessionHost,
+            now: now,
+            onTurnEnd: { [weak self] end in self?.noteDirectTurnEnd(end, sessionID: plan.sessionID) },
+            onEnd: { [weak self] reason in self?.directSessionEnded(sessionID: plan.sessionID, reason: reason) }
+        )
+        do {
+            let launch = try ClaudeStreamLaunch.make(
+                plannedArguments: plan.argv,
+                resumeNativeSessionID: resume?.nativeSessionID,
+                baseEnvironment: ProcessInfo.processInfo.environment,
+                terminalEnvironment: terminalEnvironment(terminal.panelID),
+                plannedEnvironment: plan.environment,
+                directory: directory
+            )
+            directSession = session
+            directSessionHost.attachDirectSession(session)
+            try session.start(launch: launch)
+            try await waitForDirectSessionStart(session)
+        } catch {
+            if directSession === session { directSession = nil }
+            session.stop()
+            directSessionHost.detachDirectSession(session)
+            sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: now())
+            abandonReplacement(terminal)
+            throw error as? CoordinatorError ?? CoordinatorError(
+                "The coordinator's agent did not start: \(error.localizedDescription)"
+            )
+        }
+        adoptReplacement(terminal, workspaceID: location.workspaceID)
+        // The other terminal's process, when Restart moved the coordinator.
+        if let previous, previous.panelID != terminal.panelID {
+            endDirectSession(previous)
+        }
+        if resume == nil {
+            noteStartedSession(plan.sessionID)
+        }
+        saveDirectSessionRecord(sessionID: plan.sessionID)
+        ToasttyLog.info("Started the coordinator's agent as a direct session", category: .tasks, metadata: [
+            "session_id": plan.sessionID,
+            "panel_id": terminal.panelID.uuidString,
+            "resumed": resume == nil ? "false" : "true",
+            "plan": session.account?.subscriptionType ?? "none",
+            "requested_action": replacingBusyTerminal ? "restart" : "open",
+        ])
+        return plan.sessionID
+    }
+
+    /// The names under which Claude Code offers Toastty's coordinator
+    /// skill: from the plugin that Toastty delivers, or from the folder.
+    static let coordinatorSkillCommands = ["toastty:toastty-coordinator", "toastty-coordinator"]
+
+    /// Waits until the process answered the start request and the checks
+    /// of its account and commands passed, and then until its start
+    /// reached Toastty through the hooks.
+    private func waitForDirectSessionStart(_ session: ClaudeDirectSession) async throws {
+        let deadline = ContinuousClock.now + directSessionStartTimeout
+        while true {
+            if let reason = session.endReason {
+                throw CoordinatorError(reason)
+            }
+            switch session.phase {
+            case .failed(let reason):
+                throw CoordinatorError(reason)
+            case .ready where sessionRuntimeStore.nativeSessionBindingConfirmation(for: session.sessionID) != nil:
+                return
+            case .ready, .starting:
+                break
+            }
+            guard directSession === session else {
+                throw CoordinatorError("The coordinator's agent ended while it started.")
+            }
+            guard ContinuousClock.now < deadline else {
+                if session.phase == .ready {
+                    throw CoordinatorError(
+                        "Claude Code ran without Toastty's hooks: its start did not reach Toastty. "
+                            + "Toastty sent it no message. Without the hooks the coordinator has no status and no saved conversation."
+                    )
+                }
+                throw CoordinatorError("Claude Code did not answer Toastty's start request in time.")
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// Saves Claude's ID of the direct session's conversation and its
+    /// transcript file, as the hooks reported them.
+    private func saveDirectSessionRecord(sessionID: String) {
+        guard let workspaceFileURL, let location,
+              let confirmation = sessionRuntimeStore.nativeSessionBindingConfirmation(for: sessionID),
+              confirmation.panelID == location.panelID else { return }
+        let record = CoordinatorWorkspaceRecord(
+            workspaceID: location.workspaceID,
+            panelID: location.panelID,
+            directSession: .init(
+                nativeSessionID: confirmation.nativeSessionID,
+                transcriptPath: confirmation.sessionFilePath
+            )
+        )
+        guard record != savedWorkspaceRecord else { return }
+        do {
+            try record.save(to: workspaceFileURL)
+            savedWorkspaceRecord = record
+        } catch {
+            ToasttyLog.warning("Could not save the coordinator's direct session", category: .tasks, metadata: [
+                "path": workspaceFileURL.path, "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    private func clearDirectSessionRecord() {
+        guard savedWorkspaceRecord?.directSession != nil else { return }
+        savedWorkspaceRecord?.directSession = nil
+        guard let workspaceFileURL, let record = savedWorkspaceRecord else { return }
+        do {
+            try record.save(to: workspaceFileURL)
+        } catch {
+            ToasttyLog.warning("Could not save where the coordinator lives", category: .tasks, metadata: [
+                "path": workspaceFileURL.path, "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    /// Stops a direct session's process and takes it out of the
+    /// conversation. Its managed session is ended by whoever replaced it.
+    private func endDirectSession(_ session: ClaudeDirectSession) {
+        session.stop()
+        directSessionHost?.detachDirectSession(session)
+        if directSession === session { directSession = nil }
+    }
+
+    /// The direct session's process ended by itself, or its checks failed
+    /// after the start. The conversation stays saved: Open goes on with it.
+    private func directSessionEnded(sessionID: String, reason: String) {
+        guard let session = directSession, session.sessionID == sessionID else { return }
+        // A start under way reports its own failure.
+        guard isStarting == false else {
+            directSession = nil
+            return
+        }
+        directSession = nil
+        directSessionHost?.detachDirectSession(session)
+        sessionRuntimeStore.stopSession(sessionID: sessionID, at: now())
+        if let location {
+            failedStart = FailedStart(workspaceID: location.workspaceID, reason: reason)
+        }
+        ToasttyLog.warning("The coordinator's direct session ended", category: .tasks, metadata: [
+            "session_id": sessionID,
+            "reason": reason,
+        ])
+        drain()
+    }
+
+    /// The end of one turn of the direct session, as the agent's process
+    /// reported it. The turn names the messages that it answered, so the
+    /// message that started it is known exactly.
+    private func noteDirectTurnEnd(_ end: ClaudeStreamSession.TurnEnd, sessionID: String) {
+        if end.interrupted {
+            sessionRuntimeStore.noteDirectSessionTurnInterrupted(sessionID: sessionID, at: now())
+        }
+        saveDirectSessionRecord(sessionID: sessionID)
+        var startedByKey: String?
+        if let index = promptsAwaitingTurnEnd.lastIndex(where: {
+            $0.sessionID == sessionID && end.clientRequestIDs.contains($0.messageID)
+        }) {
+            startedByKey = promptsAwaitingTurnEnd[index].key
+            promptsAwaitingTurnEnd.removeFirst(index + 1)
+        }
+        onTurnEnd?(TurnEnd(sessionID: sessionID, failed: end.failed, startedByKey: startedByKey))
+    }
+
+    /// After a relaunch: goes on with the conversation of the direct
+    /// session that Toastty quit with. The terminal started no agent for it
+    /// (`resumesAsDirectSession`).
+    private func resumeDirectSessionAfterRelaunch() {
+        guard directSessionHost != nil, directSession == nil, isStarting == false, failedStart == nil,
+              let location, let panelID = location.panelID,
+              resumesAsDirectSession(panelID: panelID),
+              session == nil else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let location = self.location, location.panelID == panelID,
+                  self.session == nil, self.isStarting == false else { return }
+            _ = try? await self.startAgent(location, replacingBusyTerminal: false, agent: nil)
+        }
     }
 
     /// The terminal the agent starts in: the coordinator's own when it can
@@ -1894,7 +2254,7 @@ final class CoordinatorController: ObservableObject {
     private var observedTurnEnd: (sessionID: String, endedAt: Date?)?
     /// The messages typed at an open prompt whose turns have not ended,
     /// oldest first.
-    private var promptsAwaitingTurnEnd: [(sessionID: String, key: String, at: Date)] = []
+    private var promptsAwaitingTurnEnd: [(sessionID: String, messageID: String, key: String, at: Date)] = []
     private static let rememberedPromptsAwaitingTurnEnd = 20
 
     /// Finds the end of a turn of the coordinator's agent in a change of
@@ -1911,6 +2271,9 @@ final class CoordinatorController: ObservableObject {
         }
         let previous = observedTurnEnd
         observedTurnEnd = (record.sessionID, record.lastTurnEndedAt)
+        // A direct session reports each turn's end itself, with the
+        // messages that the turn answered (`noteDirectTurnEnd`).
+        guard directSession?.sessionID != record.sessionID else { return }
         guard let previous, previous.sessionID == record.sessionID,
               let endedAt = record.lastTurnEndedAt, endedAt != previous.endedAt else { return }
         // The session store sets both from the same two times, so this is
@@ -2136,7 +2499,7 @@ final class CoordinatorController: ObservableObject {
         lastTyped = typed
         // A steer goes into a turn that runs already.
         if steered == false {
-            promptsAwaitingTurnEnd.append((session.sessionID, typed.key, typed.at))
+            promptsAwaitingTurnEnd.append((session.sessionID, entry.id, typed.key, typed.at))
             if promptsAwaitingTurnEnd.count > Self.rememberedPromptsAwaitingTurnEnd {
                 promptsAwaitingTurnEnd.removeFirst()
             }

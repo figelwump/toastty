@@ -218,6 +218,13 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
         }
     }
 
+    /// Ends the process now with SIGTERM, for the moment the host quits:
+    /// Claude Code leaves its turn unfinished and exits.
+    public func terminateNow() {
+        guard lock.withLock({ isRunning }), process.isRunning else { return }
+        process.terminate()
+    }
+
     // MARK: - On the event queue
 
     private func receiveOutput(_ data: Data) {

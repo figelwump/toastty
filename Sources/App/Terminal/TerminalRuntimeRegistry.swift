@@ -225,6 +225,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// bare closure so the hot path stays a single optional call.
     /// Returns false when the input cannot create a draft at the current prompt.
     var localInputObserver: ((UUID, TerminalLocalInputKind) -> Bool)?
+    /// Says that the agent saved for a panel does not come back in the
+    /// panel's terminal after a relaunch: its owner resumes the conversation
+    /// as a process of Toastty's own (`DirectConversationSession`). The
+    /// terminal then starts as a plain shell and keeps its saved record.
+    var managedAgentRestoreVeto: ((UUID) -> Bool)?
     /// The way to give the keyboard to the native view that covers a
     /// terminal panel, such as the coordinator's chat, or `nil` for a panel
     /// that nothing covers. The answer says whether the covering view took
@@ -259,6 +264,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return .inputUncertain
         }
         if restoredTerminalPanelIDsAwaitingLaunch.contains(panelID),
+           managedAgentRestoreVeto?(panelID) != true,
            let workspace = store?.state.workspaceSelection(containingPanelID: panelID)?.workspace,
            case .terminal(let terminal)? = workspace.panelState(for: panelID),
            terminal.resumeRecord != nil {
@@ -308,6 +314,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func setAgentCatalogProvider(_ agentCatalogProvider: any AgentCatalogProviding) {
         self.agentCatalogProvider = agentCatalogProvider
+    }
+
+    /// What a terminal of the panel gets on top of the app's environment:
+    /// Toastty's socket and CLI, and the `PATH` that agents use.
+    func baseLaunchEnvironment(panelID: UUID) -> [String: String] {
+        baseLaunchEnvironmentProvider?(panelID) ?? [:]
     }
 
     func setBaseLaunchEnvironmentProvider(
@@ -1896,6 +1908,15 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
               case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
             discardPendingRestoredManagedLaunch(for: panelID)
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
+        }
+
+        if managedAgentRestoreVeto?(panelID) == true {
+            discardPendingRestoredManagedLaunch(for: panelID)
+            return profileLaunchConfiguration(
+                panelID: panelID,
+                terminalState: terminalState,
+                baseEnvironmentVariables: baseEnvironmentVariables
+            )
         }
 
         let launchReason = launchReason(for: panelID)

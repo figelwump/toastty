@@ -176,6 +176,11 @@ final class SessionRuntimeStore: ObservableObject {
         var shellShowedPrompt: Bool
     }
     private var pendingManagedLaunchCommandsBySessionID: [String: PendingManagedLaunchCommand] = [:]
+    /// The sessions whose agent Toastty runs as its own process, not in the
+    /// session's terminal (`DirectConversationSession`). That terminal stays
+    /// at its shell prompt for the whole session, so its prompt, its
+    /// commands and its keys say nothing about the agent.
+    private var directSessionIDs: Set<String> = []
     /// How long a typed launch command may wait for its shell to start it.
     /// The longest wait seen on a loaded machine was 2 s. The limit leaves a
     /// wide margin, and still ends a launch whose command never starts.
@@ -419,6 +424,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
         pendingManagedLaunchCommandsBySessionID = [:]
+        directSessionIDs = []
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -3387,6 +3393,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
+        directSessionIDs.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
@@ -6272,13 +6279,47 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         }
     }
 
+    /// Says that the session's agent is a process of Toastty's own. Call it
+    /// right after the launch is planned, before the terminal is looked at
+    /// again.
+    func markDirectSession(sessionID: String) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
+        directSessionIDs.insert(sessionID)
+    }
+
+    func isDirectSession(sessionID: String) -> Bool {
+        directSessionIDs.contains(sessionID)
+    }
+
+    /// The agent of a direct session reported that an interrupt ended its
+    /// turn. No hook reports that end.
+    @discardableResult
+    func noteDirectSessionTurnInterrupted(sessionID: String, at now: Date) -> Bool {
+        guard directSessionIDs.contains(sessionID),
+              let record = sessionRegistry.activeSession(sessionID: sessionID) else { return false }
+        return handleLocalInterrupt(record: record, kind: .escape, at: now)
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(for: panelID),
-              let currentStatus = record.status,
+              // A key in the terminal of a direct session does not reach
+              // its agent.
+              directSessionIDs.contains(record.sessionID) == false else {
+            return false
+        }
+        return handleLocalInterrupt(record: record, kind: kind, at: now)
+    }
+
+    private func handleLocalInterrupt(
+        record: SessionRecord,
+        kind: TerminalLocalInterruptKind,
+        at now: Date
+    ) -> Bool {
+        guard let currentStatus = record.status,
               currentStatus.kind == .working || currentStatus.kind == .needsApproval else {
             return false
         }
@@ -6333,7 +6374,8 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     }
 
     func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool {
-        guard let record = sessionRegistry.activeSession(for: panelID) else {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              directSessionIDs.contains(record.sessionID) == false else {
             return false
         }
 
@@ -6367,6 +6409,11 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(for: panelID),
               now.timeIntervalSince(record.startedAt) >= minimumRuntime else {
+            return false
+        }
+        // The agent of a direct session never ran in this terminal, so the
+        // shell's prompt is not the agent's end.
+        if reason == .idleAtPrompt, directSessionIDs.contains(record.sessionID) {
             return false
         }
 
@@ -6534,6 +6581,12 @@ extension SessionRuntimeStore {
     }
 
     func handleClaudeQuestion(_ request: ClaudeQuestionHookRequest, at now: Date = Date()) -> ClaudeQuestionHookReply {
+        // A direct session gets each question and permission request from
+        // its process and answers it there. The hook must not wait for an
+        // answer of its own: Claude asks its host once the hook returns.
+        guard directSessionIDs.contains(request.sessionID) == false else {
+            return .init(status: .unavailable)
+        }
         guard let identity = claudeQuestionIdentity(sessionID: request.sessionID, panelID: request.panelID) else {
             return .init(status: .unavailable)
         }

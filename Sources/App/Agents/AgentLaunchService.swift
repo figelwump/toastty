@@ -367,6 +367,42 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         return try completeLaunch(preparation, plan: plan)
     }
 
+    /// Plans a managed launch of the profile in the panel as `launchAsync`
+    /// does, and types nothing: the caller runs the planned command itself,
+    /// as a process of Toastty's own (`DirectConversationSession`). The
+    /// session exists when this returns. A caller that does not run the
+    /// command discards the plan with `discardManagedLaunch`.
+    func planLaunchWithoutTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?
+    ) async throws -> ManagedAgentLaunchPlan {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            initialPrompt: nil,
+            initialCommands: [],
+            forkFromSessionID: nil,
+            additionalDirectories: [],
+            parentSessionID: nil,
+            focusPolicy: .preserveFirstResponder,
+            validatePromptState: false
+        )
+        return try await managedLaunchPlanner.prepareManagedLaunchAsync(
+            preparation.request,
+            inheritedScopedWorkspaceIDs: nil
+        )
+    }
+
     /// Prepare the new CLI before retiring the old process. Recheck the
     /// caller's turn and input facts after the last suspension. No input
     /// goes to the Claude process that is being replaced.
