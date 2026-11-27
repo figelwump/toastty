@@ -614,7 +614,13 @@ public final class LinuxWindowController {
     /// unsaved draft).
     public func requestClosePanel(_ panelID: UUID) {
         hosts.requestClose(panelID: panelID, parent: window) { [weak self] in
-            self?.store.send(.closePanel(panelID: panelID))
+            self?.dispatchConfirmedClose(.closePanel(panelID: panelID))
+        }
+    }
+
+    private func dispatchConfirmedClose(_ action: AppAction) {
+        if !features.contains(where: { $0.handleConfirmedClose(action) }) {
+            store.send(action)
         }
     }
 
@@ -660,7 +666,7 @@ public final class LinuxWindowController {
                 // No workspace confirmation for a lone panel, but its host
                 // still asks about a running process or an unsaved draft.
                 let close: @MainActor () -> Void = { [weak self] in
-                    _ = self?.store.send(.closeWorkspace(workspaceID: workspaceID))
+                    self?.dispatchConfirmedClose(.closeWorkspace(workspaceID: workspaceID))
                 }
                 if let panelID = workspace.allPanelsByID.keys.first {
                     hosts.requestClose(panelID: panelID, parent: window, close: close)
@@ -676,13 +682,13 @@ public final class LinuxWindowController {
                 confirmLabel: "_Close Workspace",
                 confirmIsDefault: true
             ) { [weak self] in
-                self?.store.send(.closeWorkspace(workspaceID: workspaceID))
+                self?.dispatchConfirmedClose(.closeWorkspace(workspaceID: workspaceID))
             }
         case .confirmCloseTab(let workspaceID, let tabID):
             guard let tab = store.state.workspacesByID[workspaceID]?.tab(id: tabID) else { return }
             if tab.panels.count <= 1 {
                 let close: @MainActor () -> Void = { [weak self] in
-                    _ = self?.store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+                    self?.dispatchConfirmedClose(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
                 }
                 if let panelID = tab.panels.keys.first {
                     hosts.requestClose(panelID: panelID, parent: window, close: close)
@@ -698,7 +704,7 @@ public final class LinuxWindowController {
                 confirmLabel: "_Close Tab",
                 confirmIsDefault: true
             ) { [weak self] in
-                self?.store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+                self?.dispatchConfirmedClose(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
             }
         case .commandPalette:
             if let palette, adw_application_window_get_visible_dialog(cast(window)) == cast(palette.dialog) {

@@ -339,10 +339,13 @@ extension TaskCoordinator {
     }
 
     #if os(Linux)
-    func requireAgentPromptForCompletion(taskID: UUID) throws {
-        guard board?.items().first(where: { $0.taskID == taskID })?.permitsMarkDoneAtPrompt == true else {
+    @discardableResult
+    func requireAgentPromptForCompletion(taskID: UUID) throws -> TaskStage {
+        guard let item = board?.items().first(where: { $0.taskID == taskID }),
+              item.permitsMarkDoneAtPrompt else {
             throw TaskError("Mark Done is only available when the task's agent is waiting at the prompt.")
         }
+        return item.stage
     }
     #endif
 
@@ -383,11 +386,13 @@ extension TaskCoordinator {
         }
         #if os(Linux)
         // The agent can start another turn while the confirmation is open.
-        try requireAgentPromptForCompletion(taskID: taskID)
+        let previousStage = try requireAgentPromptForCompletion(taskID: taskID)
+        #else
+        let previousStage = board?.items().first { $0.taskID == taskID }?.stage
         #endif
         let done = try markDone(taskID: taskID)
         guard let taskSpaceID else { return done }
-        let closed = closeFinishedTaskSpace?(taskSpaceID) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
+        let closed = closeFinishedTaskSpace?(taskSpaceID, previousStage) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
         guard closed else {
             throw TaskError("Toastty marked \(record.title) done but could not close its task space.")
         }

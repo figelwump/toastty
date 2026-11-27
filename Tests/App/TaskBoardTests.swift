@@ -494,17 +494,20 @@ struct TaskBoardTests {
 
     /// Complete and Archive both move focus on. An unread panel in another
     /// window outranks a review, but focus stays in the window that showed
-    /// the task space.
-    @Test(arguments: [false, true], [false, true])
-    func finishingTheShownTaskMovesFocusToTheNextActiveTaskSpace(unreadInAnotherWindow: Bool, archive: Bool) async throws {
+    /// the task space. When enabled, Tasks is the fallback for Needs you.
+    @Test(arguments: [false, true], [(false, false), (true, false), (true, true)])
+    func finishingTheShownTaskMovesFocusOn(archive: Bool, destinations: (hasReview: Bool, unreadInAnotherWindow: Bool)) async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let board = makeBoard(fixture, gitHub: FakeGitHub())
         fixture.coordinator.board = board
         fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
         let store = fixture.store
         let runtime = fixture.sessionRuntimeStore
-        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID in
-            store.closeTaskSpaceFocusingNextActive(workspaceID: workspaceID, sessionRuntimeStore: runtime)
+        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID, stage in
+            #expect(stage == .needsYou(.readyForReview))
+            return store.closeTaskSpaceFocusingNextActive(
+                workspaceID: workspaceID, sessionRuntimeStore: runtime, showTasksWhenNoTarget: stage?.needsUser == true
+            )
         }
         let windowID = try #require(store.state.windows.first?.id)
 
@@ -516,18 +519,21 @@ struct TaskBoardTests {
             )
         }
         try fixture.coordinator.readyForReview(taskID: task.id)
-        // The workspace after the task space has nothing to do; the one
-        // after that waits for review.
-        let quietID = try makeUntrackedTaskSpace(fixture, title: "Nothing to do")
-        let reviewID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
-        let reviewPanelID = try #require(store.state.workspacesByID[reviewID]?.focusedPanelID)
-        _ = store.send(.setWorkspaceAnnotation(
-            workspaceID: reviewID, key: "github-pr",
-            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
-        ))
+        // The neighboring workspace is already done.
+        let quietID = try makeUntrackedTaskSpace(fixture, title: "Already done")
+        _ = store.send(.setWorkspaceDone(workspaceID: quietID, doneAt: Date()))
         #expect(store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: quietID)
             == store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: taskSpaceID).map { $0 + 1 })
-        if unreadInAnotherWindow {
+        var review: (workspaceID: UUID, panelID: UUID)?
+        if destinations.hasReview {
+            let id = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+            _ = store.send(.setWorkspaceAnnotation(
+                workspaceID: id, key: "github-pr",
+                annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+            ))
+            review = (id, try #require(store.state.workspacesByID[id]?.focusedPanelID))
+        }
+        if destinations.unreadInAnotherWindow {
             #expect(store.send(.createWindow(seed: nil, initialFrame: nil)))
             let otherWindow = try #require(store.state.windows.first { $0.id != windowID })
             let otherWorkspaceID = try #require(otherWindow.selectedWorkspaceID)
@@ -550,9 +556,14 @@ struct TaskBoardTests {
         }
 
         #expect(store.state.workspacesByID[taskSpaceID] == nil)
-        // A plain close would select the quiet neighbor.
-        #expect(store.selectedWorkspace?.id == reviewID)
-        #expect(store.selectedWorkspace?.focusedPanelID == reviewPanelID)
+        if let review {
+            #expect(store.state.window(id: windowID)?.showsTasksView == false)
+            #expect(store.selectedWorkspace?.id == review.workspaceID)
+            #expect(store.selectedWorkspace?.focusedPanelID == review.panelID)
+        } else {
+            #expect(store.state.window(id: windowID)?.showsTasksView == true)
+            #expect(store.selectedWorkspace?.id == fixture.workspaceID)
+        }
     }
 
     @Test func completingATaskThatIsNotShownLeavesTheSelectionAlone() async throws {
@@ -562,12 +573,15 @@ struct TaskBoardTests {
         fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
         let store = fixture.store
         let runtime = fixture.sessionRuntimeStore
-        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID in
-            store.closeTaskSpaceFocusingNextActive(workspaceID: workspaceID, sessionRuntimeStore: runtime)
+        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID, stage in
+            store.closeTaskSpaceFocusingNextActive(
+                workspaceID: workspaceID, sessionRuntimeStore: runtime, showTasksWhenNoTarget: stage?.needsUser == true
+            )
         }
         let windowID = try #require(store.state.windows.first?.id)
         let task = try await startTask(fixture, text: "Answer the question")
         let taskSpaceID = try #require(task.taskSpaceWorkspaceID)
+        try fixture.coordinator.readyForReview(taskID: task.id)
         let reviewID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
         _ = store.send(.setWorkspaceAnnotation(
             workspaceID: reviewID, key: "github-pr",
@@ -584,6 +598,7 @@ struct TaskBoardTests {
 
         #expect(store.state.workspacesByID[taskSpaceID] == nil)
         #expect(store.selectedWorkspace?.id == fixture.workspaceID)
+        #expect(store.state.window(id: windowID)?.showsTasksView == false)
     }
 
     @Test func jumpKeepsReviewCycleStableWithLaterPaneAndPreservesUnreadAndApprovalPriority() throws {

@@ -1567,18 +1567,22 @@ final class AppStore: ObservableObject {
 
     /// Closes a task space the user finished. When the front window shows
     /// it, focus moves in that window to what Jump to Next Active would pick
-    /// from the task space, instead of the neighboring workspace. Without
-    /// such a target, the close keeps its usual selection.
+    /// from the task space, instead of the neighboring workspace. The
+    /// caller can open Tasks when there is no such target.
     @discardableResult
     func closeTaskSpaceFocusingNextActive(
         workspaceID: UUID,
-        sessionRuntimeStore: SessionRuntimeStore?
+        sessionRuntimeStore: SessionRuntimeStore?,
+        showTasksWhenNoTarget: Bool = false,
+        closingWith action: AppAction? = nil
     ) -> Bool {
+        var origin: (windowID: UUID, parentWorkspaceID: UUID?)?
         var target: PanelNavigationTarget?
         if let windowID = state.selectedWindowID,
            let window = state.window(id: windowID),
            window.selectedWorkspaceID == workspaceID,
            window.showsTasksView == false {
+            origin = (windowID, state.workspacesByID[workspaceID]?.parentWorkspaceID)
             target = nextUnreadOrActivePanelTarget(
                 preferredWindowID: windowID,
                 sessionRuntimeStore: sessionRuntimeStore,
@@ -1586,9 +1590,20 @@ final class AppStore: ObservableObject {
                 allowing: { $0.windowID == windowID && $0.workspaceID != workspaceID }
             )
         }
-        guard send(.closeWorkspace(workspaceID: workspaceID)) else { return false }
+        guard send(action ?? .closeWorkspace(workspaceID: workspaceID)) else { return false }
+        guard state.workspacesByID[workspaceID] == nil else { return true }
         if let target {
             _ = focusPanelTarget(target)
+        } else if showTasksWhenNoTarget, let origin {
+            let source = AppActionSource.ui("task_space_closed")
+            // Tasks covers a workspace. Return to the task's project when
+            // the user dismisses it, if the project is still in this window.
+            if let parentID = origin.parentWorkspaceID,
+               let window = state.window(id: origin.windowID),
+               window.selectedWorkspaceID != parentID, window.workspaceIDs.contains(parentID) {
+                _ = send(.selectWorkspace(windowID: origin.windowID, workspaceID: parentID), source: source)
+            }
+            _ = send(.setTasksViewShown(windowID: origin.windowID, shown: true), source: source)
         }
         return true
     }
