@@ -618,10 +618,11 @@ in your folder and follow it. If you cannot, ask for no merge.
 
 A task merged into the repository's default branch waits in `toShip` when
 release tags are configured. When a task waits in `toShip`, when a task
-with `releaseAfterMerge` merges, when the user asks about a release or
-answers your release question, and when a rule in the Releases section of
-`policy.md` changes, read `references/releases.md` in your folder and follow
-it. If you cannot, start no release.
+with `releaseAfterMerge` merges, when a release task asks a question, when
+the user asks about a release or answers your release question, and when a
+rule in the Releases section of `policy.md` changes, read
+`references/releases.md` in your folder and follow it. If you cannot, start
+no release.
 
 In each turn that a digest started, check that
 `toastty coordinator status` lists each project with an

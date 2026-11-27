@@ -301,7 +301,11 @@ must find the parts it talks to already updated. Do the steps in this order:
 5. **Release the Mac app.** Build the DMG with `scripts/release/release.sh`,
    write the release notes with a `## Highlights` section, and publish with
    `scripts/release/publish-github-release.sh`. Only `--publish` changes the
-   update feed, so existing users get the update at that point.
+   update feed, so existing users get the update at that point. Right before
+   `--publish`, the release agent asks the repository owner "publish now?"
+   and publishes only after a plain yes to that question, also when the
+   release approval already covers publication; see
+   [Publish now?](../.agents/skills/toastty-publish/SKILL.md#publish-now).
 6. **Publish the website change.** Merge its pull request into `main` after the
    Mac release is live, then confirm on toastty.dev that the change shows. For
    `0.10.0` the website change is two stacked pull requests that land together:
@@ -447,6 +451,8 @@ The script also records the canonical `artifacts/release/<version>-<build>/relea
 
 After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately and update the Sparkle appcast at `https://updates.toastty.dev/appcast.xml`.
 
+`--publish` makes the release visible to users: the latest GitHub release, which the website's Download links open, and the Sparkle update feed. Without `--dry-run`, the script refuses `--publish` unless `--confirm-publish` is also given. Pass `--confirm-publish` only after the repository owner answered a plain yes to "publish now?" for this version and build. A draft release and `--publish --dry-run` need no confirmation.
+
 Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
@@ -456,7 +462,7 @@ Prerequisites:
 - the upload matches the SHA-256 and file size recorded alongside the
   Sparkle signature
 
-Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
+Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--create-tag --publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
 
 ```bash
 sv exec -- env \

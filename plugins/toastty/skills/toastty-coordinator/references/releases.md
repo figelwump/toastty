@@ -48,5 +48,17 @@ settings unless they set their own values.
   target, requires new access, or discloses additional data. Pass the user's
   answer on as Send says. The release agent confirms completion after all
   approved lanes and checks finish.
+- **"Publish now?" is always the user's.** Right before a release goes
+  live, a release task can ask a question that starts with "Publish now?".
+  Never answer it yourself, also when an earlier approval, a rule in
+  `policy.md` or your own reading seems to settle it. Pass it to the user
+  at once: quote it, and say that a yes makes the release live for users
+  and that no keeps it unpublished. The user can answer on its Approve or
+  Decline card, which Toastty delivers itself. When the user answers you in
+  the chat instead, send the task only a plain yes or no to that question,
+  in the user's words, and say that it answers "Publish now?". An answer to
+  another question of the same task, such as one about a hold or a test, is
+  never a yes to it: when you pass such an answer on, say that it does not
+  answer "Publish now?".
 - **A task whose `merged` line in the ledger says "by rule"** gets no
   release before the user's yes.
