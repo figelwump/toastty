@@ -544,8 +544,10 @@ spawned it. A task
 created from an agent in another task's task space records that task as its
 parent (`parentTaskID`). The new task's first message names the parent as a
 link, `[title](toastty://task/<parent-id>)`, and says how to report to it with
-`toastty task send <parent-id> --queue`. The parent's agent is often in a turn,
-and a queued report waits for its prompt instead of typing into that turn.
+`toastty task send <parent-id> --steer`. The parent's agent is often in a turn,
+and reads a steered report there. Toastty saves the report for the parent's
+next prompt when typing it now would join a draft or answer a prompt. If the
+send fails, the child sends the report again with `--queue`.
 
 ## Work in a git worktree
 

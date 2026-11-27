@@ -49,15 +49,16 @@ public enum TaskPrompt {
 
     /// Names the task that created this one, as a link, and how to report
     /// to it. Toastty writes it, so every child gets the parent's title and
-    /// link, whatever the brief says. The report is queued: the parent's
-    /// agent is often in a turn, and a plain send would type into it or be
-    /// refused.
+    /// link, whatever the brief says. The report steers: the parent's agent
+    /// is often in a turn and reads it there, and Toastty saves it for the
+    /// next open prompt when typing it now would join a draft or answer a
+    /// prompt. A plain send would be refused then.
     public static func parentLine(_ parent: ParentTask) -> String {
         "The task \(CoordinatorTaskLink.markdown(taskID: parent.id, title: parent.title)) created this task. "
             + "Report progress, questions and results to it with "
-            + "`toastty task send \(parent.id.uuidString) --queue \"<message>\"`. "
-            + "Toastty types the message when that task's agent is at its prompt, at once or after its turn ends. "
-            + "If Toastty says that the task finished, it needs no report: do not send it again without `--queue`."
+            + "`toastty task send \(parent.id.uuidString) --steer \"<message>\"`. "
+            + "Toastty types the message into that task's turn or at its prompt, or saves it for its next prompt. "
+            + "If the command fails, nothing was typed: send the report again with `--queue` in place of `--steer`."
     }
 
     /// The skill a task's first message names when tasks.toml sets no

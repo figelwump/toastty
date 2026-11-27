@@ -886,9 +886,9 @@ struct TaskStartWorkTests {
             You own only this task. The conversation above can plan other tasks and other work: do not do them, and do \
             not act for the session that created this task. The task [\(parent.title)](toastty://task/\(parent.id.uuidString)) \
             created this task. Report progress, questions and results to it with \
-            `toastty task send \(parent.id.uuidString) --queue "<message>"`. Toastty types the message when that \
-            task's agent is at its prompt, at once or after its turn ends. If Toastty says that the task finished, it \
-            needs no report: do not send it again without `--queue`.
+            `toastty task send \(parent.id.uuidString) --steer "<message>"`. Toastty types the message into that \
+            task's turn or at its prompt, or saves it for its next prompt. If the command fails, nothing was typed: \
+            send the report again with `--queue` in place of `--steer`.
 
             Brief for the parser.
 
@@ -949,9 +949,9 @@ struct TaskStartWorkTests {
         let launched = try #require(fixture.launcher.calls.last)
         // The title is escaped for the link, and the ID stays in the command.
         let parentLine = #"The task [Plan the \[beta\] release](toastty://task/\#(parent.id.uuidString)) created this task. "#
-            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) --queue "<message>"`. "#
-            + "Toastty types the message when that task's agent is at its prompt, at once or after its turn ends. "
-            + "If Toastty says that the task finished, it needs no report: do not send it again without `--queue`."
+            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) --steer "<message>"`. "#
+            + "Toastty types the message into that task's turn or at its prompt, or saves it for its next prompt. "
+            + "If the command fails, nothing was typed: send the report again with `--queue` in place of `--steer`."
         #expect(launched.prompt.contains(parentLine))
         // A launch that cannot give the agent its skills sends another
         // message, which names the parent too.
