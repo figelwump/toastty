@@ -360,6 +360,8 @@ final class TaskCoordinator {
     var closeFinishedTaskSpace: ((UUID) -> Bool)?
     /// Merge prompts waiting for an agent's input to be ready.
     var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
+    var recoveringFableTasks: Set<UUID> = []
+    var recoveringFableTaskPanels: [UUID: UUID] = [:]
     /// Archives and release cleanups running in the background.
     var cleanupTasks: [UUID: Task<Void, Never>] = [:]
     var isCheckingReleases = false

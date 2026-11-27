@@ -1028,7 +1028,7 @@ public struct AppReducer {
                 state: &state
             )
 
-        case .splitPanel(let workspaceID, let tabID, let panelID, let direction, let profileBinding, let activate):
+        case .splitPanel(let workspaceID, let tabID, let panelID, let direction, let profileBinding, let activate, let useDefaultProfile):
             return splitPanel(
                 workspaceID: workspaceID,
                 tabID: tabID,
@@ -1036,6 +1036,7 @@ public struct AppReducer {
                 direction: direction,
                 profileBinding: profileBinding,
                 activate: activate,
+                useDefaultProfile: useDefaultProfile,
                 state: &state
             )
 
@@ -1572,6 +1573,7 @@ public struct AppReducer {
         profileBinding: TerminalProfileBinding?,
         workingDirectory: String? = nil,
         activate: Bool,
+        useDefaultProfile: Bool = true,
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID],
@@ -1595,7 +1597,7 @@ public struct AppReducer {
 
         let newPanelID = UUID()
         let newSlotID = UUID()
-        let resolvedProfileBinding = profileBinding ?? state.defaultTerminalProfileBinding
+        let resolvedProfileBinding = profileBinding ?? (useDefaultProfile ? state.defaultTerminalProfileBinding : nil)
 
         tab.panels[newPanelID] = .terminal(
             TerminalPanelState(

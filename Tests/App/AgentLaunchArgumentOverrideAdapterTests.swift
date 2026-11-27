@@ -6,6 +6,45 @@ import Testing
 
 struct AgentLaunchArgumentOverrideAdapterTests {
     @Test
+    func claudeQuotaResumeUsesTheExactConversationAndKeepsPlanMode() throws {
+        let nativeID = UUID()
+        let argv = try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
+            nativeID: nativeID, permissionMode: .plan,
+            to: ["claude", "--permission-mode", "acceptEdits", "--disallowedTools", "Bash"]
+        )
+        #expect(argv == ["claude", "--resume", nativeID.uuidString.lowercased(),
+                         "--permission-mode", "plan", "--disallowedTools", "Bash"])
+        for profile in [["claude", "--dangerously-skip-permissions"], ["claude", "--continue"],
+                        ["sh", "-c", "claude"], ["claude", "a different prompt"]] {
+            #expect(throws: AgentLaunchError.self) {
+                try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
+                    nativeID: nativeID, permissionMode: .manual, to: profile
+                )
+            }
+        }
+    }
+
+    @Test
+    func claudeRecoveryRequiresAnEmptyComposerWithAKnownPermissionIndicator() {
+        let line = "────────────────"
+        for footer in ["⏸ manual mode on", "⏵⏵ accept edits on", "⏵⏵ auto mode on", "⏵⏵ don't ask on"] {
+            #expect(AgentLaunchService.claudeRecoveryPermissionMode(screen: "\(line)\n❯\n\(line)\n\(footer) (shift+tab to cycle)") == .manual)
+        }
+        #expect(AgentLaunchService.claudeRecoveryPermissionMode(screen: "\(line)\n❯\n\(line)\n⏸ plan mode on") == .plan)
+        for screen in [
+            "\(line)\n❯ draft\n\(line)\n⏸ manual mode on",
+            "\(line)\n❯\n\(line)\n⏸ manual mode on\nenter to confirm · esc to cancel",
+            "\(line)\n❯\n\(line)\n⏸ manual mode on · 1 background task",
+            "\(line)\n❯\n\(line)\n⏸ manual mode on\nJump to bottom (click) ↓",
+            "\(line)\n❯\n\(line)\n⏵⏵ bypass permissions on",
+            "\(line)\n❯\n\(line)\n? for shortcuts",
+            "❯",
+        ] {
+            #expect(AgentLaunchService.claudeRecoveryPermissionMode(screen: screen) == nil)
+        }
+    }
+
+    @Test
     func conversationForksUseExactNativeIdentityAndProviderWorkingDirectory() throws {
         let nativeID = UUID().uuidString
         for agent in [AgentKind.codex, .claude] {

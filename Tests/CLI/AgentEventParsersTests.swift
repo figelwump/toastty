@@ -180,6 +180,34 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeStopFailureIdentifiesTheFableQuotaOnlyForTheCurrentProviderSession() throws {
+        let panelID = UUID()
+        let nativeSessionID = UUID().uuidString
+        let detail = "You've hit your Fable limit · resets Nov 28 at 3:45pm (America/Los_Angeles)"
+        for (error, message, expected) in [
+            ("rate_limit", detail, true),
+            ("rate_limit", "API Error: Server is temporarily limiting requests", false),
+            ("rate_limit", "You've hit your weekly limit · resets Nov 28 at 3:45pm", false),
+            ("server_error", detail, false),
+            ("rate_limit", "Fable limit reached · the prompt to confirm went unanswered", false),
+        ] {
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "session_id": nativeSessionID,
+                "hook_event_name": "StopFailure",
+                "error": error,
+                "permission_mode": "auto",
+                "last_assistant_message": message,
+            ])
+            let commands = try AgentEventIngestor.commands(
+                for: .claudeHooks, sessionID: "sess-123", panelID: panelID, payload: payload
+            )
+            let envelope = try #require(commands.first).makeEventEnvelope(requestID: "test")
+            #expect((envelope.payload["claudeFableQuotaSessionID"] == .string(nativeSessionID)) == expected)
+            #expect(envelope.payload["claudePermissionMode"] == nil)
+        }
+    }
+
+    @Test
     func claudeStopFailureWithoutErrorTextStillReportsTheFailure() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
