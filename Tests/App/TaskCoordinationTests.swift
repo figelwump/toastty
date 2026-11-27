@@ -229,7 +229,8 @@ struct TaskCoordinationTests {
         #expect(fixture.sessions.steered.map(\.text) == ["Rebase on main, please"])
         // A restored agent has reported no status yet. The prompt that its
         // conversation shows open is free for the message.
-        #expect(try #require(fixture.sessions.mayTypeAtPrompt)())
+        let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
+        #expect(mayTypeAtPrompt())
     }
 
     @Test func sendFollowsTheTaskIntoItsWorktreeSession() async throws {
@@ -396,11 +397,12 @@ struct TaskCoordinationTests {
         #expect(try messages(fixture, to: task) == ["Continue where you stopped."])
         // A send that types through the agent's conversation may use that
         // prompt too, once the turn that the message started ended.
+        let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
         fixture.sessions.report(session, .working)
         fixture.sessions.report(session, .error)
-        #expect(try #require(fixture.sessions.mayTypeAtPrompt)())
+        #expect(mayTypeAtPrompt())
         fixture.sessions.report(session, .working)
-        #expect(try #require(fixture.sessions.mayTypeAtPrompt)() == false)
+        #expect(mayTypeAtPrompt() == false)
     }
 
     @Test func sendFailsWhenTheTaskHasNoRunningAgent() async throws {
@@ -1080,7 +1082,8 @@ struct TaskCoordinationTests {
         let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
         #expect(mayTypeAtPrompt() == false)
         // Nor may it steer past the saved message into a turn.
-        #expect(try #require(fixture.sessions.mayTypeIntoTurn)() == false)
+        let mayTypeIntoTurn = try #require(fixture.sessions.mayTypeIntoTurn)
+        #expect(mayTypeIntoTurn() == false)
         // A second one waits behind it, without a try to type it first.
         let behind = try await coordinator.send(taskID: task.id, text: "And the new path", from: "the coordinator")
         guard case .saved(_, .some(2), _) = behind else {
