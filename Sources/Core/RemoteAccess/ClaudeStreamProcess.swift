@@ -67,7 +67,8 @@ public struct ClaudeStreamLaunch: Equatable, Sendable {
     ///   - plannedArguments: the launch plan's `argv`: the profile's command
     ///     with the settings, plugin, model and effort arguments in place.
     ///   - resumeNativeSessionID: Claude's ID of the conversation to go on
-    ///     with, or `nil` for a new one.
+    ///     with, or `nil` for a new one. A plan that was made for this
+    ///     resume has `--resume` with the ID already.
     ///   - baseEnvironment: the app's own environment.
     ///   - terminalEnvironment: what a terminal of the panel gets on top of
     ///     that: Toastty's socket, CLI and `PATH`.
@@ -82,16 +83,31 @@ public struct ClaudeStreamLaunch: Equatable, Sendable {
     ) throws -> ClaudeStreamLaunch {
         guard plannedArguments.isEmpty == false else { throw LaunchError.emptyCommand }
         let commandIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .claude, argv: plannedArguments)
-        let options = plannedArguments.dropFirst(commandIndex + 1).prefix { $0 != "--" }
-        for option in options {
+        // A wrapper before the command, such as `env`, can set a variable
+        // for it. That would bring back a key that is removed below.
+        for argument in plannedArguments.prefix(commandIndex) {
+            let name = argument.split(separator: "=", maxSplits: 1).first.map(String.init) ?? argument
+            if argument.contains("="), apiKeyKeys.contains(name) {
+                throw LaunchError.unsupportedArgument("\(name)=…")
+            }
+        }
+        let options = Array(plannedArguments.dropFirst(commandIndex + 1).prefix { $0 != "--" })
+        var planResumes = false
+        for (index, option) in options.enumerated() {
             let name = option.split(separator: "=", maxSplits: 1).first.map(String.init) ?? option
+            if name == "--resume", let resumeNativeSessionID,
+               option == "--resume=\(resumeNativeSessionID)"
+                || (option == "--resume" && index + 1 < options.count && options[index + 1] == resumeNativeSessionID) {
+                planResumes = true
+                continue
+            }
             if refusedArguments.contains(name) {
                 throw LaunchError.unsupportedArgument(name)
             }
         }
         var arguments = plannedArguments
         var inserted = streamArguments
-        if let resumeNativeSessionID {
+        if let resumeNativeSessionID, planResumes == false {
             inserted += ["--resume", resumeNativeSessionID]
         }
         arguments.insert(contentsOf: inserted, at: commandIndex + 1)
@@ -156,7 +172,7 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
     }
 
     public var processIdentifier: Int32? {
-        lock.withLock { isRunning ? process.processIdentifier : nil }
+        lock.withLock { isRunning && process.isRunning ? process.processIdentifier : nil }
     }
 
     public func start() throws {
@@ -186,8 +202,17 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
             guard let self else { return }
             self.eventQueue.async { self.receiveExit(status) }
         }
-        try process.run()
+        // Before the run: a process that ends at once reports its exit on
+        // another queue, and that report must find the state it clears.
         lock.withLock { isRunning = true }
+        do {
+            try process.run()
+        } catch {
+            lock.withLock { isRunning = false }
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            errorPipe.fileHandleForReading.readabilityHandler = nil
+            throw error
+        }
     }
 
     /// Queues one line for the process. False when the process does not

@@ -40,7 +40,9 @@ protocol CoordinatorAgentLaunching: AnyObject {
         cwd: String,
         environment: [String: String],
         model: String?,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        resumeNativeSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?
     ) async throws -> ManagedAgentLaunchPlan
 }
 
@@ -52,7 +54,9 @@ extension CoordinatorAgentLaunching {
         cwd: String,
         environment: [String: String],
         model: String?,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        resumeNativeSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?
     ) async throws -> ManagedAgentLaunchPlan {
         throw CoordinatorError("This launcher cannot plan a launch without a terminal.")
     }
@@ -66,7 +70,9 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
         cwd: String,
         environment: [String: String],
         model: String?,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        resumeNativeSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?
     ) async throws -> ManagedAgentLaunchPlan {
         try await planLaunchWithoutTerminal(
             profileID: profileID,
@@ -75,7 +81,9 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
             cwd: cwd,
             environment: environment,
             model: model,
-            reasoningEffort: reasoningEffort
+            reasoningEffort: reasoningEffort,
+            resumeNativeSessionID: resumeNativeSessionID,
+            scopedWorkspaceIDs: scopedWorkspaceIDs
         )
     }
 
@@ -604,6 +612,7 @@ final class CoordinatorController: ObservableObject {
                 MainActor.assumeIsolated {
                     self?.noteTurnEnd(in: registry)
                     self?.checkInstructionsLimit(in: registry)
+                    self?.endDirectSessionWithoutManagedSession(in: registry)
                 }
                 Task { @MainActor [weak self] in self?.drain() }
             }
@@ -1464,10 +1473,57 @@ final class CoordinatorController: ObservableObject {
 
     /// The panel whose saved agent Toastty resumes as a direct session
     /// after a relaunch. The terminal of that panel starts no agent.
+    ///
+    /// Only while the panel's saved agent is that direct session's
+    /// conversation. A terminal agent that ran in the panel since, with the
+    /// setting off, saved its own conversation there: that one is newer,
+    /// and the terminal resumes it.
     func resumesAsDirectSession(panelID: UUID) -> Bool {
-        directSessionEnabled()
-            && savedWorkspaceRecord?.panelID == panelID
-            && savedWorkspaceRecord?.directSession != nil
+        guard directSessionEnabled(), let saved = savedWorkspaceRecord, saved.panelID == panelID,
+              let direct = saved.directSession,
+              case .terminal(let terminal)? = store.state.workspacesByID[saved.workspaceID]?.panelState(for: panelID),
+              let resumeRecord = terminal.resumeRecord else { return false }
+        return resumeRecord.agent == .claude && resumeRecord.nativeSessionID == direct.nativeSessionID
+    }
+
+    /// The conversation that `open` goes on with as a direct session: the
+    /// panel's saved Claude conversation, or else the one that this
+    /// coordinator's direct session had when its process ended. `nil` when
+    /// neither has a transcript to resume.
+    private func directSessionToResume(panelID: UUID?, workspaceID: UUID) -> CoordinatorWorkspaceRecord.DirectSession? {
+        var candidates: [CoordinatorWorkspaceRecord.DirectSession] = []
+        if let panelID,
+           case .terminal(let terminal)? = store.state.workspacesByID[workspaceID]?.panelState(for: panelID),
+           let resumeRecord = terminal.resumeRecord, resumeRecord.agent == .claude {
+            candidates.append(.init(
+                nativeSessionID: resumeRecord.nativeSessionID,
+                transcriptPath: resumeRecord.sessionFilePath,
+                scopedWorkspaceIDs: resumeRecord.scopedWorkspaceIDs
+            ))
+        }
+        if let saved = savedWorkspaceRecord, saved.panelID == panelID, let direct = saved.directSession {
+            candidates.append(direct)
+        }
+        guard let candidate = candidates.first else { return nil }
+        guard FileManager.default.fileExists(atPath: candidate.transcriptPath) else {
+            ToasttyLog.warning("The coordinator's saved conversation has no transcript; starting a new one", category: .tasks, metadata: [
+                "transcript_path": candidate.transcriptPath,
+            ])
+            return nil
+        }
+        return candidate
+    }
+
+    /// Another agent started in the direct session's terminal, or its
+    /// panel closed: the managed session that the process ran for is over.
+    /// The process must not go on behind the new one.
+    private func endDirectSessionWithoutManagedSession(in registry: SessionRegistry) {
+        guard let directSession, isStarting == false,
+              registry.activeSession(sessionID: directSession.sessionID) == nil else { return }
+        ToasttyLog.info("Ended the direct session whose managed session is over", category: .tasks, metadata: [
+            "session_id": directSession.sessionID,
+        ])
+        endDirectSession(directSession)
     }
 
     /// Starts the coordinator's Claude agent as a process of Toastty's own.
@@ -1493,17 +1549,9 @@ final class CoordinatorController: ObservableObject {
         // `open` goes on with the conversation that this coordinator's
         // direct session had, after a relaunch or after its process ended.
         // `restart` starts a new conversation.
-        var resume: CoordinatorWorkspaceRecord.DirectSession?
-        if replacingBusyTerminal == false, let saved = savedWorkspaceRecord?.directSession,
-           savedWorkspaceRecord?.panelID == location.panelID {
-            if FileManager.default.fileExists(atPath: saved.transcriptPath) {
-                resume = saved
-            } else {
-                ToasttyLog.warning("The coordinator's saved conversation has no transcript; starting a new one", category: .tasks, metadata: [
-                    "transcript_path": saved.transcriptPath,
-                ])
-            }
-        }
+        let resume = replacingBusyTerminal
+            ? nil
+            : directSessionToResume(panelID: location.panelID, workspaceID: location.workspaceID)
         let previous = directSession
         let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
         let plan: ManagedAgentLaunchPlan
@@ -1515,7 +1563,11 @@ final class CoordinatorController: ObservableObject {
                 cwd: directory,
                 environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
                 model: config.model,
-                reasoningEffort: config.effort
+                reasoningEffort: config.effort,
+                resumeNativeSessionID: resume?.nativeSessionID,
+                scopedWorkspaceIDs: resume?.scopedWorkspaceIDs.map {
+                    $0.intersection(Set(store.state.workspacesByID.keys))
+                }
             )
         } catch {
             abandonReplacement(terminal)
@@ -1555,8 +1607,15 @@ final class CoordinatorController: ObservableObject {
             directSessionHost.attachDirectSession(session)
             try session.start(launch: launch)
             try await waitForDirectSessionStart(session)
+            // Every check passed: senders may reach the agent now.
+            session.admit()
         } catch {
-            if directSession === session { directSession = nil }
+            // The process of another terminal still runs: a Restart that
+            // failed leaves the old agent alone, and this controller keeps
+            // it, so that a later Restart or a close can end it.
+            if directSession === session || directSession == nil {
+                directSession = previous.flatMap { $0.panelID != terminal.panelID ? $0 : nil }
+            }
             session.stop()
             directSessionHost.detachDirectSession(session)
             sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: now())
@@ -1600,7 +1659,8 @@ final class CoordinatorController: ObservableObject {
             switch session.phase {
             case .failed(let reason):
                 throw CoordinatorError(reason)
-            case .ready where sessionRuntimeStore.nativeSessionBindingConfirmation(for: session.sessionID) != nil:
+            case .ready where sessionRuntimeStore.hasStartReportFromHook(sessionID: session.sessionID)
+                && sessionRuntimeStore.nativeSessionBindingConfirmation(for: session.sessionID) != nil:
                 return
             case .ready, .starting:
                 break
@@ -1632,7 +1692,8 @@ final class CoordinatorController: ObservableObject {
             panelID: location.panelID,
             directSession: .init(
                 nativeSessionID: confirmation.nativeSessionID,
-                transcriptPath: confirmation.sessionFilePath
+                transcriptPath: confirmation.sessionFilePath,
+                scopedWorkspaceIDs: sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.scopedWorkspaceIDs
             )
         )
         guard record != savedWorkspaceRecord else { return }
@@ -1671,11 +1732,9 @@ final class CoordinatorController: ObservableObject {
     /// after the start. The conversation stays saved: Open goes on with it.
     private func directSessionEnded(sessionID: String, reason: String) {
         guard let session = directSession, session.sessionID == sessionID else { return }
-        // A start under way reports its own failure.
-        guard isStarting == false else {
-            directSession = nil
-            return
-        }
+        // A start under way reports its own failure, from the session's
+        // `endReason`, and clears up after it.
+        guard isStarting == false else { return }
         directSession = nil
         directSessionHost?.detachDirectSession(session)
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: now())

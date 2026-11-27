@@ -372,6 +372,11 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     /// as a process of Toastty's own (`DirectConversationSession`). The
     /// session exists when this returns. A caller that does not run the
     /// command discards the plan with `discardManagedLaunch`.
+    ///
+    /// With `resumeNativeSessionID`, the plan is the one of a restored
+    /// launch that goes on with that conversation: the panel keeps its
+    /// conversation, and the session gets `scopedWorkspaceIDs` as its
+    /// workspace scope, as the saved conversation had it.
     func planLaunchWithoutTerminal(
         profileID: String,
         workspaceID: UUID,
@@ -379,7 +384,9 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         cwd: String,
         environment: [String: String],
         model: String?,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        resumeNativeSessionID: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil
     ) async throws -> ManagedAgentLaunchPlan {
         let preparation = try makeLaunchPreparation(
             profileID: profileID,
@@ -397,9 +404,26 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             focusPolicy: .preserveFirstResponder,
             validatePromptState: false
         )
-        return try await managedLaunchPlanner.prepareManagedLaunchAsync(
-            preparation.request,
-            inheritedScopedWorkspaceIDs: nil
+        guard let resumeNativeSessionID else {
+            return try await managedLaunchPlanner.prepareManagedLaunchAsync(
+                preparation.request,
+                inheritedScopedWorkspaceIDs: nil
+            )
+        }
+        var argv = preparation.request.argv
+        argv.insert(
+            contentsOf: ["--resume", resumeNativeSessionID],
+            at: min(argv.count, ManagedAgentCommandResolver.launchInsertionIndex(for: preparation.agent, argv: argv) + 1)
+        )
+        return try managedLaunchPlanner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: preparation.request.agent,
+                panelID: preparation.request.panelID,
+                argv: argv,
+                cwd: preparation.request.cwd,
+                environment: preparation.request.environment
+            ),
+            inheritedScopedWorkspaceIDs: scopedWorkspaceIDs
         )
     }
 

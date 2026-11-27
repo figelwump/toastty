@@ -1520,6 +1520,8 @@ with the reason when one does not hold:
    its skills to this launch.
 3. Claude Code's start reached Toastty through the hooks.
 
+No message from any sender reaches the agent before all three hold.
+
 A Claude Code that reads no sign-in, hooks or skills, as `--bare` does,
 fails these checks. An agent profile whose arguments ask for such a mode
 is refused.
@@ -1532,6 +1534,10 @@ Coordinator starts a new one. Quitting Toastty ends the process.
 
 Limits of the prototype:
 
+- Toastty denies a request that nobody could answer well, and tells
+  Claude Code why: a request whose preview does not fit in full (more
+  than 16 KB), a question that the answer form cannot show, and a tool
+  that needs a form of its own. A plan's approval works as Allow.
 - Text appears one whole message at a time, as with the terminal.
 - A sign-in, and Claude Code commands that open a dialog, need a terminal:
   turn the setting off for them.

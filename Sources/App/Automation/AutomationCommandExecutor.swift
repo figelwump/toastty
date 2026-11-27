@@ -2650,6 +2650,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     ) -> Bool {
         var scopedResumeRecord = resumeRecord
         scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        sessionRuntimeStore.noteStartReportFromHook(sessionID: sessionID)
         _ = sessionRuntimeStore.confirmNativeSessionBinding(
             managedSessionID: sessionID,
             panelID: activeSession.panelID,

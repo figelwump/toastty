@@ -13,6 +13,10 @@ import RemoteProtocol
 @MainActor
 protocol DirectConversationSession: AnyObject {
     var panelID: UUID { get }
+    /// Toastty's ID of the managed session that the agent's process runs
+    /// for. The session is the panel's way in and out only while that
+    /// managed session is the panel's active one.
+    var sessionID: String { get }
     /// The agent's process runs and takes messages.
     var acceptsInput: Bool { get }
 

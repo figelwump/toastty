@@ -60,6 +60,9 @@ final class ClaudeDirectSession: DirectConversationSession {
     private let now: () -> Date
     private var isStopped = false
     private var didEnd = false
+    /// The owner checked the start and let the session into the
+    /// conversation; see `admit`.
+    private var isAdmitted = false
     /// Why the session ended by itself, once it did.
     private(set) var endReason: String?
 
@@ -98,7 +101,18 @@ final class ClaudeDirectSession: DirectConversationSession {
     var account: ClaudeStreamSession.Account? { model.account }
 
     var acceptsInput: Bool {
-        isStopped == false && didEnd == false && model.phase == .ready
+        isAdmitted && isStopped == false && didEnd == false && model.phase == .ready
+    }
+
+    /// Lets the session into the conversation: from now on it takes
+    /// messages, and the conversation gets its state. The owner calls this
+    /// after every check of the start passed. Until then no sender can
+    /// reach an agent whose start may still fail.
+    func admit() {
+        guard isAdmitted == false, isStopped == false, didEnd == false, model.phase == .ready else { return }
+        isAdmitted = true
+        // The host asks for the session's state now.
+        host?.attachDirectSession(self)
     }
 
     /// Starts the process and asks it for its account and commands. The
@@ -188,7 +202,11 @@ final class ClaudeDirectSession: DirectConversationSession {
             for output in model.receive(line: line, at: now()) {
                 switch output {
                 case .observations(let observations):
-                    host?.ingestDirectSessionObservations(observations, from: self)
+                    // Before the owner admits the session there is only its
+                    // open prompt to report, and `admit` gives that.
+                    if isAdmitted {
+                        host?.ingestDirectSessionObservations(observations, from: self)
+                    }
                 case .ready(let account):
                     ToasttyLog.info("A direct session takes messages", category: .tasks, metadata: [
                         "session_id": sessionID,

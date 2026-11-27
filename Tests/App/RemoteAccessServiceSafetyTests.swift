@@ -5244,12 +5244,14 @@ extension RemoteAccessServiceSafetyTests {
 @MainActor
 private final class DirectSessionStandIn: DirectConversationSession {
     let panelID: UUID
+    let sessionID: String
     private weak var service: RemoteAccessService?
     private var model = ClaudeStreamSession(identity: "stand-in", at: Date())
     private(set) var written: [String] = []
 
-    init(panelID: UUID, service: RemoteAccessService) {
+    init(panelID: UUID, sessionID: String, service: RemoteAccessService) {
         self.panelID = panelID
+        self.sessionID = sessionID
         self.service = service
         _ = model.startRequestLine()
         agentWrites(#"{"type":"control_response","response":{"subtype":"success","request_id":"toastty-start-stand-in","response":{"account":{"subscriptionType":"Claude Max"}}}}"#)
@@ -5330,7 +5332,7 @@ extension RemoteAccessServiceSafetyTests {
         // nothing has opened the prompt yet.
         #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
 
-        let session = DirectSessionStandIn(panelID: fixture.panelID, service: fixture.service)
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
         fixture.service.attachDirectSession(session)
         // The session says that its agent takes a message.
         guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
@@ -5380,7 +5382,7 @@ extension RemoteAccessServiceSafetyTests {
         let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, pairNativeDevice: true)
         defer { fixture.removeRuntimeFiles() }
         fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
-        let session = DirectSessionStandIn(panelID: fixture.panelID, service: fixture.service)
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
         fixture.service.attachDirectSession(session)
         // The hook of a direct session's process must not hold the request
         // back to wait for an answer of its own.
@@ -5438,7 +5440,7 @@ extension RemoteAccessServiceSafetyTests {
         let fixture = try RemoteBootstrapFixture(agent: .claude, pairNativeDevice: true)
         defer { fixture.removeRuntimeFiles() }
         fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
-        let session = DirectSessionStandIn(panelID: fixture.panelID, service: fixture.service)
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
         fixture.service.attachDirectSession(session)
         guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
             Issue.record("Expected the direct session to open the prompt")

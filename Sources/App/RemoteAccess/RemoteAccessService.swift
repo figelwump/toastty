@@ -2935,7 +2935,7 @@ final class RemoteAccessService: ObservableObject {
                 listChanged = true
             }
 
-            let directSession = directSessionsByPanelID[candidate.panelID]
+            let directSession = self.directSession(forPanel: candidate.panelID)
             // A direct session reports its own turns and requests. The
             // hooks of its process report the same things a second time.
             if directSession == nil, syncProviderFeed(candidate) {
@@ -3701,7 +3701,7 @@ final class RemoteAccessService: ObservableObject {
         guard isTrackingConversations, generation == conversationTrackingGeneration else { return }
         switch event {
         case .observations(let observations, let linkedFileReferences):
-            if let panelID = panelIDByConversationID[conversationID], directSessionsByPanelID[panelID] != nil {
+            if let panelID = panelIDByConversationID[conversationID], directSession(forPanel: panelID) != nil {
                 ingestDirectSessionHistory(observations, linkedFileReferences: linkedFileReferences, for: conversationID)
                 return
             }
@@ -3771,8 +3771,16 @@ final class RemoteAccessService: ObservableObject {
         syncConversations()
     }
 
-    func hasDirectSession(panelID: UUID) -> Bool {
-        directSessionsByPanelID[panelID] != nil
+    /// The panel's direct session, while the managed session that it runs
+    /// for is the panel's active one. Another agent that starts in the
+    /// panel's terminal replaces that managed session, and then nothing of
+    /// the new agent's conversation goes to the old agent's process.
+    private func directSession(forPanel panelID: UUID) -> (any DirectConversationSession)? {
+        guard let session = directSessionsByPanelID[panelID],
+              sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.sessionID == session.sessionID else {
+            return nil
+        }
+        return session
     }
 
     /// Takes what a direct session observed. The observations go into the
@@ -3783,7 +3791,7 @@ final class RemoteAccessService: ObservableObject {
         from session: any DirectConversationSession
     ) {
         guard isTrackingConversations,
-              directSessionsByPanelID[session.panelID] === session,
+              directSession(forPanel: session.panelID) === session,
               let conversationID = conversationIDByPanelID[session.panelID],
               activeSessionIDByConversationID[conversationID] != nil,
               let projector = projectionStore.projectorState(for: conversationID) else {
@@ -3860,7 +3868,14 @@ final class RemoteAccessService: ObservableObject {
             return observation
         }
         let emitted = projectionStore.ingest(history, for: conversationID)
-        projectionStore.noteLinkedFileReferences(linkedFileReferences, for: conversationID)
+        // A file reference counts only with a record that the projection
+        // took. The reader's list covers the whole batch.
+        projectionStore.noteLinkedFileReferences(
+            history.count == observations.count
+                ? linkedFileReferences
+                : RemoteConversationProjectionStore.linkedFileReferences(in: history),
+            for: conversationID
+        )
         broadcastEvents(emitted, for: conversationID)
     }
 
@@ -3872,7 +3887,7 @@ final class RemoteAccessService: ObservableObject {
         deliveryMode: RemoteMessageDeliveryMode,
         panelID: UUID
     ) -> TerminalInputDeliveryResult {
-        if let session = directSessionsByPanelID[panelID] {
+        if let session = directSession(forPanel: panelID) {
             return session.send(text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode)
         }
         return terminalRuntimeRegistry.sendRemoteText(
@@ -4065,11 +4080,11 @@ final class RemoteAccessService: ObservableObject {
             // A terminal's permission prompt is answered in the terminal. A
             // direct session has no such prompt: its request takes the
             // answer from here.
-            guard interaction.kind == .question || directSessionsByPanelID[panelID] != nil else {
+            guard interaction.kind == .question || directSession(forPanel: panelID) != nil else {
                 return .rejected(reason: .unsupported)
             }
         }
-        if let session = directSessionsByPanelID[panelID] {
+        if let session = directSession(forPanel: panelID) {
             return session.answer(responseID: request.responseID, answers: request.answers)
         }
         return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
@@ -4155,7 +4170,7 @@ final class RemoteAccessService: ObservableObject {
         origin: InputOrigin
     ) -> RemoteInputCoordinator.DeliveryContext {
         let isSurfaceReadyForInput: Bool
-        if let session = directSessionsByPanelID[panelID] {
+        if let session = directSession(forPanel: panelID) {
             isSurfaceReadyForInput = session.acceptsInput
         } else {
             let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
@@ -4395,7 +4410,7 @@ final class RemoteAccessService: ObservableObject {
             result = .rejected(reason: reason)
         case .accept:
             recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
-            let directSession = directSessionsByPanelID[panelID]
+            let directSession = self.directSession(forPanel: panelID)
             let delivery = directSession?.interrupt() ?? terminalRuntimeRegistry.sendRemoteInterrupt(
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -4842,7 +4857,7 @@ final class RemoteAccessService: ObservableObject {
     func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .key) -> Bool {
         // The agent of a direct session does not read this terminal, so
         // nothing typed here is a draft of a message for it.
-        guard directSessionsByPanelID[panelID] == nil else { return false }
+        guard directSession(forPanel: panelID) == nil else { return false }
         let conversationID = conversationIDByPanelID[panelID]
         // Arrow, Return and Escape keys that Claude uses to operate a known
         // Coordinator dialog are not edits to its composer. Leave any

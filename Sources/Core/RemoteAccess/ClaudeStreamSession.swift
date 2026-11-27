@@ -108,6 +108,9 @@ public struct ClaudeStreamSession: Sendable {
     /// The host asked to stop the running turn. The turn runs until its
     /// `result`.
     public private(set) var interruptRequested = false
+    /// The host denied a request of the running turn. A deny tells Claude
+    /// to stop, so the turn's end is the user's stop, not a failure.
+    private var deniedRequestInTurn = false
 
     private let requirements: Requirements
     /// Names this process in fingerprints, so the lifecycle observations of
@@ -249,6 +252,8 @@ public struct ClaudeStreamSession: Sendable {
             response = decisionObject
             if response["behavior"] as? String == "allow" {
                 response["updatedInput"] = input
+            } else {
+                deniedRequestInTurn = true
             }
             acceptedAnswers = nil
         }
@@ -440,9 +445,13 @@ public struct ClaudeStreamSession: Sendable {
         // asked for it used the prompt, so the prompt must open again.
         outputs += turnStartedOutputs(at: date)
 
+        // Only the host stops a turn here: with an interrupt request, or
+        // with a deny. Any other end with an error is a failure, such as a
+        // turn that Claude Code could not set up.
         let subtype = object["subtype"] as? String
-        let interrupted = interruptRequested || subtype == "error_during_execution"
-        let failed = interrupted == false && (object["is_error"] as? Bool == true || (subtype != nil && subtype != "success"))
+        let endedWithError = object["is_error"] as? Bool == true || (subtype != nil && subtype != "success")
+        let interrupted = endedWithError && (interruptRequested || deniedRequestInTurn)
+        let failed = endedWithError && interrupted == false
         var answeredIDs = (object["user_message_uuids"] as? [String]) ?? []
         if answeredIDs.isEmpty, let single = object["user_message_uuid"] as? String {
             answeredIDs = [single]
@@ -450,6 +459,7 @@ public struct ClaudeStreamSession: Sendable {
         isTurnRunning = false
         isCompacting = false
         interruptRequested = false
+        deniedRequestInTurn = false
         // Claude withdraws the requests of a turn that ended.
         pendingRequests.removeAll()
         outputs.append(.observations([lifecycleObservation(
@@ -489,9 +499,18 @@ public struct ClaudeStreamSession: Sendable {
         let displayName = Self.nonEmpty(request["display_name"]) ?? toolName
         let form: PendingRequest.Form
         let prompt: String
-        if toolName == "AskUserQuestion", let questions = ClaudeQuestionValidation.questions(fromToolInput: inputValue["questions"]) {
+        if toolName == "AskUserQuestion" {
+            // An allow without answers is no answer to a question.
+            guard let questions = ClaudeQuestionValidation.questions(fromToolInput: inputValue["questions"]) else {
+                return [.write(Self.denyLine(requestID: requestID, message: "Toastty cannot show this question to the user."))]
+            }
             form = .question(questions)
             prompt = questions[0].question
+        } else if request["requires_user_interaction"] as? Bool == true,
+                  Self.approvalIsTheInteraction.contains(toolName) == false {
+            // The tool needs a form of its own, which Toastty does not
+            // have. Allow and Deny would not be that form.
+            return [.write(Self.denyLine(requestID: requestID, message: "Toastty cannot show this request to the user."))]
         } else {
             let reason = Self.nonEmpty(request["decision_reason"])
             let summary = reason.map { "\(displayName): \($0)" } ?? "Claude Code asks to use \(displayName)"
@@ -504,16 +523,13 @@ public struct ClaudeStreamSession: Sendable {
                 suggestions: suggestionsValue,
                 summary: summary,
                 anyTool: true
-            ) else {
-                // Nobody can read this request, so nobody can approve it.
-                return [.write(Self.line([
-                    "type": "control_response",
-                    "response": [
-                        "subtype": "success",
-                        "request_id": requestID,
-                        "response": ["behavior": "deny", "message": "Toastty could not show this request to the user."],
-                    ] as [String: Any],
-                ]))]
+            ), permission.presentation.detail.previewTruncated == false else {
+                // Nobody can read this request in full, so nobody can
+                // approve it: no terminal shows the rest of it.
+                return [.write(Self.denyLine(
+                    requestID: requestID,
+                    message: "The request is too long for Toastty to show in full, so the user cannot approve it."
+                ))]
             }
             form = .permission(permission)
             prompt = summary
@@ -565,6 +581,7 @@ public struct ClaudeStreamSession: Sendable {
         guard phase == .ready, isTurnRunning == false else { return [] }
         isTurnRunning = true
         interruptRequested = false
+        deniedRequestInTurn = false
         return [.observations([lifecycleObservation(.turnStarted(turnID: nil), label: "turn_started", at: date)])]
     }
 
@@ -641,6 +658,21 @@ public struct ClaudeStreamSession: Sendable {
         pendingRequests.removeAll()
         heldText.removeAll()
         return [.failed(reason)]
+    }
+
+    /// Tools that need the user and take a plain approval as that: the plan
+    /// is the request's input, and Allow approves it.
+    private static let approvalIsTheInteraction: Set<String> = ["ExitPlanMode"]
+
+    private static func denyLine(requestID: String, message: String) -> String {
+        line([
+            "type": "control_response",
+            "response": [
+                "subtype": "success",
+                "request_id": requestID,
+                "response": ["behavior": "deny", "message": message],
+            ] as [String: Any],
+        ])
     }
 
     // MARK: - JSON

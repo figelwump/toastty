@@ -394,6 +394,59 @@ struct ClaudeStreamSessionTests {
         #expect((try Self.object(line)["response"] as? [String: Any])?["subtype"] as? String == "error")
     }
 
+    @Test func aRequestThatNobodyCanReadOrAnswerIsDenied() throws {
+        var session = Self.readySession()
+        _ = session.receive(line: Self.systemInit(), at: Self.start)
+        func deniedWithoutAsking(_ request: String) throws -> Bool {
+            let outputs = session.receive(line: request, at: Self.start)
+            guard case .write(let line)? = outputs.first, outputs.count == 1 else { return false }
+            let body = try #require((try Self.object(line)["response"] as? [String: Any])?["response"] as? [String: Any])
+            return body["behavior"] as? String == "deny" && session.pendingResponseIDs.isEmpty
+        }
+        // A command too long to show in full: no terminal shows the rest,
+        // so an Allow would approve text that nobody read.
+        let longCommand = String(repeating: "a", count: ClaudePermissionHook.maximumPreviewBytes + 1)
+        #expect(try deniedWithoutAsking(
+            #"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"t1","input":{"command":"\#(longCommand)"}}}"#
+        ))
+        // A question in a shape that the answer form cannot show.
+        #expect(try deniedWithoutAsking(
+            #"{"type":"control_request","request_id":"r2","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t2","requires_user_interaction":true,"input":{"questions":[{"question":"Q?","header":"H","multiSelect":false,"options":[{"label":"Only one"}]}]}}}"#
+        ))
+        // A tool that needs a form of its own.
+        #expect(try deniedWithoutAsking(
+            #"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","tool_name":"mcp__forms__collect","tool_use_id":"t3","requires_user_interaction":true,"input":{"fields":["name"]}}}"#
+        ))
+        // A plan needs the user, and Allow is the approval of the plan.
+        let plan = session.receive(
+            line: #"{"type":"control_request","request_id":"r4","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","tool_use_id":"t4","requires_user_interaction":true,"input":{"plan":"1. Do it."}}}"#,
+            at: Self.start
+        )
+        #expect(session.pendingResponseIDs == ["r4"])
+        #expect(Self.transcript(plan).isEmpty)
+    }
+
+    @Test func aTurnThatEndsWithAnErrorThatNobodyAskedForFailed() throws {
+        var session = Self.readySession()
+        _ = try Self.send("Work", id: "msg-1", to: &session)
+        _ = session.receive(line: Self.systemInit(), at: Self.start)
+        // Claude Code could not set the turn up. Nobody stopped it.
+        let outputs = session.receive(line: Self.result(subtype: "error_during_execution", answering: []), at: Self.start)
+        #expect(outputs.contains(.turnEnded(.init(
+            clientRequestIDs: [], failed: true, interrupted: false, queuedTurnCount: 0
+        ))))
+
+        // A deny tells Claude to stop: that end is the user's, not a failure.
+        _ = session.receive(line: Self.systemInit(), at: Self.start)
+        _ = session.receive(line: Self.permissionRequest(requestID: "req-1", callID: "toolu_1"), at: Self.start)
+        let deny = [RemoteInteractionAnswer(questionID: ClaudePermissionDecision.questionID, selectedOptionIDs: ["deny"])]
+        _ = session.answer(responseID: "req-1", answers: deny, at: Self.start)
+        let denied = session.receive(line: Self.result(subtype: "error_during_execution", answering: []), at: Self.start)
+        #expect(denied.contains(.turnEnded(.init(
+            clientRequestIDs: [], failed: false, interrupted: true, queuedTurnCount: 0
+        ))))
+    }
+
     @Test func aProjectionThatStartsLateGetsTheStateNow() throws {
         var session = ClaudeStreamSession(at: Self.start)
         let beforeTheStart = session.currentStateObservations(at: Self.start)
@@ -570,6 +623,43 @@ struct ClaudeStreamLaunchTests {
         )
         #expect(launch.arguments == ["sv", "exec", "--", "claude"] + ClaudeStreamLaunch.streamArguments
             + ["--resume", "native-1", "--model", "opus"])
+    }
+
+    @Test func aPlanThatAlreadyResumesIsNotGivenASecondResume() throws {
+        let launch = try ClaudeStreamLaunch.make(
+            plannedArguments: ["claude", "--resume", "native-1", "--model", "opus"],
+            resumeNativeSessionID: "native-1",
+            baseEnvironment: [:],
+            terminalEnvironment: [:],
+            plannedEnvironment: [:],
+            directory: "/tmp"
+        )
+        #expect(launch.arguments == ["claude"] + ClaudeStreamLaunch.streamArguments
+            + ["--resume", "native-1", "--model", "opus"])
+        // A plan that names another conversation is refused.
+        #expect(throws: ClaudeStreamLaunch.LaunchError.unsupportedArgument("--resume")) {
+            try ClaudeStreamLaunch.make(
+                plannedArguments: ["claude", "--resume", "native-2"],
+                resumeNativeSessionID: "native-1",
+                baseEnvironment: [:],
+                terminalEnvironment: [:],
+                plannedEnvironment: [:],
+                directory: "/tmp"
+            )
+        }
+    }
+
+    @Test func aWrapperThatSetsAnAPIKeyForTheCommandIsRefused() {
+        #expect(throws: ClaudeStreamLaunch.LaunchError.unsupportedArgument("ANTHROPIC_API_KEY=…")) {
+            try ClaudeStreamLaunch.make(
+                plannedArguments: ["env", "ANTHROPIC_API_KEY=k1", "claude"],
+                resumeNativeSessionID: nil,
+                baseEnvironment: [:],
+                terminalEnvironment: [:],
+                plannedEnvironment: [:],
+                directory: "/tmp"
+            )
+        }
     }
 
     @Test func noAPIKeyAndNoOuterClaudeSessionReachTheProcess() throws {

@@ -181,6 +181,10 @@ final class SessionRuntimeStore: ObservableObject {
     /// at its shell prompt for the whole session, so its prompt, its
     /// commands and its keys say nothing about the agent.
     private var directSessionIDs: Set<String> = []
+    /// The sessions whose agent reported its start through Toastty's
+    /// hooks. A session file found on disk confirms the same binding, and
+    /// says nothing about the hooks.
+    private var sessionIDsWithStartReportFromHook: Set<String> = []
     /// How long a typed launch command may wait for its shell to start it.
     /// The longest wait seen on a loaded machine was 2 s. The limit leaves a
     /// wide margin, and still ends a launch whose command never starts.
@@ -425,6 +429,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingSessionIDsWithLocalInput = []
         pendingManagedLaunchCommandsBySessionID = [:]
         directSessionIDs = []
+        sessionIDsWithStartReportFromHook = []
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -3394,6 +3399,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
         directSessionIDs.remove(sessionID)
+        sessionIDsWithStartReportFromHook.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
@@ -6289,6 +6295,16 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
     func isDirectSession(sessionID: String) -> Bool {
         directSessionIDs.contains(sessionID)
+    }
+
+    /// A hook of the session's agent reported the agent's own session.
+    func noteStartReportFromHook(sessionID: String) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
+        sessionIDsWithStartReportFromHook.insert(sessionID)
+    }
+
+    func hasStartReportFromHook(sessionID: String) -> Bool {
+        sessionIDsWithStartReportFromHook.contains(sessionID)
     }
 
     /// The agent of a direct session reported that an interrupt ended its

@@ -27,6 +27,9 @@ struct CoordinatorWorkspaceRecord: Codable, Equatable {
     struct DirectSession: Codable, Equatable {
         var nativeSessionID: String
         var transcriptPath: String
+        /// The workspaces that the session was limited to, as its resume
+        /// record has them. `nil` for no limit.
+        var scopedWorkspaceIDs: Set<UUID>?
     }
 
     init(workspaceID: UUID, panelID: UUID?, directSession: DirectSession? = nil) {
