@@ -1327,7 +1327,7 @@ struct TaskCoordinationTests {
         #expect(outcomes?.count == 10)
         #expect(outcomes?.allSatisfy { $0?.kind == .dropped && $0?.reason == "the task merged" } == true)
         #expect(throws: TaskError(
-            "Toastty queues no message for task \(title): the task merged. A send without --queue types it at once and reopens the task."
+            "Toastty queues no message for task \(title): the task merged. A send without --queue gives it to the agent and reopens the task."
         )) {
             try coordinator.queueMessage(taskID: target.id, text: "Too late", from: "a")
         }
