@@ -92,7 +92,6 @@ struct TaskSpaceCloseQuestionTests {
     @Test func cancelClosesNothingAndMarkDoneClosesAndFinishesTheTask() async throws {
         let harness = try Harness()
         let task = try await harness.fixture.startedTask()
-        try harness.fixture.showAgentAtPrompt(task, in: harness.sessionRuntimeStore)
         #expect(harness.stage(task.id) == .idle)
 
         harness.answer = nil
@@ -109,32 +108,6 @@ struct TaskSpaceCloseQuestionTests {
         #expect(harness.stage(task.id) == .done)
         #expect(harness.fixture.record(task.id)?.doneAt != nil)
         #expect(harness.questions.count == 2)
-    }
-
-    @Test func aRunningAgentCannotBeMarkedDoneFromTheCloseQuestion() async throws {
-        let harness = try Harness()
-        let runtime = harness.sessionRuntimeStore
-        let task = try await harness.fixture.startedTask()
-        let session = try harness.fixture.showAgentAtPrompt(task, in: runtime)
-        harness.answer = .markDone
-        func startWork() {
-            runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
-        }
-
-        // An answer from a stale dialog must not close the space or finish
-        // the task if the agent starts a turn while the question is up.
-        harness.onPresent = { startWork() }
-        #expect(harness.closeTaskSpace(task) == .canceled)
-        #expect(harness.questions.last?.allowsMarkDone == true)
-        #expect(harness.isOpen(task))
-        #expect(harness.fixture.record(task.id)?.doneAt == nil)
-
-        harness.onPresent = {}
-        #expect(harness.closeTaskSpace(task) == .canceled)
-        #expect(harness.questions.last?.allowsMarkDone == false)
-        #expect(harness.questions.last?.informativeText.contains("Mark Done") == false)
-        #expect(harness.isOpen(task))
-        #expect(harness.fixture.record(task.id)?.doneAt == nil)
     }
 
     @Test func archiveClosesAndArchivesTheTask() async throws {
@@ -210,7 +183,6 @@ struct TaskSpaceCloseQuestionTests {
         _ = records.update(id: task.id) { $0.setup = .started }
 
         // A finished task: done on the task space, or archived.
-        try harness.fixture.showAgentAtPrompt(task, in: harness.sessionRuntimeStore)
         _ = try harness.fixture.coordinator.markDone(taskID: task.id)
         #expect(asks() == false)
         _ = store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: nil))
@@ -226,7 +198,6 @@ struct TaskSpaceCloseQuestionTests {
     @Test func aTabThatOpensWhileTheQuestionIsUpKeepsTheTaskAsItIs() async throws {
         let harness = try Harness()
         let task = try await harness.fixture.startedTask()
-        try harness.fixture.showAgentAtPrompt(task, in: harness.sessionRuntimeStore)
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
         harness.answer = .markDone
         harness.onPresent = {

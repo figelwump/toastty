@@ -65,23 +65,27 @@ struct TaskBoardItem: Identifiable, Equatable {
         pullRequest != nil && pullRequestState?.state != .merged && pullRequestState?.state != .closed
     }
 
-    /// Mark Done is only for unfinished, non-release tasks with an agent
-    /// at its prompt. Open pull requests finish through Merge or Archive.
-    var canMarkDone: Bool {
-        guard let record, record.release == nil, taskSpaceWorkspaceID != nil,
-              hasOpenAgentPrompt, !hasOpenPullRequest, merge == nil, cleanupHeldUntil == nil else { return false }
+    /// Linux requires a live agent waiting at its prompt. Mac adoption
+    /// also needs to cover its separate close-task-space confirmation.
+    var permitsMarkDoneAtPrompt: Bool {
+        #if os(Linux)
+        guard hasOpenAgentPrompt, !stage.isBeforeStart else { return false }
         switch stage {
-        case .idle, .needsYou(.agentFinished), .needsYou(.awaitingReply), .needsYou(.readyForReview):
-            return true
-        default:
+        case .running, .needsYou(.startWaitsInTerminal), .needsYou(.agentNeedsInput), .needsYou(.agentError):
             return false
+        default:
+            return true
         }
+        #else
+        true
+        #endif
     }
 
-    /// A task space without a task record keeps its checkbox. Clearing a
-    /// done mark is handled separately and remains allowed.
+    /// A tracked task with an open PR or merge finishes through Merge or
+    /// Archive. An untracked space keeps its checkbox, and clearing a mark
+    /// remains allowed.
     var acceptsDoneMark: Bool {
-        record == nil || canMarkDone
+        record == nil || (!hasOpenPullRequest && merge == nil && permitsMarkDoneAtPrompt)
     }
 }
 
@@ -270,10 +274,14 @@ enum TaskBoard {
     }
 
     static func hasOpenAgentPrompt(_ statuses: [WorkspaceSessionStatus]) -> Bool {
-        let agents = statuses.filter { $0.isActive && $0.agent != .processWatch }
-        return !agents.isEmpty && agents.allSatisfy {
-            $0.projection == .none && ($0.status.kind == .idle || $0.status.kind == .ready)
+        var foundAgent = false
+        for status in statuses where status.isActive && status.agent != .processWatch {
+            guard status.projection == .none, status.status.kind == .idle || status.status.kind == .ready else {
+                return false
+            }
+            foundAgent = true
         }
+        return foundAgent
     }
 
     /// Whether an agent in the task space was started with its first prompt

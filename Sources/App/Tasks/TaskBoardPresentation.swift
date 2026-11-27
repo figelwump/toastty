@@ -331,7 +331,7 @@ enum TaskBoardPresentation {
     }
 
     static func detailActions(_ item: TaskBoardItem) -> [DetailAction] {
-        guard item.record != nil else { return [] }
+        guard let record = item.record else { return [] }
         if case .needsYou(.cleanupStopped) = item.stage {
             return [.cleanUp, .keepAsIs]
         }
@@ -359,7 +359,7 @@ enum TaskBoardPresentation {
         var actions: [DetailAction] = []
         if item.hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
             actions += [.merge, .mergeWithoutChecks]
-        } else if item.canMarkDone {
+        } else if record.release == nil, item.permitsMarkDoneAtPrompt {
             actions.append(.markDone)
         }
         actions.append(.archive)

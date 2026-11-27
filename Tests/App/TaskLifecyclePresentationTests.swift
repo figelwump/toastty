@@ -124,6 +124,14 @@ struct TaskLifecyclePresentationTests {
         var watched = item(.needsYou(.review))
         watched.record = nil
         #expect(watched.acceptsDoneMark)
+
+        var noAgent = item(.idle, pullRequest: false)
+        noAgent.hasOpenAgentPrompt = false
+        #if os(Linux)
+        #expect(TaskBoardPresentation.detailActions(noAgent) == [.archive])
+        #else
+        #expect(TaskBoardPresentation.detailActions(noAgent) == [.markDone, .archive])
+        #endif
     }
 
     @Test func markDoneRequiresLiveAgentsAtAnOpenPrompt() {
@@ -205,7 +213,8 @@ struct TaskLifecyclePresentationTests {
         // Without a ready Merge button the shortcut does nothing, so the
         // hint stays off.
         #expect(menu(item(.running), current: space).joined().contains(.action(.merge, taskID: task.id)))
-        // Without a pull request, Archive stays.
+        // On Linux, a working or approval-pending agent only gets Archive.
+        #if os(Linux)
         #expect(menu(item(.running, pullRequest: false)) == [
             [.openTaskSpace(workspaceID: space)],
             [.action(.archive, taskID: task.id)],
@@ -214,6 +223,14 @@ struct TaskLifecyclePresentationTests {
             [.openTaskSpace(workspaceID: space)],
             [.action(.archive, taskID: task.id)],
         ])
+        #else
+        for stage in [TaskStage.running, .needsYou(.agentNeedsInput)] {
+            #expect(menu(item(stage, pullRequest: false)) == [
+                [.openTaskSpace(workspaceID: space)],
+                [.action(.markDone, taskID: task.id), .action(.archive, taskID: task.id)],
+            ])
+        }
+        #endif
         #expect(menu(item(.needsYou(.awaitingReply), pullRequest: false)) == [
             [.openTaskSpace(workspaceID: space)],
             [.action(.markDone, taskID: task.id), .action(.archive, taskID: task.id)],

@@ -20,7 +20,6 @@ struct TaskSpaceCloseQuestion: Equatable {
     var taskID: UUID
     var taskTitle: String
     var taskSpaceWorkspaceID: UUID
-    var allowsMarkDone = false
     /// The warning of the close confirmation this question replaces, such
     /// as a running agent that closing stops.
     var warning: String?
@@ -42,10 +41,7 @@ struct TaskSpaceCloseQuestion: Equatable {
         case .starting, .toShip, .done, .archived:
             return nil
         }
-        return Self(
-            taskID: record.id, taskTitle: record.title,
-            taskSpaceWorkspaceID: taskSpaceWorkspaceID, allowsMarkDone: item.canMarkDone
-        )
+        return Self(taskID: record.id, taskTitle: record.title, taskSpaceWorkspaceID: taskSpaceWorkspaceID)
     }
 
     var messageText: String {
@@ -53,9 +49,8 @@ struct TaskSpaceCloseQuestion: Equatable {
     }
 
     var informativeText: String {
-        let done = allowsMarkDone ? "Mark Done moves it to Done. " : ""
-        return [
-            "Choose what happens to the task. \(done)Archive moves it to Archived. Keep leaves it in Needs you.",
+        [
+            "Choose what happens to the task. Mark Done moves it to Done. Archive moves it to Archived. Keep leaves it in Needs you.",
             warning,
         ].compactMap { $0 }.joined(separator: "\n\n")
     }
@@ -66,19 +61,14 @@ struct TaskSpaceCloseQuestion: Equatable {
         alert.messageText = question.messageText
         alert.informativeText = question.informativeText
         alert.alertStyle = question.warning == nil ? .informational : .warning
-        if question.allowsMarkDone {
-            alert.addConfiguredButton(withTitle: "Mark Done", behavior: .defaultAction)
-            alert.addButton(withTitle: "Archive")
-            alert.addButton(withTitle: "Keep")
-        } else {
-            alert.addConfiguredButton(withTitle: "Keep", behavior: .defaultAction)
-            alert.addButton(withTitle: "Archive")
-        }
+        alert.addConfiguredButton(withTitle: "Mark Done", behavior: .defaultAction)
+        alert.addButton(withTitle: "Archive")
+        alert.addButton(withTitle: "Keep")
         alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
-        switch (question.allowsMarkDone, alert.runModal()) {
-        case (true, .alertFirstButtonReturn): return .markDone
-        case (_, .alertSecondButtonReturn): return .archive
-        case (true, .alertThirdButtonReturn), (false, .alertFirstButtonReturn): return .keep
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .markDone
+        case .alertSecondButtonReturn: return .archive
+        case .alertThirdButtonReturn: return .keep
         default: return nil
         }
     }
@@ -107,18 +97,9 @@ struct TaskSpaceCloseAsker {
     /// `warning` from the confirmation the question replaces. `nil` means no
     /// question applies, so the caller keeps its usual confirmation.
     func ask(closingWorkspaceID workspaceID: UUID, warning: () -> String?) -> Answer? {
-        guard var shown = question(workspaceID) else { return nil }
-        shown.warning = warning()
-        let choice = present(shown)
-        // The modal can outlive the prompt it was shown for. Check before
-        // closing, while the task space and agent are still live.
-        if choice == .markDone {
-            guard shown.allowsMarkDone, let current = question(workspaceID),
-                  current.taskID == shown.taskID, current.allowsMarkDone else {
-                return Answer(question: shown, choice: nil)
-            }
-        }
-        return Answer(question: shown, choice: choice)
+        guard var question = question(workspaceID) else { return nil }
+        question.warning = warning()
+        return Answer(question: question, choice: present(question))
     }
 
     /// Applies the person's choice after the task space closed.
@@ -175,11 +156,8 @@ extension TaskActions {
         case .keep:
             break
         case .markDone:
-            guard question.allowsMarkDone else { return }
             perform("Unable to Mark \(question.taskTitle) Done") {
-                _ = try coordinator.markDoneAfterClosingTaskSpace(
-                    taskID: question.taskID, workspaceID: question.taskSpaceWorkspaceID
-                )
+                _ = try coordinator.markDone(taskID: question.taskID)
             }
         case .archive:
             // Without a worktree or a pull request, and with the task space

@@ -272,13 +272,13 @@ struct WorkspaceHeaderTaskControl: View {
     let coordinator: TaskCoordinator
     let taskID: UUID
 
-    private var item: TaskBoardItem? {
-        board.items().first(where: { $0.id == .task(taskID) })
+    private var stage: TaskStage? {
+        board.items().first(where: { $0.id == .task(taskID) })?.stage
     }
 
     var body: some View {
-        let item = item
-        if item?.stage == .done {
+        let stage = stage
+        if stage == .done {
             // A done task space that stays open, such as one an agent
             // marked done, says so instead of offering only Archive.
             Menu {
@@ -305,10 +305,10 @@ struct WorkspaceHeaderTaskControl: View {
             .help("This task is done. Archive it to close its task space")
             .accessibilityLabel("Done")
             .accessibilityIdentifier("topbar.workspace.task-done")
-        } else if item?.stage == .needsYou(.readyForReview), item?.canMarkDone == true {
+        } else if stage == .needsYou(.readyForReview) {
             Button {
                 // Recheck the current board before accepting the result.
-                guard let current = self.item, current.stage == .needsYou(.readyForReview), current.canMarkDone else { return }
+                guard self.stage == .needsYou(.readyForReview) else { return }
                 TaskActions.perform("Unable to Complete Task") {
                     try TaskActions.run(.markDone, taskID: taskID, coordinator: coordinator)
                 }

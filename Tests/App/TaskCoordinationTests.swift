@@ -308,12 +308,8 @@ struct TaskCoordinationTests {
         #expect(fixture.sessions.delivered.isEmpty)
 
         // Mark Done and archive clear the mark themselves.
-        let runtime = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
-        let board = fixture.completionBoard(runtime: runtime)
-        try fixture.showAgentAtPrompt(task, in: runtime)
         _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: nil)
         _ = try coordinator.markDone(taskID: task.id)
-        #expect(board.items().first { $0.taskID == task.id }?.stage == .done)
         #expect(fixture.record(task.id)?.waiting == nil)
 
         // A done mark that records the acceptance of a merge under way is

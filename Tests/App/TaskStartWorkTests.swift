@@ -199,31 +199,6 @@ struct TaskStartWorkTests {
         let launcher = FakeLauncher()
         let sessions = FakeSessions()
         let recordsFile: URL
-
-        /// Exposes the fake launch to a real board, whose live inputs come
-        /// from the runtime store rather than the coordinator's fake sessions.
-        @discardableResult
-        func showAgentAtPrompt(_ task: TaskRecord, in runtime: SessionRuntimeStore) throws -> String {
-            let sessionID = try #require(task.currentSessionID)
-            let session = try #require(sessions.sessions[sessionID])
-            runtime.startSession(
-                sessionID: sessionID, agent: session.agent, panelID: session.panelID,
-                windowID: try #require(store.state.windows.first?.id), workspaceID: session.workspaceID,
-                codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
-            )
-            runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
-            return sessionID
-        }
-
-        func completionBoard(runtime: SessionRuntimeStore) -> TaskBoardStore {
-            let board = TaskBoardStore(
-                coordinator: coordinator, store: store, sessionRuntimeStore: runtime,
-                pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
-                refreshInterval: nil, releaseCheckInterval: nil
-            )
-            coordinator.board = board
-            return board
-        }
         let workspaceID: UUID
         var config = TasksConfig()
         let triage = FakeTriageRunner()

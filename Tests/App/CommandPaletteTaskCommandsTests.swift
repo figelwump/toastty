@@ -132,7 +132,6 @@ struct CommandPaletteTaskCommandsTests {
             await fixture.waitUntil("setup ends") { fixture.record(created.id)?.setup != .settingUp }
             let task = try #require(fixture.record(created.id))
             #expect(task.setup == .started)
-            try fixture.showAgentAtPrompt(task, in: sessionRuntimeStore)
             return task
         }
     }

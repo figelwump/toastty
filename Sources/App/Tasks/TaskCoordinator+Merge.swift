@@ -320,49 +320,12 @@ extension TaskCoordinator {
     /// gets the done mark too, which new work clears again.
     @discardableResult
     func markDone(taskID: UUID) throws -> TaskRecord {
-        let (record, _) = try taskWaitingAtPrompt(taskID)
-        return try saveDoneMark(record)
-    }
-
-    private func taskWaitingAtPrompt(_ taskID: UUID) throws -> (TaskRecord, TaskBoardItem) {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
         guard record.archivedAt == nil else {
             throw TaskError("Task \(record.title) is archived.")
         }
-        guard let item = board?.items().first(where: { $0.taskID == taskID }),
-              item.hasOpenAgentPrompt, !item.stage.isBeforeStart,
-              item.stage != .running, item.stage != .needsYou(.startWaitsInTerminal) else {
-            throw TaskError("Mark Done is only available when the task's agent is waiting at the prompt.")
-        }
-        return (record, item)
-    }
-
-    private func taskReadyToComplete(_ taskID: UUID) throws -> TaskRecord {
-        let (record, item) = try taskWaitingAtPrompt(taskID)
-        // The app also keeps its existing Merge and release-only paths.
-        // The CLI mark alone doesn't close the task space.
-        guard item.canMarkDone else {
-            throw TaskError("This task cannot be completed from the app in its current stage.")
-        }
-        return record
-    }
-
-    /// The close dialog checks eligibility again before closing the space.
-    /// Once closed, there is no longer a live prompt to check.
-    @discardableResult
-    func markDoneAfterClosingTaskSpace(taskID: UUID, workspaceID: UUID) throws -> TaskRecord {
-        guard let record = records.record(id: taskID), record.taskSpaceWorkspaceID == workspaceID,
-              store.state.workspacesByID[workspaceID] == nil,
-              record.archivedAt == nil, record.doneAt == nil, record.mergedAt == nil, record.shippedAt == nil else {
-            throw TaskError("The closed task space no longer matches this unfinished task.")
-        }
-        return try saveDoneMark(record)
-    }
-
-    private func saveDoneMark(_ record: TaskRecord) throws -> TaskRecord {
-        let taskID = record.id
         let doneAt = now()
         // A finished task waits on nothing, and gets no wake.
         try saveMergeState(taskID: taskID) {
@@ -375,6 +338,14 @@ extension TaskCoordinator {
         return records.record(id: taskID)!
     }
 
+    #if os(Linux)
+    func requireAgentPromptForCompletion(taskID: UUID) throws {
+        guard board?.items().first(where: { $0.taskID == taskID })?.permitsMarkDoneAtPrompt == true else {
+            throw TaskError("Mark Done is only available when the task's agent is waiting at the prompt.")
+        }
+    }
+    #endif
+
     /// What completing the task closes, read before the user confirms.
     struct CompleteCheck: Equatable {
         var hasTaskSpace: Bool
@@ -385,7 +356,9 @@ extension TaskCoordinator {
     }
 
     func completeCheck(taskID: UUID) throws -> CompleteCheck {
-        let record = try taskReadyToComplete(taskID)
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
         let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0]?.id }
         return CompleteCheck(
             hasTaskSpace: taskSpaceID != nil,
@@ -401,12 +374,18 @@ extension TaskCoordinator {
     /// changes.
     @discardableResult
     func complete(taskID: UUID) throws -> TaskRecord {
-        let record = try taskReadyToComplete(taskID)
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
         let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0]?.id }
         if let taskSpaceID, unsavedDocumentCount(taskSpaceID) > 0 {
             throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
         }
-        let done = try saveDoneMark(record)
+        #if os(Linux)
+        // The agent can start another turn while the confirmation is open.
+        try requireAgentPromptForCompletion(taskID: taskID)
+        #endif
+        let done = try markDone(taskID: taskID)
         guard let taskSpaceID else { return done }
         let closed = closeFinishedTaskSpace?(taskSpaceID) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
         guard closed else {

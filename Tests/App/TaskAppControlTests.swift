@@ -191,6 +191,7 @@ struct TaskAppControlTests {
         #expect(try group() == .string("done"))
     }
 
+    #if os(Linux)
     @Test func markDoneAndWorkspaceCheckboxRequireAnOpenAgentPrompt() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let runtime = fixture.sessionRuntimeStore
@@ -259,6 +260,7 @@ struct TaskAppControlTests {
         #expect(fixture.record(task.id)?.doneAt != nil)
         #expect(fixture.store.state.workspacesByID[space]?.doneAt != nil)
     }
+    #endif
 
     @Test func errorsComeBackAsInvalidPayload() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
