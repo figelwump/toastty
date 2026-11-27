@@ -103,6 +103,9 @@ public protocol LinuxWindowFeature: AnyObject {
     func perform(commandID: String) -> Bool
     /// Whether a command is available now, or nil to leave it alone.
     func isEnabled(commandID: String, state: AppState) -> Bool?
+    /// Handles a confirmed close from this window, or returns false to
+    /// dispatch the ordinary close action.
+    func handleConfirmedClose(_ action: AppAction) -> Bool
     /// The window is closing.
     func teardown()
     /// Commands the palette lists for this window now.
@@ -113,6 +116,7 @@ extension LinuxWindowFeature {
     public func hidesWorkspaceTabBar(on page: String) -> Bool { false }
     public var workspaceHeaderControls: WidgetPtr? { nil }
     public func paletteItems(_ state: AppState) -> [PaletteItem] { [] }
+    public func handleConfirmedClose(_ action: AppAction) -> Bool { false }
 }
 
 /// Makes a window's feature once its controller exists.

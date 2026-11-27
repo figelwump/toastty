@@ -319,6 +319,32 @@ final class TasksWindowFeature: LinuxWindowFeature {
     var sidebarHeader: WidgetPtr? { sidebarView.header }
     var workspaceHeaderControls: WidgetPtr? { workspaceTaskControl.root }
 
+    func handleConfirmedClose(_ action: AppAction) -> Bool {
+        guard let window = ui.store.state.window(id: windowID), !window.showsTasksView,
+              let workspaceID = window.selectedWorkspaceID,
+              let workspace = ui.store.state.workspacesByID[workspaceID],
+              workspace.canHoldDoneMark else { return false }
+        switch action {
+        case .closeWorkspace(let id) where id == workspaceID:
+            break
+        case .closeWorkspaceTab(let id, let tabID) where id == workspaceID && workspace.tabIDs == [tabID]:
+            break
+        case .closePanel(let panelID, _) where workspace.tabIDs.count == 1 &&
+            workspace.selectedTab?.panels.count == 1 && workspace.selectedTab?.panels[panelID] != nil:
+            break
+        default:
+            return false
+        }
+        guard ui.board.item(
+            taskSpace: workspace, statuses: ui.sessionRuntimeStore.workspaceStatuses(for: workspaceID)
+        )?.stage.needsUser == true else { return false }
+        _ = ui.store.closeTaskSpaceFocusingNextActive(
+            workspaceID: workspaceID, sessionRuntimeStore: ui.sessionRuntimeStore,
+            showTasksWhenNoTarget: true, closingWith: action
+        )
+        return true
+    }
+
     func renderBoardChange(_ state: AppState) {
         render(state)
         controller?.updateWorkspaceHeader()
