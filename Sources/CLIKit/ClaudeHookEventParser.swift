@@ -158,6 +158,11 @@ enum ClaudeHookEventParser {
             // turn. Claude is back at its prompt, so the turn is over. A
             // child's failure is not the end of the main turn.
             guard normalizedString(object["agent_id"]) == nil else { return [] }
+            let errorText = normalizedSummaryText(object["last_assistant_message"])
+            let confirmedQuotaSessionID = normalizedString(object["error"]) == "rate_limit"
+                && ClaudeFableQuota.isRejection(errorText)
+                ? normalizedString(object["session_id"]).flatMap(UUID.init(uuidString:))?.uuidString
+                : nil
             var commands: [CLICommand] = [
                 .sessionStatus(
                     sessionID: sessionID,
@@ -165,9 +170,10 @@ enum ClaudeHookEventParser {
                     kind: .error,
                     summary: "Error",
                     // Here this field holds the error text that Claude shows.
-                    detail: normalizedSummaryText(object["last_assistant_message"])
+                    detail: errorText
                         ?? normalizedSummaryText(object["error_details"])
-                        ?? "Claude Code could not complete the turn"
+                        ?? "Claude Code could not complete the turn",
+                    claudeFableQuotaSessionID: confirmedQuotaSessionID
                 ),
             ]
             // The turn did not complete, so it ends as an aborted turn: the
@@ -222,11 +228,20 @@ enum ClaudeHookEventParser {
             return notificationCommands(sessionID: sessionID, panelID: panelID, from: object)
 
         case "SessionStart":
-            return resumeRecordCommands(
+            var commands = resumeRecordCommands(
                 sessionID: sessionID,
                 panelID: panelID,
                 from: object
             )
+            if let model = normalizedString(object["model"]),
+               let command = lifecycleObservationCommand(
+                   sessionID: sessionID, panelID: panelID, object: object,
+                   eventID: "session-model:\(UUID().uuidString)",
+                   payload: .executionProfileReported(RemoteSessionExecutionProfile(modelIdentifier: model))
+               ) {
+                commands.append(command)
+            }
+            return commands
 
         default:
             return []

@@ -1572,6 +1572,7 @@ struct ToasttyApp: App {
         }
         // `task send --steer` types through the same path.
         taskSessions.conversationAccess = remoteAccessService
+        agentLaunchService.quotaRecoveryConversationAccess = remoteAccessService
         // The coordinator types through its agent's conversation, the path
         // a paired phone uses, so one prompt check covers every sender.
         if let coordinatorController = taskCoordinator.coordinatorController {

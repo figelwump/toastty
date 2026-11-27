@@ -20,18 +20,17 @@ enum GettingStartedActionNavigationDecision: Equatable {
 
 enum GettingStartedActionNavigationPolicy {
     static func decision(
-        for url: URL?,
-        sourceFrameURL: URL?,
-        sourceFrameIsMainFrame: Bool
+        for url: URL,
+        sourceFrameURL: @autoclosure () -> URL?,
+        sourceFrameIsMainFrame: @autoclosure () -> Bool
     ) -> GettingStartedActionNavigationDecision {
-        guard let url,
-              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+        guard url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
               url.host?.caseInsensitiveCompare("action") == .orderedSame else {
             return .allow
         }
 
-        guard sourceFrameIsMainFrame,
-              isTrustedGettingStartedPage(sourceFrameURL) else {
+        guard sourceFrameIsMainFrame(),
+              isTrustedGettingStartedPage(sourceFrameURL()) else {
             return .ignore
         }
 

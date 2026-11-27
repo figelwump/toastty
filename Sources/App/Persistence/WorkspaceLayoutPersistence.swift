@@ -538,7 +538,7 @@ final class WorkspaceLayoutPersistenceCoordinator {
         nextEntry: WorkspaceLayoutPanelLogEntry
     ) -> UUID? {
         switch action {
-        case .splitPanel(let workspaceID, let tabID, let panelID, _, _, _):
+        case .splitPanel(let workspaceID, let tabID, let panelID, _, _, _, _):
             guard workspaceID == nextEntry.workspaceID,
                   tabID == nextEntry.tabID,
                   let tab = previousLayout.workspacesByID[workspaceID]?.tabsByID[tabID],

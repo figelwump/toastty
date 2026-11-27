@@ -397,6 +397,7 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | Base moved ahead | `mergeState` is `BEHIND`, or its base branch has new commits, and there is no conflict | Send nothing. A base that moved ahead is no reason to merge it or to rerun checks, also when many branches share that base. When a branch rule requires an up-to-date branch, the merge handles it. |
 | Busy but silent | `agent` is `busy` and `silentMinutes` passes 30. Toastty wakes you then. | Never interrupt. Read its screen with `toastty query run terminal.visible-text --json --panel <panelID> tail=40`, and tell the user which command seems to hang. A long build or a sub-agent can be silent and healthy. |
 | Setup failed | stage `needsYou (setupFailed)` | Run `toastty task retry <task-id>` once. If it fails again, tell the user with `reason`. |
+| Fable usage limit | `agentState.failure` from `task get --json` is `claudeFableQuota` | Use the normal error row's question, merge failure, and recent-input rules first. If they permit a continuation, run `toastty task recover-fable <task-id> --session <agentState.sessionID>` once for the failure. Toastty resumes the conversation on Opus 5.5 at high and sends the continuation. Follow the next task change. If recovery is refused or needs permission, tell the user. |
 | Stopped with an error | `agent` is `error` on an open task that is not To ship, stage `needsYou (agentError)`. An error, such as the computer's sleep, ended the turn; the agent waits at its prompt. Toastty wakes you then. | With a `question` or `mergeFailure`, use its own row first. Else send at once: "Your turn stopped with an error. Continue where you stopped." Then tell the user. The 15-minute and 2-minute rules work as for a restart. |
 | Agent not running | `agent` is `notRunning` on an open task that is not To ship; stage `needsYou (taskSpaceClosed)`; or Stopped with an error after your continue (see One nudge) | Tell the user what you found. Offer to archive the task, or to wait while the user restarts its agent in the task space. Do nothing until the user answers. |
 | Merge stopped | `mergeFailure` | See Merge for the user. |
@@ -414,7 +415,7 @@ A turn that a restart cut off is the exception: each restart is a new
 condition. Continue the task again after a later restart, but not twice for
 the same restart: a continue in the ledger that is older than the agent's
 current idle state (`agentMinutes`) was for an earlier restart.
-An error is also an exception: continue once for each error. An error that
+An error is also an exception: continue or request Fable recovery once for each error. An error that
 started (`agentMinutes`) less than an hour after your continue is the same
 error: do not continue it.
 

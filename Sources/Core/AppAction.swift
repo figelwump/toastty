@@ -165,7 +165,8 @@ public enum AppAction: Equatable, Sendable {
         panelID: UUID,
         direction: SlotSplitDirection,
         profileBinding: TerminalProfileBinding?,
-        activate: Bool
+        activate: Bool,
+        useDefaultProfile: Bool = true
     )
     case focusSlot(workspaceID: UUID, direction: SlotFocusDirection)
     case resizeFocusedSlotSplit(workspaceID: UUID, direction: SplitResizeDirection, amount: Int)
