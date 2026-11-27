@@ -5408,15 +5408,20 @@ extension RemoteAccessServiceSafetyTests {
             )
         }
 
-        // A phone that may not approve requests cannot answer.
-        var device = try #require(fixture.service.devices.first { $0.authKind == .native })
-        #expect(fixture.service.performQuestionAnswer(try answer("allow", to: interaction, id: "phone"), device: device)
-            == .rejected(reason: .approvalsDisabled))
-        fixture.service.setDevicePermissionApproval(true, for: device.id)
-        device = try #require(fixture.service.devices.first { $0.id == device.id })
+        // A phone that may not approve requests cannot answer. A newly
+        // paired phone may, until the user turns that off.
+        let deviceID = try #require(fixture.service.devices.first { $0.authKind == .native }?.id)
+        fixture.service.setDevicePermissionApproval(false, for: deviceID)
+        var device = try #require(fixture.service.devices.first { $0.id == deviceID })
+        let refused = fixture.service.performQuestionAnswer(try answer("allow", to: interaction, id: "phone"), device: device)
+        #expect(refused == .rejected(reason: .approvalsDisabled))
+        #expect(session.written.contains { $0.contains(#""type":"control_response""#) } == false)
+        fixture.service.setDevicePermissionApproval(true, for: deviceID)
+        device = try #require(fixture.service.devices.first { $0.id == deviceID })
 
         // The phone allows. The Mac's deny comes second and changes nothing.
-        #expect(fixture.service.performQuestionAnswer(try answer("allow", to: interaction, id: "phone"), device: device) == .submitted)
+        let allowed = fixture.service.performQuestionAnswer(try answer("allow", to: interaction, id: "phone"), device: device)
+        #expect(allowed == .submitted)
         let mac = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
         defer { mac.cancel() }
         #expect(mac.answerQuestion(try answer("deny", to: interaction, id: "mac")) == .rejected(reason: .notPending))
