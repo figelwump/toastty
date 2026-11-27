@@ -340,7 +340,9 @@ Write the two files in a temporary directory, not in the repository.
   only for a real question for the user: it puts the task in Needs you.
 - **Done:** mark a task Done only when the user explicitly accepts the result
   and asks to finish it. Answering the question, finishing a turn, or having
-  no file changes is not acceptance. Use `task mark-done <task-id>`.
+  no file changes is not acceptance. Use `task mark-done <task-id>` only
+  when the target task's agent is back at its prompt. If you are that agent,
+  end your turn and tell the user they can choose Mark Done when you stop.
 
 ## Split work into new tasks
 

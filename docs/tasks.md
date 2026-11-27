@@ -2686,6 +2686,10 @@ its task space and ends any agent sessions there. It keeps the worktree if
 the task has one. To mark the task Done without closing its space, use
 `toastty task mark-done`.
 
+Mark Done is only available once the agent is back at its prompt. It is
+unavailable during a turn, while the agent needs an approval, after an agent
+error, and when no agent is running. The CLI checks the same prompt condition.
+
 A task that split its work into child tasks finishes when its children
 finish. See [Split work into new tasks](#split-work-into-new-tasks).
 
@@ -2698,7 +2702,8 @@ confirmation and checks as
 A task that has no worktree and no pull request often answers in place. When
 you close its task space, Toastty asks what happens to the task:
 
-- **Mark Done** closes the task space and marks the task done.
+- **Mark Done** closes the task space and marks the task done. It is offered
+  only while the agent is at its prompt.
 - **Archive** closes the task space and archives the task.
 - **Keep** closes the task space. The task stays in Needs you as "task space
   closed".

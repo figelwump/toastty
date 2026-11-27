@@ -707,6 +707,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
             taskSpaceWorkspaceID: UUID(),
             stage: stage,
             agent: .idle,
+            hasOpenAgentPrompt: true,
             pullRequest: pullRequest ? WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/7") : nil,
             merge: merge,
             activityAt: Date()

@@ -269,13 +269,18 @@ final class AppControlExecutor {
                         "workspace.set-done applies to task spaces; this workspace is top-level"
                     )
                 }
-                // The rule of the done checkbox, on the Mac and on a phone:
-                // a task with an open pull request or a merge under way
-                // finishes through Merge or Archive. A mark it already has
-                // stays as it is.
-                if workspace.doneAt == nil, sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: workspaceID) == false {
+                // Use the same rule as the done checkbox. A mark the task
+                // already has stays as it is.
+                if workspace.doneAt == nil,
+                   let task = sessionRuntimeStore.taskSpaceDoneMarkItem(workspaceID: workspaceID),
+                   !task.acceptsDoneMark {
+                    if task.hasOpenPullRequest || task.merge != nil {
+                        throw AutomationSocketError.invalidPayload(
+                            "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                        )
+                    }
                     throw AutomationSocketError.invalidPayload(
-                        "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                        "workspace.set-done requires an unfinished task without an open pull request and an agent waiting at the prompt"
                     )
                 }
             }

@@ -4735,7 +4735,20 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
 
-        // Without a pull request, Mark Done is how the task finishes.
+        // Even with a ready mark, there is no checkbox without a live prompt.
+        XCTAssertNil(try doneToggleFrame(forRowTitled: "Review PR", in: rootView))
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "review-pr-agent", agent: .codex, panelID: panelID,
+            windowID: try XCTUnwrap(harness.store.state.windows.first?.id), workspaceID: taskSpace,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "review-pr-agent", status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
+        )
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        // At the prompt without a pull request, Mark Done finishes the task.
         XCTAssertNotNil(try doneToggleFrame(forRowTitled: "Review PR", in: rootView))
         try writeSidebarEvidence(rootView, name: "sidebar-no-pr-has-checkbox")
 

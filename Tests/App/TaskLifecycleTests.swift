@@ -302,11 +302,15 @@ struct TaskLifecycleTests {
         let fixture = try Fixture()
         let task = try await taskInWorktree(fixture, linkPullRequest: false)
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        let runtime = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        let board = fixture.completionBoard(runtime: runtime)
+        try fixture.showAgentAtPrompt(task, in: runtime)
 
         try fixture.coordinator.readyForReview(taskID: task.id)
         #expect(fixture.record(task.id)?.readyForReviewAt != nil)
 
         try fixture.coordinator.markDone(taskID: task.id)
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .done)
         #expect(fixture.record(task.id)?.doneAt != nil)
         #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt != nil)
     }

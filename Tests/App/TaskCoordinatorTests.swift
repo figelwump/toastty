@@ -709,6 +709,12 @@ struct TaskCoordinatorTests {
 
     @Test func attachmentsGoAWeekAfterTheTaskFinishesAndItsTaskSpaceCloses() async throws {
         let fixture = try Fixture()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
+            refreshInterval: nil, releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
         let file = fixture.root.appendingPathComponent("repro.png")
         try Data("png".utf8).write(to: file)
         let created = try await fixture.coordinator.create(TaskCreateRequest(text: "x", files: [file.path], workspaceID: fixture.workspaceID, agent: "codex"))
@@ -722,7 +728,12 @@ struct TaskCoordinatorTests {
         }
 
         fixture.clock = start
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: try #require(fixture.record(created.id)?.currentSessionID),
+            status: SessionStatus(kind: .ready, summary: "Ready"), at: start
+        )
         try fixture.coordinator.markDone(taskID: created.id)
+        #expect(board.items().first { $0.taskID == created.id }?.stage == .done)
         // An open task space keeps the files, however long ago the task finished.
         sweep(after: 0)
         sweep(after: 30 * 24 * 60 * 60)

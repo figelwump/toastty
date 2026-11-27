@@ -1911,6 +1911,15 @@ final class WorkspaceViewTests: XCTestCase {
         defer { harness.window.orderOut(nil) }
         let coordinator = try XCTUnwrap(harness.sessionRuntimeStore.taskCoordinator)
         let board = try XCTUnwrap(harness.taskBoard)
+        let runtime = harness.sessionRuntimeStore
+        runtime.startSession(
+            sessionID: "complete-task-agent", agent: .codex, panelID: harness.panelID,
+            windowID: harness.windowID, workspaceID: harness.workspaceID,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        runtime.updateStatus(
+            sessionID: "complete-task-agent", status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
+        )
         _ = try coordinator.readyForReview(taskID: task.id)
         pumpMainRunLoop(duration: 0.05)
         XCTAssertEqual(board.items().first { $0.id == .task(task.id) }?.stage, .needsYou(.readyForReview))
