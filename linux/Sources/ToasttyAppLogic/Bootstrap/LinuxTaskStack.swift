@@ -180,10 +180,11 @@ struct LinuxTaskStack {
             sendText: sendText
         )
         sessionRuntimeStore.sessionExitController = sessionExitController
-        coordinator.closeFinishedTaskSpace = { [weak store, weak sessionRuntimeStore] workspaceID in
+        coordinator.closeFinishedTaskSpace = { [weak store, weak sessionRuntimeStore] workspaceID, previousStage in
             store?.closeTaskSpaceFocusingNextActive(
                 workspaceID: workspaceID,
-                sessionRuntimeStore: sessionRuntimeStore
+                sessionRuntimeStore: sessionRuntimeStore,
+                showTasksWhenNoTarget: previousStage?.needsUser == true
             ) ?? false
         }
         let sessions = LiveTaskSessions(

@@ -104,12 +104,13 @@ extension TaskCoordinator {
         startWorkAttempts[taskID] = nil
         startWorkTasks.removeValue(forKey: taskID)?.cancel()
         mergeDeliveryTasks.removeValue(forKey: taskID)?.cancel()
+        let previousStage = board?.items().first { $0.taskID == taskID }?.stage
         try saveMergeState(taskID: taskID) {
             $0.archivedAt = $0.archivedAt ?? self.now()
             $0.mergeRequestedAt = nil
             $0.waiting = nil
         }
-        startTeardown(taskID: taskID, kind: .archive, options: options)
+        startTeardown(taskID: taskID, kind: .archive, options: options, previousStage: previousStage)
         ToasttyLog.info("Archiving a task", category: .tasks, metadata: [
             "task_id": taskID.uuidString,
             "close_pull_request": String(options.closePullRequest),
@@ -182,10 +183,12 @@ extension TaskCoordinator {
 
     /// Runs the steps that close a task in the background: an archive, or
     /// the cleanup after a release shipped.
-    func startTeardown(taskID: UUID, kind: TaskCleanup.Kind, options: TaskArchiveOptions) {
+    func startTeardown(
+        taskID: UUID, kind: TaskCleanup.Kind, options: TaskArchiveOptions, previousStage: TaskStage? = nil
+    ) {
         guard cleanupTasks[taskID] == nil else { return }
         cleanupTasks[taskID] = Task { [weak self] in
-            await self?.runTeardown(taskID: taskID, kind: kind, options: options)
+            await self?.runTeardown(taskID: taskID, kind: kind, options: options, previousStage: previousStage)
             self?.cleanupTasks[taskID] = nil
         }
     }
@@ -193,7 +196,7 @@ extension TaskCoordinator {
     /// Each step checks what is still there, so a second run skips what the
     /// first finished. The first refusal stops the run and is saved as the
     /// cleanup's problem.
-    private func runTeardown(taskID: UUID, kind: TaskCleanup.Kind, options: TaskArchiveOptions) async {
+    private func runTeardown(taskID: UUID, kind: TaskCleanup.Kind, options: TaskArchiveOptions, previousStage: TaskStage?) async {
         guard let record = records.record(id: taskID) else { return }
         if kind == .release {
             guard record.release?.completion != nil, record.cleanup?.finishedAt == nil,
@@ -276,7 +279,7 @@ extension TaskCoordinator {
             // An archive is the person finishing the task, so focus moves
             // on as Complete's does; a release cleanup keeps the plain close.
             let closed = kind == .archive
-                ? closeFinishedTaskSpace?(taskSpaceID) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
+                ? closeFinishedTaskSpace?(taskSpaceID, previousStage) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
                 : store.send(.closeWorkspace(workspaceID: taskSpaceID))
             guard closed else {
                 return stop("Toastty could not close the task space.")

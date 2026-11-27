@@ -373,9 +373,10 @@ extension TaskCoordinator {
         if let taskSpaceID, unsavedDocumentCount(taskSpaceID) > 0 {
             throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
         }
+        let previousStage = board?.items().first { $0.taskID == taskID }?.stage
         let done = try markDone(taskID: taskID)
         guard let taskSpaceID else { return done }
-        let closed = closeFinishedTaskSpace?(taskSpaceID) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
+        let closed = closeFinishedTaskSpace?(taskSpaceID, previousStage) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))
         guard closed else {
             throw TaskError("Toastty marked \(record.title) done but could not close its task space.")
         }
