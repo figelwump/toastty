@@ -744,6 +744,9 @@ final class CoordinatorController: ObservableObject {
     }
 
     func canRecoverClaude(_ source: SessionRecord) -> Bool {
+        // The recovery types a resume command into the agent's terminal.
+        // A direct session's agent does not run there.
+        guard directSession?.sessionID != source.sessionID else { return false }
         guard !isStarting, let launcher = launcher as? AgentLaunchService,
               session?.sessionID == source.sessionID else { return false }
         _ = syncConversationSubscription()
