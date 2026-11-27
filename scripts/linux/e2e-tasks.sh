@@ -64,7 +64,9 @@ if [[ "$*" == *"Second task"* ]]; then
   printf '{"hook_event_name":"Stop","session_id":"native-%s"}' "$TOASTTY_SESSION_ID" \
     | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
 fi
-if [[ "$*" == *"Check the frame against the square"* ]]; then
+if [[ "$*" == *"Check the frame against the square"* || "$*" == *"Fit the original brackets"* ||
+      "$*" == *"Cut the rails"* || "$*" == *"Sand the base"* || "$*" == *"Mark drill points"* ||
+      "$*" == *"Clamp the crossbar to the jig"* ]]; then
   printf '{"hook_event_name":"Stop","session_id":"native-%s"}' "$TOASTTY_SESSION_ID" \
     | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
 fi
@@ -279,7 +281,8 @@ state $WORK/ui-state.json
 expect workspaceTaskControl=none
 file-write $WORK/test-complete go
 wait-file $WORK/complete-selected
-expect tasksView=hidden workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
+expect tasksView=hidden workspaceTaskControl=options workspaceTaskButtons=options
+screenshot $WORK/workspace-complete-working.png
 file-write $WORK/finish-second go
 wait-file $WORK/review-ready
 expect tasksView=hidden workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
@@ -395,6 +398,10 @@ if wait_for_file "$WORK/test-complete" 900; then
   SPACE1=$(json "$WORK/task1.json" 'r["setup"]["taskSpaceWorkspaceID"]')
   SPACE2=$(json "$WORK/task2.json" 'r["setup"]["taskSpaceWorkspaceID"]')
   cli action run workspace.select --workspace "$SPACE2" > "$WORK/select2.json"
+  cli task mark-done "$TASK2" > "$WORK/working-mark-done.json" 2>&1
+  MARK_DONE_RC=$?
+  check "the CLI refuses Mark Done while the agent works" \
+    "[ $MARK_DONE_RC != 0 ] && grep -q 'waiting at the prompt' '$WORK/working-mark-done.json'"
   touch "$WORK/complete-selected"
   wait_for_file "$WORK/finish-second"
   cli task ready-for-review "$TASK2" > "$WORK/review.json"
@@ -449,7 +456,7 @@ wait $APID; UIRC=$?
 check "the Tasks view and workspace header script passes" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
-for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-page-task-actions workspace-page-mark-done-confirm workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
+for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete-working workspace-complete workspace-complete-confirm workspace-page-task-actions workspace-page-mark-done-confirm workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
@@ -745,20 +752,24 @@ for title in "Fit the brackets" "Cut the rails" "Sand the base" "Mark drill poin
   cli task create "$request" --title "$title" --workspace "$K_WS" --agent claude > "$WORK/k-seed.json" 2>&1
   seed_task=$(json "$WORK/k-seed.json" 'r["taskID"]' 2>/dev/null)
   for i in $(seq 1 100); do grep -lF "$request" $WORK/agent-*.log >/dev/null 2>&1 && break; sleep 0.1; done
-  if [[ "$title" == "Square the frame" ]]; then
-    # Wait for the fake agent's Stop hook so the task shows its ready mark.
-    for i in $(seq 1 100); do
-      cli task get "$seed_task" > "$WORK/k-seed-stage.json" 2>&1
-      [ "$(json "$WORK/k-seed-stage.json" 'r["agentState"]["state"]')" = idle ] && break
-      sleep 0.1
-    done
-  else
+  # Wait for the fake agent's Stop hook. Mark Done rejects a working turn.
+  for i in $(seq 1 100); do
+    cli task get "$seed_task" > "$WORK/k-seed-stage.json" 2>&1
+    [ "$(json "$WORK/k-seed-stage.json" 'r["agentState"]["state"]')" = idle ] && break
+    sleep 0.1
+  done
+  if [[ "$title" != "Square the frame" ]]; then
     cli task mark-done "$seed_task" > "$WORK/k-seed-done.json" 2>&1
   fi
 done
 cli task create "Clamp the crossbar to the jig before drilling." --title "Clamp the jig" --workspace "$K_WS" --agent claude > $WORK/k-create.json 2>&1
 K_TASK=$(json $WORK/k-create.json 'r["taskID"]' 2>/dev/null)
 for i in $(seq 1 100); do grep -l "Clamp the crossbar" $WORK/agent-*.log >/dev/null 2>&1 && break; sleep 0.2; done
+for i in $(seq 1 100); do
+  cli task get "$K_TASK" > "$WORK/k-stage.json" 2>&1
+  [ "$(json "$WORK/k-stage.json" 'r["agentState"]["state"]')" = idle ] && break
+  sleep 0.1
+done
 cli action run workspace.task-context.set "taskID=$K_TASK" \
   "text=## What was done
 - Added the clamp to the jig.

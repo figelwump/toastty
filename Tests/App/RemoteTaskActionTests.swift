@@ -194,7 +194,9 @@ struct RemoteTaskActionTests {
         // Without a pull request, the task's own control.
         item.record?.mergedAt = nil
         fixture.store.send(.clearWorkspaceAnnotation(workspaceID: taskSpace, key: "github-pr"))
+        item.pullRequest = nil
         item.stage = .needsYou(.readyForReview)
+        item.hasOpenAgentPrompt = true
         #expect(control(item) == RemoteTaskMergeControl(
             kind: .completeTask, title: "Complete Task", action: RemoteTaskActionItem(action: .markDone, title: "Complete Task")
         ))

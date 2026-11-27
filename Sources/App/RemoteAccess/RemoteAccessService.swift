@@ -2581,18 +2581,21 @@ final class RemoteAccessService: ObservableObject {
     ) -> RemoteWorkspaceDoneResult {
         var result = RemoteWorkspaceDoneResult.workspaceNotFound
         if isReady, let workspace = store.state.workspacesByID[request.workspaceID] {
+            let task = sessionRuntimeStore.taskSpaceDoneMarkItem(workspaceID: request.workspaceID)
+            let needsMerge = task?.record != nil && (task?.hasOpenPullRequest == true || task?.merge != nil)
+            let completionUnavailable = task?.acceptsDoneMark == false && !needsMerge
             result = Self.workspaceDoneResult(
                 requestedDone: request.done,
                 isSubspace: store.state.subspaceParentIDsByWorkspaceID()[request.workspaceID] != nil,
                 isDone: workspace.doneAt != nil,
-                hasWorkInProgress: scanConversationCandidates(mintingIDs: false).contains { candidate in
+                hasWorkInProgress: completionUnavailable || scanConversationCandidates(mintingIDs: false).contains { candidate in
                     guard candidate.workspaceID == request.workspaceID else { return false }
                     switch candidate.presentationStatus {
                     case .working?, .needsApproval?, .error?: return true
                     case .ready?, .idle?, nil: return false
                     }
                 },
-                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: request.workspaceID),
+                acceptsDoneMark: !needsMerge,
                 clientKnowsOpenPullRequestResult: request.knowsOpenPullRequestResult
             )
             if result == .updated {

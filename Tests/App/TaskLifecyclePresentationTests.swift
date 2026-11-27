@@ -84,6 +84,7 @@ struct TaskLifecyclePresentationTests {
                 taskSpaceWorkspaceID: UUID(),
                 stage: stage,
                 agent: .idle,
+                hasOpenAgentPrompt: true,
                 pullRequest: pullRequest ? link : nil,
                 merge: merge,
                 activityAt: requestedAt
@@ -113,6 +114,7 @@ struct TaskLifecyclePresentationTests {
         #expect(item(.needsYou(.readyForReview), pullRequest: false).acceptsDoneMark)
         var closed = item(.needsYou(.review))
         closed.pullRequestState = TaskPullRequestState(state: .closed)
+        closed.stage = .idle
         #expect(closed.acceptsDoneMark)
         // Cleanup after a merge GitHub reported is still the merge.
         var cleaningUp = item(.toShip, merge: .cleaningUp)
@@ -122,6 +124,33 @@ struct TaskLifecyclePresentationTests {
         var watched = item(.needsYou(.review))
         watched.record = nil
         #expect(watched.acceptsDoneMark)
+
+        var noAgent = item(.idle, pullRequest: false)
+        noAgent.hasOpenAgentPrompt = false
+        #if os(Linux)
+        #expect(TaskBoardPresentation.detailActions(noAgent) == [.archive])
+        #else
+        #expect(TaskBoardPresentation.detailActions(noAgent) == [.markDone, .archive])
+        #endif
+    }
+
+    @Test func markDoneRequiresLiveAgentsAtAnOpenPrompt() {
+        let ready = status(.ready, at: requestedAt)
+        let idle = status(.idle, at: requestedAt)
+        var stopped = ready
+        stopped.isActive = false
+        var process = ready
+        process.agent = .processWatch
+        var resuming = ready
+        resuming.projection = .resuming
+        #expect(TaskBoard.hasOpenAgentPrompt([ready, idle]))
+        #expect(TaskBoard.hasOpenAgentPrompt([idle, process, stopped]))
+        #expect(!TaskBoard.hasOpenAgentPrompt([]))
+        #expect(!TaskBoard.hasOpenAgentPrompt([process, stopped]))
+        #expect(!TaskBoard.hasOpenAgentPrompt([ready, resuming]))
+        for kind in [SessionStatusKind.working, .needsApproval, .error] {
+            #expect(!TaskBoard.hasOpenAgentPrompt([idle, status(kind, at: requestedAt)]))
+        }
     }
 
     @Test func aMergedPreparePullRequestLeavesTheReleaseRunning() {
@@ -161,7 +190,8 @@ struct TaskLifecyclePresentationTests {
             let record = record ?? task
             return TaskBoardItem(
                 id: .task(record.id), record: record, title: "fix", taskSpaceWorkspaceID: taskSpace,
-                stage: stage, agent: .idle, pullRequest: pullRequest ? link : nil, merge: merge, activityAt: requestedAt
+                stage: stage, agent: .idle, hasOpenAgentPrompt: true,
+                pullRequest: pullRequest ? link : nil, merge: merge, activityAt: requestedAt
             )
         }
         func menu(_ item: TaskBoardItem, current: UUID? = nil, mergeShortcut: Bool = false) -> [[Menu]] {
@@ -183,12 +213,25 @@ struct TaskLifecyclePresentationTests {
         // Without a ready Merge button the shortcut does nothing, so the
         // hint stays off.
         #expect(menu(item(.running), current: space).joined().contains(.action(.merge, taskID: task.id)))
-        // Without a pull request, Archive stays.
+        // On Linux, a working or approval-pending agent only gets Archive.
+        #if os(Linux)
         #expect(menu(item(.running, pullRequest: false)) == [
             [.openTaskSpace(workspaceID: space)],
-            [.action(.markDone, taskID: task.id), .action(.archive, taskID: task.id)],
+            [.action(.archive, taskID: task.id)],
         ])
         #expect(menu(item(.needsYou(.agentNeedsInput), pullRequest: false)) == [
+            [.openTaskSpace(workspaceID: space)],
+            [.action(.archive, taskID: task.id)],
+        ])
+        #else
+        for stage in [TaskStage.running, .needsYou(.agentNeedsInput)] {
+            #expect(menu(item(stage, pullRequest: false)) == [
+                [.openTaskSpace(workspaceID: space)],
+                [.action(.markDone, taskID: task.id), .action(.archive, taskID: task.id)],
+            ])
+        }
+        #endif
+        #expect(menu(item(.needsYou(.awaitingReply), pullRequest: false)) == [
             [.openTaskSpace(workspaceID: space)],
             [.action(.markDone, taskID: task.id), .action(.archive, taskID: task.id)],
         ])

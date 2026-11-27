@@ -108,7 +108,12 @@ extension AppControlExecutor {
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskMarkDone:
             let record = try visibleTask(args: args, coordinator: coordinator)
-            let updated = try perform { try coordinator.markDone(taskID: record.id) }
+            let updated = try perform {
+                #if os(Linux)
+                try coordinator.requireAgentPromptForCompletion(taskID: record.id)
+                #endif
+                return try coordinator.markDone(taskID: record.id)
+            }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskArchive:
             throw AutomationSocketError.invalidPayload("task.archive checks git before it returns; send it through app_control.run_action")

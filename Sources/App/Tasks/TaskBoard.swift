@@ -23,6 +23,9 @@ struct TaskBoardItem: Identifiable, Equatable {
     /// because its child tasks finished: it has no merge to release.
     var finishedThroughChildren = false
     var agent: TaskAgentActivity
+    /// At least one live agent is at a prompt and no live agent in the
+    /// space is mid-turn. Unlike Idle, this is false when no agent runs.
+    var hasOpenAgentPrompt = false
     /// A finished turn the user has not looked at yet, as the sidebar marks.
     var hasUnreadTurn = false
     /// The status the sidebar's row for the open task space shows, from its
@@ -62,13 +65,27 @@ struct TaskBoardItem: Identifiable, Equatable {
         pullRequest != nil && pullRequestState?.state != .merged && pullRequestState?.state != .closed
     }
 
-    /// Whether the task space's done checkbox may mark the task done. A
-    /// task with an open pull request, or a merge under way, finishes
-    /// through Merge or Archive, so a done mark would skip the merge and
-    /// To ship. Clearing a mark is always allowed. A task space without a
-    /// task record keeps the checkbox.
+    /// Linux requires a live agent waiting at its prompt. Mac adoption
+    /// also needs to cover its separate close-task-space confirmation.
+    var permitsMarkDoneAtPrompt: Bool {
+        #if os(Linux)
+        guard hasOpenAgentPrompt, !stage.isBeforeStart else { return false }
+        switch stage {
+        case .running, .needsYou(.startWaitsInTerminal), .needsYou(.agentNeedsInput), .needsYou(.agentError):
+            return false
+        default:
+            return true
+        }
+        #else
+        true
+        #endif
+    }
+
+    /// A tracked task with an open PR or merge finishes through Merge or
+    /// Archive. An untracked space keeps its checkbox, and clearing a mark
+    /// remains allowed.
     var acceptsDoneMark: Bool {
-        record == nil || (hasOpenPullRequest == false && merge == nil)
+        record == nil || (!hasOpenPullRequest && merge == nil && permitsMarkDoneAtPrompt)
     }
 }
 
@@ -256,6 +273,17 @@ enum TaskBoard {
         return hasUnreadTurn(statuses, in: workspace) ? .finished : .idle
     }
 
+    static func hasOpenAgentPrompt(_ statuses: [WorkspaceSessionStatus]) -> Bool {
+        var foundAgent = false
+        for status in statuses where status.isActive && status.agent != .processWatch {
+            guard status.projection == .none, status.status.kind == .idle || status.status.kind == .ready else {
+                return false
+            }
+            foundAgent = true
+        }
+        return foundAgent
+    }
+
     /// Whether an agent in the task space was started with its first prompt
     /// and never reported that it began it. An agent there that works or
     /// asks for something comes first; see `TaskStage`.
@@ -423,6 +451,7 @@ enum TaskBoard {
             stage: derived.stage,
             finishedThroughChildren: derived.finishedThroughChildren,
             agent: agent,
+            hasOpenAgentPrompt: hasOpenAgentPrompt(statuses),
             hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
             taskSpaceStatus: taskSpaceID.map(isNested) == true
                 ? taskSpaceStatus(statuses, in: taskSpace, stage: derived.stage, waitsOutside: record.waiting != nil) : nil,
@@ -1138,10 +1167,14 @@ extension SessionRuntimeStore {
     /// Whether a task space takes a done mark from its checkbox, on the Mac
     /// or from a remote client; see `TaskBoardItem.acceptsDoneMark`.
     func taskSpaceAcceptsDoneMark(workspaceID: UUID) -> Bool {
+        taskSpaceDoneMarkItem(workspaceID: workspaceID)?.acceptsDoneMark ?? true
+    }
+
+    func taskSpaceDoneMarkItem(workspaceID: UUID) -> TaskBoardItem? {
         guard let board = taskCoordinator?.board,
               let workspace = taskCoordinator?.store.state.workspacesByID[workspaceID],
-              workspace.taskID != nil else { return true }
-        return board.item(taskSpace: workspace, statuses: workspaceStatuses(for: workspaceID))?.acceptsDoneMark ?? true
+              workspace.taskID != nil else { return nil }
+        return board.item(taskSpace: workspace, statuses: workspaceStatuses(for: workspaceID))
     }
 
     /// Whether a task space's task has merged, through Toastty or on

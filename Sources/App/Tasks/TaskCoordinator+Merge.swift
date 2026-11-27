@@ -338,6 +338,17 @@ extension TaskCoordinator {
         return records.record(id: taskID)!
     }
 
+    #if os(Linux)
+    @discardableResult
+    func requireAgentPromptForCompletion(taskID: UUID) throws -> TaskStage {
+        guard let item = board?.items().first(where: { $0.taskID == taskID }),
+              item.permitsMarkDoneAtPrompt else {
+            throw TaskError("Mark Done is only available when the task's agent is waiting at the prompt.")
+        }
+        return item.stage
+    }
+    #endif
+
     /// What completing the task closes, read before the user confirms.
     struct CompleteCheck: Equatable {
         var hasTaskSpace: Bool
@@ -373,7 +384,12 @@ extension TaskCoordinator {
         if let taskSpaceID, unsavedDocumentCount(taskSpaceID) > 0 {
             throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
         }
+        #if os(Linux)
+        // The agent can start another turn while the confirmation is open.
+        let previousStage = try requireAgentPromptForCompletion(taskID: taskID)
+        #else
         let previousStage = board?.items().first { $0.taskID == taskID }?.stage
+        #endif
         let done = try markDone(taskID: taskID)
         guard let taskSpaceID else { return done }
         let closed = closeFinishedTaskSpace?(taskSpaceID, previousStage) ?? store.send(.closeWorkspace(workspaceID: taskSpaceID))

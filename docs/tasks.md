@@ -2686,6 +2686,12 @@ its task space and ends any agent sessions there. It keeps the worktree if
 the task has one. To mark the task Done without closing its space, use
 `toastty task mark-done`.
 
+On Linux, Mark Done is only available once the agent is back at its prompt.
+It is unavailable during a turn, while the agent needs an approval, after an
+agent error, and when no agent is running. The Linux CLI checks the same
+prompt condition. Carry this rule over when implementing the Mac task UI
+changes, including the close-task-space dialog.
+
 A task that split its work into child tasks finishes when its children
 finish. See [Split work into new tasks](#split-work-into-new-tasks).
 

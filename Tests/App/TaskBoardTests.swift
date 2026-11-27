@@ -589,6 +589,11 @@ struct TaskBoardTests {
         ))
         _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: fixture.workspaceID))
 
+        #if os(Linux)
+        runtime.updateStatus(
+            sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: .ready, summary: "Ready"), at: Date()
+        )
+        #endif
         try fixture.coordinator.complete(taskID: task.id)
 
         #expect(store.state.workspacesByID[taskSpaceID] == nil)
