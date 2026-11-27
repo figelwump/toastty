@@ -452,6 +452,38 @@ struct TaskCoordinationTests {
         }
     }
 
+    /// Claude's recovery after a Fable quota stop types its own message at
+    /// the stopped agent's prompt. A message that a send saved for the task
+    /// goes first: while one waits, the recovery does not go on.
+    @Test func aSavedSendHoldsTheRecoveryAfterAFableQuotaStop() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let sessionID = try sessionID(task)
+        func mayRecover() throws -> Bool {
+            fixture.coordinator.mayStillRecoverFableTask(
+                taskID: task.id, expectedSessionID: sessionID, session: try #require(fixture.sessions.session(sessionID))
+            )
+        }
+        // The agent works, and a message is saved for it. Then the quota
+        // error ends the turn.
+        fixture.sessions.report(sessionID, .working)
+        #expect(try await sendSaved(fixture, to: task, "Use the new name").isWaiting)
+        fixture.sessions.report(sessionID, .error)
+        #expect(try mayRecover() == false)
+        #expect(try messages(fixture, to: task).isEmpty)
+
+        // Toastty types the saved message at the stopped agent's prompt.
+        // Nothing waits then, and the recovery can go on.
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["Use the new name"])
+        #expect(fixture.record(task.id)?.waitingMessages.isEmpty == true)
+        #expect(try mayRecover())
+        // Another agent in the task's pane is not the one that stopped.
+        #expect(fixture.coordinator.mayStillRecoverFableTask(
+            taskID: task.id, expectedSessionID: "another", session: try #require(fixture.sessions.session(sessionID))
+        ) == false)
+    }
+
     /// A send can wait for the agent's state before it types. If the task
     /// moved to another agent meanwhile, as start-work moves it, nothing
     /// goes to the agent that it left.

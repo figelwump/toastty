@@ -311,13 +311,8 @@ extension TaskCoordinator {
                     source: source, nativeID: quota.nativeSessionID,
                     model: ClaudeFableQuota.fallbackModel, effort: ClaudeFableQuota.fallbackEffort,
                     isStillEligible: {
-                        guard !self.isTerminating, let record = self.records.record(id: taskID),
-                              record.doneAt == nil, record.archivedAt == nil, record.replyRequest == nil,
-                              record.mergeFailure == nil, record.startWork?.state != .running,
-                              self.liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == expectedSessionID,
-                              self.promptOccupant(of: session) == nil,
-                              !self.hasWaitingSteerMessage(for: session) else { return false }
-                        return launcher.claudeRecoveryPromptIsFree(source: source)
+                        self.mayStillRecoverFableTask(taskID: taskID, expectedSessionID: expectedSessionID, session: session)
+                            && launcher.claudeRecoveryPromptIsFree(source: source)
                     },
                     adoptPanel: { panelID, sessionID in
                         try self.records.save(id: taskID) { record in
@@ -358,6 +353,20 @@ extension TaskCoordinator {
                 ])
             }
         }
+    }
+
+    /// The task's side of the check that `recoverFableTask` makes just
+    /// before it resumes the conversation: the task is still open and waits
+    /// for nothing else, the same agent works on it, and its prompt is
+    /// free. A `task send` message that waits for that prompt goes first:
+    /// the recovery's own message would take the prompt from it.
+    func mayStillRecoverFableTask(taskID: UUID, expectedSessionID: String, session: TaskSessionInfo) -> Bool {
+        guard !isTerminating, let record = records.record(id: taskID),
+              record.doneAt == nil, record.archivedAt == nil, record.replyRequest == nil,
+              record.mergeFailure == nil, record.startWork?.state != .running,
+              liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == expectedSessionID,
+              promptOccupant(of: session) == nil else { return false }
+        return !hasWaitingSteerMessage(for: session)
     }
 
     /// Saves a watch on `notifyTaskID`'s record, or keeps it in memory for
