@@ -1068,37 +1068,28 @@ class Run:
                              and m['text'].lstrip().startswith('[Toastty task answer] '))
                     and not (task.id in self.merges_expected and 'toastty-task-merge' in m['text'])]
         self.check('every coordinator message to a task starts with [coordinator]', not unsigned, unsigned)
-        # `task send --steer` may reach an agent that works: Toastty checks
-        # the agent before it types. It never types at a prompt.
-        steered = [c for c in commands if re.search(r'task\s+send\b', c) and '--steer' in c]
-        # A send with --text-file holds its text in message.md, which the
-        # coordinator wrote in the same turn.
-        steered_texts = [text for turn in turns
-                         if any(re.search(r'task\s+send\b', c) and '--steer' in c for c in turn['commands'])
-                         for text in turn['messages']]
+        # A `task send` may go to an agent that works: Toastty checks the
+        # agent before it types. The agents of this check cannot read during
+        # a turn, so Toastty saves the message and types it when the turn
+        # ends. It never types at a prompt on screen.
         interrupted = []
         for task, message in received:
             before = [kind for at, kind in task.statuses if at <= message['at']]
-            snippet = typed_text(message['text']).strip()[:60]
-            checked = before and before[-1] == 'working' and any(
-                task.id in c and (snippet in c or any(snippet in text for text in steered_texts)) for c in steered)
-            if before and before[-1] in ('working', 'needs_approval') and not checked:
+            if before and before[-1] in ('working', 'needs_approval'):
                 interrupted.append(f'{task.title} was {before[-1]}: {message["text"][:120]}')
-        self.check('no message to an agent that works or waits at a prompt, but a --steer send to one that works',
-                   not interrupted, interrupted)
-        # A `task send --queue` waits in Toastty for the end of the turn; the
-        # check above sees when it is typed.
-        unchecked = []
+        self.check('Toastty types no message into an agent that works or waits at a prompt', not interrupted, interrupted)
+        # Only a send with --queue may go to an agent that waits at a prompt.
+        unqueued = []
         for turn in turns:
             started = parse_time(turn['at']) if turn.get('at') else time.time()
             for command in turn['commands']:
-                if not re.search(r'task\s+send\b', command) or '--steer' in command or '--queue' in command:
+                if not re.search(r'task\s+send\b', command) or '--queue' in command:
                     continue
                 for task in self.tasks:
                     before = [kind for at, kind in task.statuses if at <= started]
-                    if task.id in command and before and before[-1] == 'working':
-                        unchecked.append(f'{task.title} was working: {command[:300]}')
-        self.check('no send without --steer or --queue to a task whose agent works', not unchecked, unchecked)
+                    if task.id in command and before and before[-1] == 'needs_approval':
+                        unqueued.append(f'{task.title} waited at a prompt: {command[:300]}')
+        self.check('no send without --queue to a task whose agent waits at a prompt', not unqueued, unqueued)
         missing = [turn['prompt'][:200] for turn in turns if turn['wake']
                    and not any(re.search(r'coordinator\s+wake\s+--(in|at|clear)', c) for c in turn['commands'])]
         wakes = len([turn for turn in turns if turn['wake']])
@@ -1869,7 +1860,7 @@ def dependency(run):
 
 
 def dependency_busy(run):
-    """The task that waits for a merge works when the merge comes: the coordinator queues its message, and Toastty types it when the turn ends."""
+    """The task that waits for a merge works when the merge comes: the coordinator sends its message at once, and Toastty types it when the turn ends."""
     first = run.create_task('Add the export API')
     waiting = run.create_task('Export button in the toolbar', status='working')
     run.set_pr(first, 13, body=GOOD_PROOF.format(head='0' * 39 + 'd'))
@@ -1890,7 +1881,7 @@ def dependency_busy(run):
     later = run.new_turns(wake=True)
     commands = [c for t in later for c in t['commands']]
     sends = [c for c in commands if re.search(r'task\s+send\b', c) and waiting.id in c]
-    run.check('it leaves the busy task its message with --queue', any('--queue' in c for c in sends), commands)
+    run.check('it sends the busy task its message without waiting for the turn to end', len(sends) == 1, commands)
     run.check('the busy agent reads nothing during its turn', run.messages(waiting) == [], run.messages(waiting))
     states = [m['state'] for m in run.get(waiting).get('queuedMessages') or []]
     run.check('task get lists the message as queued', states == ['queued'], states)
@@ -2346,7 +2337,7 @@ def busy_silent(run):
 
 
 def user_words_busy(run):
-    """The user corrects a task whose agent works: the coordinator passes the words on with --steer."""
+    """The user corrects a task whose agent works: the coordinator passes the words on at once."""
     task = run.create_task('Fix the login redirect', status='working')
     run.reply(task, 'Reading the login flow now.')
     run.seed_policy()
@@ -2355,8 +2346,8 @@ def user_words_busy(run):
     turns = run.tell('For the login redirect task: also keep the query string when it redirects.')
     commands = [command for turn in turns for command in turn['commands']]
     sends = [c for c in commands if re.search(r'task\s+send\b', c) and task.id in c]
-    run.check("it passes the user's words to the busy task with --steer", any('--steer' in c for c in sends), commands)
-    run.check('it sends nothing to the busy task without --steer', all('--steer' in c for c in sends), sends)
+    run.check("it passes the user's words to the busy task", bool(sends), commands)
+    run.check("it does not hold the user's words for the end of the turn", not any('--queue' in c for c in sends), sends)
     # The coordinator writes the message to message.md and sends that file.
     written = [text for turn in turns for text in turn['messages']]
     run.check("the message holds the user's words", any('query string' in c for c in sends + written), sends + written)

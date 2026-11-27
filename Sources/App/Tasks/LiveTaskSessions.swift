@@ -109,10 +109,10 @@ final class LiveTaskSessions: TaskSessionProviding {
     }
 
     func deliverSteering(
-        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+        _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
     ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
         steerSender.releasePanels { activeSession(panelID: $0) == nil }
-        return await steerSender.send(text, panelID: panelID, mayTypeAtPrompt: mayTypeAtPrompt)
+        return await steerSender.send(text, panelID: panelID, mayType: mayType)
     }
 
     func lastSteerTypedAt(panelID: UUID) -> Date? {

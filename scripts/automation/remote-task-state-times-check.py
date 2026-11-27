@@ -202,8 +202,9 @@ def main():
         step('last output follows the transcript', before=output, after=later)
 
         # 4. A message from another agent is not the user's input.
+        # Toastty types it into the turn, or saves it for the next prompt.
         sent = cli_json('task', 'send', busy_id, 'Also port the exporter')
-        require(sent.get('delivered') is True, f'task send was not delivered: {sent}')
+        require(sent.get('delivery') in ('sent', 'steered', 'queued'), f'task send gave no delivery: {sent}')
         require(task(busy_id).get('lastUserInputAt') is None, f'task send counted as user input: {task(busy_id)}')
         step('task send is not user input', lastUserInputAt=task(busy_id).get('lastUserInputAt'))
 

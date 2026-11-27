@@ -1192,7 +1192,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
       toastty [--json] [--socket-path <path>] task release-complete --text-file <report.json>
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>] [--name <project>]
-      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer | --queue] [--from <name>]
+      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--queue] [--from <name>]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
@@ -2741,6 +2741,8 @@ public enum ToasttyCLI {
             guard parsed.hasFlag("--steer") == false || parsed.hasFlag("--queue") == false else {
                 throw ToasttyCLIError.usage("task send takes --steer or --queue, not both\n\n\(usage)")
             }
+            // `--steer` names the default. It is still passed on, so that an
+            // older app checks the agent before it types.
             if parsed.hasFlag("--steer") {
                 args["steer"] = .bool(true)
             }

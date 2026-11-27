@@ -102,23 +102,28 @@ extension TaskCoordinator {
 
     // MARK: - Send
 
-    /// Types `text` into the task's agent and submits it, at its open
-    /// prompt or into its running turn. It types nothing when the prompt
-    /// holds something that the text and its Return would join or answer.
-    /// The check and the typing are one step on the main actor.
-    @discardableResult
-    func send(taskID: UUID, text: String) throws -> TaskSessionInfo {
+    /// `task send`: gives `text` to the task's agent as soon as the agent
+    /// can read it, without typing into a permission prompt, a question, a
+    /// dialog, or text that can be in the agent's prompt: see
+    /// `TaskSessionProviding.deliverSteering`. It types at the agent's open
+    /// prompt, or into a running turn that can read it. When the agent
+    /// cannot take it now, or Toastty cannot tell, the message is saved on
+    /// the task, as `queueMessage` saves one, so that it waits across a
+    /// relaunch, and goes before Toastty's other messages at the next open
+    /// prompt (`TaskQueuedMessage.steer`). A message behind an earlier one
+    /// that waits waits too, so they keep their order. The message is the
+    /// sender's, not the user's typing, so the task's last user input does
+    /// not move.
+    func send(taskID: UUID, text: String, from: String) async throws -> TaskSteerSendOutcome {
         let (record, session) = try sendTarget(taskID: taskID, text: text)
-        if let occupant = promptOccupant(of: session) {
-            ToasttyLog.info("Typed no message into a task's occupied prompt", category: .tasks, metadata: [
-                "task_id": record.id.uuidString,
-                "session_id": session.sessionID,
-                "occupant": "\(occupant)",
-            ])
-            throw Self.occupiedPromptError(occupant, record)
+        if record.waitingMessages.contains(where: \.isSteer) == false,
+           let typed = try await typeNow(record: record, session: session, text: text) {
+            return typed
         }
-        try submitTaskMessage(text, to: session, for: record)
-        return session
+        let (message, position) = try queueMessage(taskID: taskID, text: text, from: from, steer: true)
+        // The task can have moved to another agent while the send waited.
+        let current = records.record(id: taskID).flatMap { liveAgentSession(of: $0) } ?? session
+        return .saved(message, position: position, session: current)
     }
 
     /// What is at the agent's prompt that a typed message and its Return
@@ -163,37 +168,24 @@ extension TaskCoordinator {
         }
     }
 
-    /// Gives `text` to the task's agent whatever it does now, without
-    /// typing into a permission prompt or a question: see
-    /// `TaskSessionProviding.deliverSteering`. When the agent cannot take
-    /// it now, the message is saved on the task, as `queueMessage` saves
-    /// one, so that it waits across a relaunch, and goes before Toastty's
-    /// other messages at the next open prompt (`TaskQueuedMessage.steer`).
-    /// A message behind an earlier one that waits waits too, so they keep
-    /// their order. The message is the sender's, not the user's typing, so
-    /// the task's last user input does not move.
-    func sendSteering(taskID: UUID, text: String, from: String) async throws -> TaskSteerSendOutcome {
-        let (record, session) = try sendTarget(taskID: taskID, text: text)
-        if record.waitingMessages.contains(where: \.isSteer) == false,
-           let typed = try await typeSteering(record: record, session: session, text: text) {
-            return typed
-        }
-        let (message, position) = try queueMessage(taskID: taskID, text: text, from: from, steer: true)
-        return .saved(message, position: position, session: session)
-    }
-
-    /// `sendSteering`'s try to type at once. `nil` when the message must
-    /// wait.
-    private func typeSteering(record: TaskRecord, session: TaskSessionInfo, text: String) async throws -> TaskSteerSendOutcome? {
+    /// `send`'s try to type at once. `nil` when the message must wait.
+    private func typeNow(record: TaskRecord, session: TaskSessionInfo, text: String) async throws -> TaskSteerSendOutcome? {
         let taskID = record.id
         let text = AgentPasteText.keepingImagePathsAsText(text)
-        // A message that a send saved, or that Toastty typed at this prompt,
-        // while this one waited for the agent's state, keeps the prompt.
+        // The send can wait for the agent's state. Meanwhile the task can
+        // move to another agent, as start-work moves it, and another send
+        // can save a message, which then goes first. A message that Toastty
+        // typed at this prompt meanwhile keeps the prompt.
         let sessionID = session.sessionID
-        let result = await sessions?.deliverSteering(text, panelID: session.panelID) { [weak self] in
-            guard let self, let current = self.sessions?.session(sessionID), current.isActive else { return false }
-            return self.automaticPromptTurnEnd(for: current) != nil
-        } ?? .failure(.stateUnknown)
+        let result = await sessions?.deliverSteering(text, panelID: session.panelID) { [weak self] target in
+            guard let self, let record = self.records.record(id: taskID),
+                  let current = self.liveAgentSession(of: record), current.sessionID == sessionID,
+                  record.waitingMessages.contains(where: \.isSteer) == false else { return false }
+            switch target {
+            case .openPrompt: return self.automaticPromptTurnEnd(for: current, rest: .shownByConversation) != nil
+            case .runningTurn: return true
+            }
+        } ?? .success(.mustWait)
         var metadata = [
             "task_id": taskID.uuidString,
             "session_id": session.sessionID,
@@ -210,16 +202,10 @@ extension TaskCoordinator {
             metadata["failure"] = String(describing: failure)
             ToasttyLog.warning("A message to a task was not sent under the input checks", category: .tasks, metadata: metadata)
             switch failure {
-            case .stateUnknown:
-                throw TaskError(
-                    "Toastty cannot tell what task \(record.title)'s agent does now, so it typed nothing. Send the message again when the agent is idle."
-                )
             case .unavailable:
                 throw Self.unavailableSendError(record)
             case .uncertain:
                 throw Self.uncertainSendError(record)
-            case .typedInTerminal:
-                throw Self.occupiedPromptError(.typedText, record)
             }
         }
     }
@@ -247,23 +233,6 @@ extension TaskCoordinator {
 
     private static func unavailableSendError(_ record: TaskRecord) -> TaskError {
         TaskError("Toastty could not type into task \(record.title)'s terminal.")
-    }
-
-    private static func occupiedPromptError(_ occupant: TaskPromptOccupant, _ record: TaskRecord) -> TaskError {
-        switch occupant {
-        case .interaction:
-            TaskError(
-                "Task \(record.title)'s agent waits for an answer to a permission prompt, a question or a dialog, and a typed message could answer it. Toastty typed nothing. Send the message again when the agent's prompt is open, or send it with --steer, which holds it until then."
-            )
-        case .typedText:
-            TaskError(
-                "Someone typed in task \(record.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
-            )
-        case .unconfirmedMessage:
-            TaskError(
-                "An earlier message to task \(record.title) can still be in its agent's prompt: Toastty typed it, but the terminal did not confirm its Return. Toastty typed nothing. Send the message again after the agent's next turn starts."
-            )
-        }
     }
 
     /// Types `text` and presses Return, with image paths kept as text so
@@ -510,8 +479,8 @@ extension TaskCoordinator {
         }
         unconfirmedDeliveryTimes = unconfirmedDeliveryTimes.filter { sessions?.session($0.key)?.isActive == true }
         // An answer to the task's question goes first: a turn that another
-        // message starts would clear the question. A `--steer` message was
-        // meant for the agent's turn, so it goes before a watch's line.
+        // message starts would clear the question. A `task send` message
+        // was meant for the agent's turn, so it goes before a watch's line.
         deliverApprovalAnswers(at: at)
         deliverQueuedMessages(at: at, steer: true)
         // Building the board walks every task, so only a pass with a pending
@@ -572,13 +541,16 @@ extension TaskCoordinator {
     /// The open prompt a watch, wake, merge or queued message can use, one
     /// message for each open prompt. A provider can show an interaction
     /// while its hooks report ready, or keep reporting ready after an
-    /// automatic submission starts the next turn. A `task send --steer`
-    /// message that waits takes the prompt first, unless `yieldsToSteer`
-    /// is false: for the call that types it, and for an answer to the
-    /// task's question, which goes before it. One that `--steer` typed
-    /// there took the prompt.
-    func automaticPromptTurnEnd(for session: TaskSessionInfo, yieldsToSteer: Bool = true) -> Date? {
-        guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
+    /// automatic submission starts the next turn. A `task send` message
+    /// that waits takes the prompt first, unless `yieldsToSteer` is false:
+    /// for the call that types it, and for an answer to the task's
+    /// question, which goes before it. One that `task send` typed there
+    /// took the prompt. `rest` says what shows that the agent rests at its
+    /// prompt.
+    func automaticPromptTurnEnd(
+        for session: TaskSessionInfo, yieldsToSteer: Bool = true, rest: TaskPromptRest = .reported
+    ) -> Date? {
+        guard let sessions, rest.holds(for: session.status?.kind),
               !recoveringFableTaskPanels.values.contains(session.panelID),
               promptOccupant(of: session) == nil,
               yieldsToSteer == false || hasWaitingSteerMessage(for: session) == false else { return nil }
@@ -588,8 +560,8 @@ extension TaskCoordinator {
         return turnEnd
     }
 
-    /// Whether a `task send --steer` message waits for the session's
-    /// prompt: the task it works on has one.
+    /// Whether a `task send` message waits for the session's prompt: the
+    /// task it works on has one.
     private func hasWaitingSteerMessage(for session: TaskSessionInfo) -> Bool {
         records.records.contains { record in
             record.waitingMessages.contains(where: \.isSteer)
@@ -794,7 +766,7 @@ extension TaskCoordinator {
     /// prompt can be open now, and then Toastty types the oldest waiting
     /// message at once. Returns the message as it is after that, and its
     /// place in the queue while it waits. With `steer`, the message is one
-    /// that `sendSteering` could not type now (`TaskQueuedMessage.steer`).
+    /// that `send` could not type now (`TaskQueuedMessage.steer`).
     func queueMessage(
         taskID: UUID, text: String, from: String, steer: Bool = false
     ) throws -> (message: TaskQueuedMessage, position: Int?) {
@@ -803,7 +775,7 @@ extension TaskCoordinator {
             throw TaskError(
                 steer
                     ? "Toastty cannot hold a message for task \(record.title): \(reason). Nothing was typed."
-                    : "Toastty queues no message for task \(record.title): \(reason). A send without --queue types it at once and reopens the task."
+                    : "Toastty queues no message for task \(record.title): \(reason). A send without --queue gives it to the agent and reopens the task."
             )
         }
         guard record.waitingMessages.count < TaskRecord.maximumWaitingMessages else {
@@ -826,14 +798,15 @@ extension TaskCoordinator {
         evaluateWatches()
         startWatchMonitorIfNeeded()
         let saved = records.record(id: taskID)
-        // The place in the order Toastty types them: `--steer` messages first.
+        // The place in the order Toastty types them: `task send` messages
+        // first, then `--queue` messages.
         let order = (saved?.waitingMessages ?? []).filter(\.isSteer) + (saved?.waitingMessages ?? []).filter { $0.isSteer == false }
         let position = order.firstIndex { $0.id == message.id }.map { $0 + 1 }
         return (saved?.queuedMessages?.first { $0.id == message.id } ?? message, position)
     }
 
-    /// Why a waiting `--steer` message is dropped: only an archived task.
-    /// A `--steer` send to an open prompt types at once also in a task that
+    /// Why a waiting `task send` message is dropped: only an archived task.
+    /// A `task send` to an open prompt types at once also in a task that
     /// merged or is Done, so one that waits is typed there too.
     private static func steerDropReason(_ record: TaskRecord) -> String? {
         record.archivedAt != nil ? "the task was archived" : nil
@@ -842,8 +815,12 @@ extension TaskCoordinator {
     /// Types the oldest waiting message of each task whose agent has an
     /// open prompt that no other message of Toastty's took, and drops the
     /// waiting messages of a task that finished. `steer` picks the
-    /// `--steer` messages, which go before Toastty's other messages, or the
-    /// `--queue` messages, which go after them.
+    /// `task send` messages that had to wait, which go before Toastty's
+    /// other messages, or the `--queue` messages, which go after them.
+    ///
+    /// A `task send` message also takes the prompt of an agent whose turn
+    /// an error ended: the agent waits at its prompt, and such a message
+    /// often tells it to continue.
     ///
     /// `--queue` messages also wait while the task's question waits for the
     /// user, since the turn a message starts clears the question, as a wake
@@ -879,7 +856,9 @@ extension TaskCoordinator {
                       mergeDeliveryTasks[record.id] == nil, record.waiting?.wakeIsDue(at: at) != true else { continue }
             }
             guard let session = liveAgentSession(of: record),
-                  let turnEnd = automaticPromptTurnEnd(for: session, yieldsToSteer: steer == false) else { continue }
+                  let turnEnd = automaticPromptTurnEnd(
+                      for: session, yieldsToSteer: steer == false, rest: steer ? .reportedOrStopped : .reported
+                  ) else { continue }
             // Marked first, as a wake is, so that a quit between the typing
             // and the save never types it again.
             func settle(_ outcome: TaskQueuedMessage.Outcome?) {

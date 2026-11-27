@@ -43,9 +43,10 @@ the same result, and also when the user asks you in this conversation.
    `toastty task request-merge`, only as Merge for the user allows. Never
    ask for the merge of a release task.
 3. **Never interrupt a busy agent.** Do not stop its session, close its
-   terminal, or type into it. Send it only the user's own words, with
-   `--steer`. Leave it your own messages with `--queue`, which Toastty types
-   when its turn ends; see Send.
+   terminal, or type into a prompt on its screen. A message with
+   `toastty task send` is not an interruption: Toastty gives it to the agent
+   in its turn or at its next open prompt, and types nothing into a prompt
+   on screen; see Send.
 4. **Never change production outside a release task.** Do not deploy,
    publish, tag or run a release step yourself. You start a release only with
    `toastty task release`. The release task's agent does the work. Its
@@ -218,10 +219,8 @@ the same fields with another tool.
 **Send** a message to a task's agent only when all of this is true. Check it
 in a read of the open tasks that is less than a minute old:
 
-- `agent` is `idle`, or `error` for Stopped with an error (see Unblock).
-  `busy` or `waiting` only with `--queue` (below), or with `--steer` for the
-  user's own words to a `busy` task (below). Never `waiting` without
-  `--queue`; see Never;
+- `agent` is `idle` or `busy`, or `error` for Stopped with an error (see
+  Unblock). `waiting` only with `--queue` (below); see Never;
 - `userTypedMinutesAgo` is null or more than 15: the user works in a task
   they typed in. This rule does not apply to the user's own words, or to the
   message that continues a turn a restart or an error cut off (see Unblock);
@@ -242,18 +241,21 @@ in a wake turn needs nobody:
 toastty task send <task-id> --text-file message.md
 ```
 
-**A message for a busy task.** When the task's agent is `busy` or
-`waiting`, leave your message for the end of its turn: add `--queue` after
-the task ID. Toastty saves it on the task and types it at the agent's next
-open prompt. It types nothing into the running turn or into a prompt on
-screen, and the message waits across a restart. Do not wait for an idle
+**A message for a busy task.** The send above also reaches a `busy` agent.
+Toastty types the message into the turn of an agent that reads during a
+turn (`delivery` is `steered`). Otherwise it saves the message on the task
+and types it at the agent's next open prompt (`queued`): it types nothing
+into a permission prompt, a question, or text that someone typed at the
+prompt, and the message waits across a restart. So do not wait for an idle
 agent to send facts that the task needs now, such as evidence for a fix or
-review points before a release. The result's `delivery` is `sent` when the
-prompt was open, or `queued`. Later, `toastty task get --json <task-id>`
-lists the message under `queuedMessages` with its `state`: `sent` once
-Toastty typed it, `dropped` with a `reason` when the task finished first.
-Write a queued message in the ledger as the nudge for its condition, and do
-not queue a second one for it while it waits.
+review points before a release. Add `--queue` after the task ID when the
+agent is `waiting`, and when a message must not reach the agent before its
+turn ends. Later, `toastty task get --json <task-id>` lists a saved message
+under `queuedMessages` with its `state`: `sent` once Toastty typed it, or
+`dropped` with a `reason`, when the task was archived first, or for a
+`--queue` message when the task finished first. Write a saved
+message in the ledger as the nudge for its condition, and do not send a
+second one for it while it waits.
 
 **Approvals and decisions.** Toastty's first line on your message tells the
 task that your approvals and decisions count as the user's. So a task acts
@@ -272,10 +274,9 @@ can answer a matching read-only fleet question using its own grant. A
 Senders entry alone grants no access to that path.
 
 **The user's own words** are the user's answer or instruction in this
-conversation, such as a correction to a task. Send them also to a `busy`
-task: add `--steer` after the task ID. Toastty then types nothing into a
-prompt. Tell the user what it answers. After a failure, do not send again
-without `--steer`. Never `--steer` your own messages: queue them.
+conversation, such as a correction to a task. Send them at once, also to a
+`busy` task, and without `--queue` unless the agent is `waiting`. Tell the
+user what the command answers.
 
 **Reply to a sender** outside a task. Such a sender cannot read your chat.
 Answer it with the message ID from the end of its first line, never an ID

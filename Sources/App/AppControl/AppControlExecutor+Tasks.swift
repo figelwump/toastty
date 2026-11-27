@@ -163,27 +163,18 @@ extension AppControlExecutor {
         case .taskReleaseComplete:
             throw AutomationSocketError.invalidPayload("task.release-complete checks git before it returns; send it through app_control.run_action")
         case .taskSend:
-            let queue = try args.taskBool("queue") == true
-            guard try args.taskBool("steer") != true else {
+            // Only a send with queue does not wait: `runActionAsync` takes
+            // every other one (`prepareTaskSend`).
+            guard try taskSendQueues(args: args) else {
                 throw AutomationSocketError.invalidPayload(
-                    queue ? "pass steer or queue, not both"
-                        : "task.send with steer waits for the agent's state; send it through app_control.run_action"
+                    "task.send without queue waits for the agent's state; send it through app_control.run_action"
                 )
             }
             let record = try visibleTask(args: args, coordinator: coordinator)
             let message = try taskSendMessage(args: args)
-            if queue {
-                let from = Self.senderName(messageSender(statedName: try statedSenderName(args: args)))
-                let (queued, position) = try perform { try coordinator.queueMessage(taskID: record.id, text: message, from: from) }
-                return .init(didMutateState: true, result: Self.queuedSendResult(queued, taskID: record.id, position: position))
-            }
-            let session = try perform { try coordinator.send(taskID: record.id, text: message) }
-            return .init(didMutateState: false, result: [
-                "taskID": .string(record.id.uuidString),
-                "sessionID": .string(session.sessionID),
-                "panelID": .string(session.panelID.uuidString),
-                "delivered": .bool(true),
-            ])
+            let from = Self.senderName(messageSender(statedName: try statedSenderName(args: args)))
+            let (queued, position) = try perform { try coordinator.queueMessage(taskID: record.id, text: message, from: from) }
+            return .init(didMutateState: true, result: Self.queuedSendResult(queued, taskID: record.id, position: position))
         case .taskWatch:
             let target = try visibleTask(args: args, coordinator: coordinator)
             guard let rawCondition = args.taskString("until"), let condition = TaskWatchCondition(rawValue: rawCondition) else {
@@ -258,9 +249,10 @@ extension AppControlExecutor {
         }
     }
 
-    /// What a `task.send` with `queue`, or with `steer` for a message that
-    /// had to wait, returns: what happened to the message now, and its ID,
-    /// which `task.get` lists under `queuedMessages`.
+    /// What a `task.send` returns for a message that Toastty saved on the
+    /// task: one with `queue`, or one that had to wait. It says what
+    /// happened to the message now, and gives its ID, which `task.get` lists
+    /// under `queuedMessages`.
     private static func queuedSendResult(_ message: TaskQueuedMessage, taskID: UUID, position: Int?) -> [String: AutomationJSONValue] {
         var result: [String: AutomationJSONValue] = [
             "taskID": .string(taskID.uuidString),
@@ -309,14 +301,22 @@ extension AppControlExecutor {
         }
     }
 
-    /// The checks of a `task.send` with `steer`, in this request's context,
-    /// and the sender as `task.get` lists it. `nil` for a send without it,
-    /// which does not wait.
-    func prepareTaskSteerSend(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, String, from: String)? {
-        guard try args.taskBool("steer") == true else { return nil }
-        guard try args.taskBool("queue") != true else {
+    /// Whether a `task.send` asks for `queue`. `steer` is the default, and
+    /// is still accepted: it changes nothing, and cannot go with `queue`.
+    private func taskSendQueues(args: [String: AutomationJSONValue]) throws -> Bool {
+        let queue = try args.taskBool("queue") == true
+        let steer = try args.taskBool("steer") == true
+        guard queue == false || steer == false else {
             throw AutomationSocketError.invalidPayload("pass steer or queue, not both")
         }
+        return queue
+    }
+
+    /// The checks of a `task.send`, in this request's context, and the
+    /// sender as `task.get` lists it. `nil` for a send with `queue`, which
+    /// does not wait for the agent's state.
+    func prepareTaskSend(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, String, from: String)? {
+        guard try taskSendQueues(args: args) == false else { return nil }
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
         let from = Self.senderName(messageSender(statedName: try statedSenderName(args: args)))
@@ -338,11 +338,11 @@ extension AppControlExecutor {
         )
     }
 
-    func finishTaskSteerSend(
+    func finishTaskSend(
         _ coordinator: TaskCoordinator, taskID: UUID, text: String, from: String
     ) async throws -> AppControlActionOutcome {
         do {
-            switch try await coordinator.sendSteering(taskID: taskID, text: text, from: from) {
+            switch try await coordinator.send(taskID: taskID, text: text, from: from) {
             case .typed(let delivery, let session):
                 return .init(didMutateState: false, result: [
                     "taskID": .string(taskID.uuidString),
@@ -1086,7 +1086,7 @@ extension AppControlExecutor {
             "waiting": record.waiting.map {
                 .object(["on": .string($0.on), "since": date($0.since), "wakeAt": date($0.wakeAt), "wokenAt": date($0.wokenAt)])
             } ?? .null,
-            // Messages from task.send with queue, or with steer when they
+            // Messages from task.send with queue, or without it when they
             // had to wait, and their outcome.
             "queuedMessages": .array((record.queuedMessages ?? []).map { message in
                 .object([
