@@ -30,14 +30,14 @@ The workflow, scopes, decision tree and handoff apply to both apps. The toastty-
 
 ## CI Coverage
 
-PR CI runs no tests for the change. On every PR, `Toastty CI` runs only the
-Linux CI workflow tests and the **CI gate** that branch protection requires;
-every test job runs only on manual dispatch. Your own checks are the
-verification: toastty-mini runs for native code (the macOS suite, and focused
-iOS Simulator tests with `--platform ios`), and the local script and web-panel
-commands in `docs/agents/automation.md` when a change touches those files.
-For push-worker changes, run `npm run check` in `workers/push`. Use the full
-macOS suite on toastty-mini because the hosted Mac job builds without Ghostty.
+On every PR, `Toastty CI` runs workflow tests and Ghostty-backed desktop
+builds, tests and smoke on GitHub-hosted macOS 26, Ubuntu 24.04 and Ubuntu
+26.04. The required **CI gate** depends on all desktop jobs. Full iOS, script
+and web-panel jobs also run on manual dispatch. Use toastty-mini for
+agent-driven macOS and focused iOS checks and for interactions that hosted
+smoke does not cover. See `docs/agents/automation.md` for local script and
+web-panel commands. For push-worker changes, run `npm run check` in
+`workers/push`.
 
 The toastty-mini Xcode can differ from the pinned hosted Xcode in
 `.github/ios-xcode-version`, and the hosted one has rejected code that the
@@ -62,9 +62,10 @@ gh run watch <run-id> --exit-status
 ```
 
 Use the URL returned by the dispatch. Verify `headSha` before using the
-result, and link it in the PR and report. `gh pr checks` shows only the
-PR's CI gate. A required full run must pass before merge. A subsequent base merge
-uses the rules below. Cancel a superseded run owned by this task if it can
+result, and link it in the PR and report. `gh pr checks` shows the PR run,
+not the separate manual validation. A required full run must pass before
+merge. A subsequent base merge uses the rules below. Cancel a superseded run
+owned by this task if it can
 no longer establish that result. Full Debug can take over two hours.
 
 Hosted XCTest already retries a failed case once. Read the log and compare

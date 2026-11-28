@@ -23,6 +23,14 @@ GtkWidget *toastty_shortcut_label_new(const char *accelerator) {
 #endif
 }
 
+GtkWidget *toastty_adw_spinner_new(void) {
+#if ADW_CHECK_VERSION(1, 6, 0)
+    return adw_spinner_new();
+#else
+    return toastty_clock_spinner_new();
+#endif
+}
+
 GtkWidget *toastty_shortcuts_dialog_new(void) {
 #if ADW_CHECK_VERSION(1, 8, 0)
     return GTK_WIDGET(adw_shortcuts_dialog_new());

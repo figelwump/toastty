@@ -100,7 +100,7 @@ public final class RemoteAccessDialog {
         adw_action_row_set_subtitle(cast(state), status.detail)
         let indicator = Gtk.image(Self.icon(for: status.indicator), pixelSize: 16, classes: [Self.cssClass(for: status.indicator)])
         if status.indicator == .progress {
-            let spinner = toastty_clock_spinner_new()!
+            let spinner = toastty_adw_spinner_new()!
             adw_action_row_add_prefix(cast(state), spinner)
         } else {
             adw_action_row_add_prefix(cast(state), indicator)

@@ -64,7 +64,10 @@ public enum LinuxTheme {
     /// original shade/alpha functions. Translate our small, fixed palette
     /// vocabulary on that GTK, including CSS loaded by the other providers.
     static func compatibleCSS(_ css: String) -> String {
-        guard gtk_check_version(4, 16, 0) != nil else { return css }
+        gtk_check_version(4, 16, 0) == nil ? css : legacyCSS(css)
+    }
+
+    static func legacyCSS(_ css: String) -> String {
         let references = /var\(--([a-z-]+)\)/
         var result = css.replacing(references) { match in
             let name = String(match.1)
@@ -84,7 +87,8 @@ public enum LinuxTheme {
             }.joined(separator: "\n")
         }
         return result.replacing(/color-mix\(in srgb, ([@#][a-z_0-9]+) ([0-9]+)%, transparent\)/) { match in
-            "alpha(\(match.1), \(Double(match.2)! / 100))"
+            guard let percent = Double(match.2) else { return String(match.0) }
+            return "alpha(\(match.1), \(percent / 100))"
         }
     }
 

@@ -139,8 +139,8 @@ jobs:
           ./scripts/dev/bootstrap-worktree.sh
           grep -q TOASTTY_HAS_GHOSTTY_KIT toastty.xcodeproj/project.pbxproj
 
-      - name: Build Debug and run macOS tests
-        id: debug-tests
+      - name: Build macOS Debug and test bundles
+        id: debug-build
         run: |
           mkdir -p artifacts/ci-macos
           xcodebuild \
@@ -149,12 +149,26 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath "$DERIVED_PATH" \
+            -resultBundlePath artifacts/ci-macos/DebugBuild.xcresult \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            build-for-testing
+
+      - name: Run macOS XCTest
+        run: |
+          xcodebuild \
+            -workspace toastty.xcworkspace \
+            -scheme ToasttyApp \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$DERIVED_PATH" \
             -resultBundlePath artifacts/ci-macos/TestResults.xcresult \
+            -parallel-testing-enabled NO \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=YES \
-            test
+            test-without-building
 
       - name: Build unsigned macOS Release app
+        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}
         run: |
           xcodebuild \
             -workspace toastty.xcworkspace \
@@ -167,7 +181,7 @@ jobs:
             build
 
       - name: Smoke test the macOS GUI
-        if: ${{ !cancelled() && steps.debug-tests.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}
         run: |
           result=0
           for smoke in smoke-ui workspace-tabs-smoke workspace-scope-smoke shortcut-hints-smoke; do
@@ -235,6 +249,8 @@ jobs:
             artifacts/dev-runs/*/artifacts/
             artifacts/manual/linux-tasks/
             artifacts/package-tests/*/report*
+            artifacts/package-tests/*/results.json
+            artifacts/package-tests/*/*/app.log
             artifacts/package-tests/*/*/screenshots/
             artifacts/package-tests/*/*/transcripts/
           if-no-files-found: warn

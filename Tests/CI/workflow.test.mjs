@@ -137,9 +137,12 @@ test('hosted Mac runs Ghostty-backed Debug tests, a Release build, and GUI smoke
   assert.equal(job.env.TUIST_TOASTTY_DISABLE_PUSH, 1);
   assert.ok(job.steps.some((step) => step.run?.includes('build-macos-ghostty.sh')));
   assert.ok(job.steps.some((step) => step.run?.includes('grep -q TOASTTY_HAS_GHOSTTY_KIT')));
-  assert.match(job.steps.find((step) => step.id === 'debug-tests').run, /-configuration Debug[\s\S]+test$/m);
+  assert.match(job.steps.find((step) => step.id === 'debug-build').run, /-configuration Debug[\s\S]+build-for-testing$/m);
+  const tests = job.steps.find((step) => step.name === 'Run macOS XCTest');
+  assert.match(tests.run, /-parallel-testing-enabled NO[\s\S]+test-without-building$/m);
   assert.match(job.steps.find((step) => step.name.includes('Release app')).run, /-configuration Release[\s\S]+build$/m);
   const smoke = job.steps.find((step) => step.name === 'Smoke test the macOS GUI');
+  assert.match(smoke.if, /steps\.debug-build\.outcome == 'success'/);
   for (const script of ['smoke-ui', 'workspace-tabs-smoke', 'workspace-scope-smoke', 'shortcut-hints-smoke']) {
     assert.ok(smoke.run.includes(script));
   }
