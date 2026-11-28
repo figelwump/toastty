@@ -1497,7 +1497,8 @@ agent as a process of its own and exchanges JSON messages with it
 agent runs in the coordinator's terminal, and Toastty types nothing there.
 The chat, quick entry, `coordinator send`, the digests and a paired iPhone
 work as before. This is a prototype for your own use. The terminal stays the
-default, and Codex and the other agents always use it.
+default. Codex has a setting of its own, described below, and the other
+agents always use the terminal.
 
 Turn it on, then restart the coordinator:
 
@@ -1573,6 +1574,99 @@ Limits of the prototype:
   own, and Claude Code refuses them here. To sign in, run `claude` in any
   terminal and sign in there, then open the coordinator again.
 - The usage-limit recovery of a terminal coordinator does not run.
+
+### A direct session for a Codex coordinator (prototype)
+
+Off by default, and separate from the Claude setting. With it on, Toastty
+starts a Codex coordinator as a process of its own (`codex app-server`) and
+exchanges JSON messages with it. The rest is as for Claude above: no agent
+runs in the coordinator's terminal, and the chat, quick entry,
+`coordinator send`, the digests and a paired iPhone work as before. It
+applies when the coordinator's agent is `codex` (`[coordinator]` in
+`tasks.toml`). The shapes of the messages are those of Codex 0.172.0.
+
+Turn it on, then restart the coordinator:
+
+```bash
+defaults write com.GiantThings.toastty toastty.coordinator.codexDirectSession -bool YES
+```
+
+`TOASTTY_COORDINATOR_CODEX_DIRECT_SESSION=1` in the app's environment does
+the same for one run, and `0` forces the terminal. To go back, turn the
+setting off and relaunch Toastty: the same conversation then resumes in the
+terminal (`codex resume`).
+
+What Codex does as Claude does:
+
+- **A message is given as data.** Each message has its own ID, and Codex
+  returns that ID when it takes the message.
+- **A turn's start and end are facts.** Codex reports both, and the
+  messages of the turn. Stop is a request: the turn ends when Codex says
+  so, which it does at once.
+- **A message during a turn goes into that turn.** If the turn ends before
+  Codex reads the message, the message starts a turn of its own.
+- **A request for an approval or a question is a request with an ID.** It
+  takes one answer: the first that fits, from the Mac or a paired iPhone.
+  A command's request offers Allow once, Deny, and Codex's own rule when it
+  proposes one ("Always allow commands that start with …"). Deny stops the
+  turn, as Codex's own "No" does.
+- **After a relaunch** Toastty goes on with the same conversation: it
+  shows the history from Codex's rollout file and asks Codex to resume the
+  thread. Quitting Toastty, a crash of Toastty, or closing the
+  coordinator's workspace ends the process; Codex ends by itself when its
+  input closes.
+
+Before the first message, Toastty checks two things and fails the start
+with the reason when one does not hold:
+
+1. Codex uses your ChatGPT plan sign-in. Toastty removes `OPENAI_API_KEY`
+   and `CODEX_API_KEY` from the process's environment, and stops the
+   session if the sign-in changes to an API key.
+2. Codex offers Toastty's coordinator skill, when Toastty delivered its
+   skills to this launch.
+
+Codex then names its conversation and its rollout file in its own answer,
+so the start needs no hook.
+
+The launch is the one that a terminal launch types, moved to what the
+app-server takes: configuration values (`-c`), `--enable` and `--disable`
+go to the process, and the model, the sandbox and the approval policy go
+into the request that starts the conversation. Any other argument of the
+agent profile, such as `--search`, `--add-dir` or a profile of your own, is
+refused with its name.
+
+What Codex cannot do here, or does differently:
+
+- **No commands of Codex's terminal program.** `/model`, `/status`,
+  `/approvals` and the others belong to that program. As a message they are
+  text for the model. `/compact` alone works: Toastty asks Codex to compact
+  when a message is exactly that text and no turn runs.
+- **No message that waits inside Codex.** Codex puts a message that arrives
+  during a turn into the turn. A message that must wait for the turn's end
+  waits in Toastty's own queue, as it does for a terminal.
+- **Settings that Codex saved in Toastty's profile file are not read.** In a
+  terminal, Toastty starts Codex with `--profile toastty-managed`, and Codex
+  saves some choices, such as the model, in that profile's file. The
+  app-server reads no profile file. Toastty turns its plugins on with a
+  configuration value, and the model and effort come from `config.toml` or
+  from `[coordinator]` in `tasks.toml`.
+- **A reviewer agent answers before you do.** With
+  `approvals_reviewer = "auto_review"` or `"guardian_subagent"` in Codex's
+  configuration, Codex's own reviewer answers an approval request, and
+  Toastty never sees it. Set `approvals_reviewer = "user"` to get the
+  requests in the chat.
+- **Some requests get an answer without you.** Toastty has no form for a
+  request for more sandbox permissions, for an MCP server's question, for a
+  question with no choices or with a secret answer, or for a change that
+  does not fit in full (more than 16 KB). It declines these, and Codex goes
+  on without them.
+- **Tool rows differ from the history.** While a turn runs, a row shows the
+  command that ran. The rollout file names the model's call instead, so the
+  same turn shows other rows after a relaunch. Messages are the same in
+  both.
+- **The status has less detail.** The coordinator's row shows working,
+  needs approval, ready or the error. It does not name the tool that runs.
+- Text appears one whole message at a time, as with the terminal.
 
 ### The coordinator's dock
 

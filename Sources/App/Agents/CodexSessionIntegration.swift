@@ -66,6 +66,38 @@ enum CodexManagedProfileConfig {
         }
     }
 
+    /// The Toastty plugins that the profile file under `codexHome` turns
+    /// on, as `name@marketplace`. `codex app-server` reads no profile file,
+    /// so a process of that kind gets these with a configuration value.
+    /// Empty when there is no file, or when it turns none on.
+    static func enabledPluginSelectors(codexHome: String?, fileManager: FileManager = .default) -> [String] {
+        let home = codexHome.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        let fileURL = home.appendingPathComponent(CodexSkillsContract.profileConfigFileName, isDirectory: false)
+        guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else { return [] }
+        return enabledPluginSelectors(in: contents)
+    }
+
+    static func enabledPluginSelectors(in contents: String) -> [String] {
+        let lines = profileLines(in: contents).map { $0.body.trimmingCharacters(in: .whitespaces) }
+        let selectorsByHeader = [
+            shippedPluginHeader: CodexSkillsContract.pluginSelector,
+            userPluginHeader: CodexUserSkillsContract.pluginSelector,
+        ]
+        var selectors: [String] = []
+        var current: String?
+        for line in lines {
+            if isTOMLTableHeader(line) {
+                current = selectorsByHeader[line]
+            } else if let selector = current,
+                      line.filter({ $0 != " " && $0 != "\t" }).hasPrefix("enabled=true"),
+                      selectors.contains(selector) == false {
+                selectors.append(selector)
+            }
+        }
+        return selectors
+    }
+
     /// Replaces only Toastty's marker and plugin tables. Every other byte is
     /// retained, including preferences Codex persisted into the active
     /// profile, comments, unknown keys, and unrelated plugin entries.

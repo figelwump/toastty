@@ -523,6 +523,41 @@ check denies such a request, as a user would. It writes
 `remote-coordinator-direct-session-check.json`, the app logs and Claude's
 transcripts under the run's artifacts directory.
 
+For a Codex coordinator, run the same check with `--agent codex` and without
+`--gui-session` (Codex's sign-in is a file, readable over SSH):
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-direct-session-check.py --agent codex'
+```
+
+It covers
+[A direct session for a Codex coordinator](../tasks.md#a-direct-session-for-a-codex-coordinator-prototype)
+with `TOASTTY_COORDINATOR_CODEX_DIRECT_SESSION=1`, the real Codex CLI and its
+ChatGPT plan sign-in, and the same parts in the same order. What differs:
+
+- The profile runs commands in Codex's workspace sandbox
+  (`--ask-for-approval on-request --sandbox workspace-write`,
+  `approvals_reviewer="user"`), so `sleep` runs without a request. For the
+  permission part, the message asks Codex to request approval for its one
+  command.
+- The profile turns on Codex's `default_mode_request_user_input` feature,
+  which gives the model its question tool outside plan mode.
+- The profile trusts the temporary coordinator folder with a configuration
+  value, for its own processes only. The check writes nothing to Codex's
+  configuration file. Toastty delivers its skills into the host's Codex
+  home, as for every Codex session that it starts.
+- The start names the instruction files that Codex read and the one
+  `codex app-server` process of the app.
+- The `/model` part is skipped: Codex has no command that answers with text
+  outside its terminal program.
+- The last part resumes the conversation in Codex's terminal program. The
+  check answers no dialog of that program, and fails the part if one shows.
+
+It writes `remote-coordinator-direct-session-check-codex.json`, the app
+logs and copies of the conversations' rollout files. The conversations stay
+in the host's Codex sessions folder.
+
 ### Prompt reopen
 
 ```bash

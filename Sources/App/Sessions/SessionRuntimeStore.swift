@@ -1801,6 +1801,7 @@ final class SessionRuntimeStore: ObservableObject {
         completion: CodexNotifyCompletion,
         at now: Date
     ) -> Bool {
+        guard takesStatusFromItsProcess(sessionID: sessionID) == false else { return false }
         guard let record = sessionRegistry.sessionsByID[sessionID] else {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
@@ -2091,6 +2092,7 @@ final class SessionRuntimeStore: ObservableObject {
         turnError: String?,
         at now: Date
     ) -> Bool {
+        guard takesStatusFromItsProcess(sessionID: sessionID) == false else { return false }
         let ignoredReason: String?
         let record = sessionRegistry.activeSession(sessionID: sessionID)
         let usesSessionLogFallback: Bool
@@ -2140,7 +2142,8 @@ final class SessionRuntimeStore: ObservableObject {
         turnID: String?,
         at now: Date
     ) -> Bool {
-        guard codexStatusTrackingSourceBySessionID[sessionID] == .hooks,
+        guard takesStatusFromItsProcess(sessionID: sessionID) == false,
+              codexStatusTrackingSourceBySessionID[sessionID] == .hooks,
               let record = sessionRegistry.activeSession(sessionID: sessionID),
               record.agent == .codex,
               record.usesSessionStatusNotifications,
@@ -2168,6 +2171,7 @@ final class SessionRuntimeStore: ObservableObject {
         detail: String,
         at now: Date
     ) -> Bool {
+        guard takesStatusFromItsProcess(sessionID: sessionID) == false else { return false }
         let ignoredReason: String?
         let record = sessionRegistry.activeSession(sessionID: sessionID)
         let rootTurnID = codexLegacyPolicySnapshot(sessionID: sessionID).rootTurnID
@@ -2483,6 +2487,12 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         guard let status = event.status else {
+            return stateChanged
+        }
+        // A direct session's process reports its turns and its requests.
+        // The hooks of that process go on to say which thread is the root
+        // and which subagents run.
+        guard takesStatusFromItsProcess(sessionID: sessionID) == false else {
             return stateChanged
         }
 
@@ -6165,6 +6175,8 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
               !programStatusRuntime.fallbackSessionIDs.contains(record.sessionID),
               record.agent == .codex,
               record.usesSessionStatusNotifications,
+              // The terminal of a direct session shows nothing of its agent.
+              directSessionIDs.contains(record.sessionID) == false,
               let currentStatus = record.status else {
             return false
         }
@@ -6299,11 +6311,11 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
     /// The status of a direct session while a request waits for the user's
     /// answer, with the texts that a terminal session's request has.
-    static func directSessionWaitingStatus(permissionSummary: String?) -> SessionStatus {
+    static func directSessionWaitingStatus(permissionSummary: String?, agentName: String) -> SessionStatus {
         permissionSummary.map {
             SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: $0)
         } ?? SessionStatus(kind: .needsApproval, summary: "Needs input",
-                           detail: "Claude Code is waiting for your answers")
+                           detail: "\(agentName) is waiting for your answers")
     }
 
     /// The agent of a direct session asks for a permission or an answer
@@ -6323,11 +6335,45 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         // The turn goes on after the answer. A turn that ended has its own
         // status already, which stays.
         guard record.status?.kind == .needsApproval else { return }
+        updateStatus(sessionID: sessionID, status: Self.directSessionWorkingStatus(record.agent), at: now)
+    }
+
+    private static func directSessionWorkingStatus(_ agent: AgentKind) -> SessionStatus {
+        SessionStatus(kind: .working, summary: "Working", detail: "Working inside \(agent.displayName)")
+    }
+
+    /// The agent of a direct session began a turn, for an agent whose
+    /// process is the one source of its status (`takesStatusFromItsProcess`).
+    func noteDirectSessionTurnStarted(sessionID: String, at now: Date) {
+        guard takesStatusFromItsProcess(sessionID: sessionID),
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.status?.kind != .working, record.status?.kind != .needsApproval else { return }
+        updateStatus(sessionID: sessionID, status: Self.directSessionWorkingStatus(record.agent), at: now)
+    }
+
+    /// The agent of a direct session ended a turn that nobody stopped, for
+    /// an agent whose process is the one source of its status. `detail` is
+    /// the agent's last message, or its error when the turn failed.
+    func noteDirectSessionTurnEnded(sessionID: String, failed: Bool, detail: String?, at now: Date) {
+        guard takesStatusFromItsProcess(sessionID: sessionID),
+              sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
         updateStatus(
             sessionID: sessionID,
-            status: SessionStatus(kind: .working, summary: "Working", detail: "Working inside Claude Code"),
+            status: failed
+                ? SessionStatus(kind: .error, summary: "Error", detail: detail ?? "The turn failed")
+                : SessionStatus(kind: .ready, summary: "Ready", detail: detail),
             at: now
         )
+    }
+
+    /// A direct session of Codex reports its turns itself, and the session
+    /// store takes its status from nothing else: Codex's hooks, its notify
+    /// command and its rollout file say the same things later, and a late
+    /// "ready" would land in the turn that follows. Its terminal shows
+    /// nothing of it. A direct session of Claude Code gets its turns from
+    /// Claude's hooks, which report at once.
+    func takesStatusFromItsProcess(sessionID: String) -> Bool {
+        directSessionIDs.contains(sessionID) && sessionRegistry.sessionsByID[sessionID]?.agent == .codex
     }
 
     /// A direct session reports its waiting requests itself

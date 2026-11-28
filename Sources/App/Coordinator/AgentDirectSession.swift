@@ -2,26 +2,41 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
-/// Whether the coordinator's Claude Code agent runs as a process of
-/// Toastty's own, with no terminal between them (`ClaudeDirectSession`).
-/// Off unless the user turns it on: a prototype for the user's own use.
+/// Whether the coordinator's agent runs as a process of Toastty's own, with
+/// no terminal between them (`AgentDirectSession`). Each agent that can run
+/// so has a setting of its own. Each is off unless the user turns it on: a
+/// prototype for the user's own use.
 ///
-/// Turn it on with
-/// `defaults write com.GiantThings.toastty toastty.coordinator.claudeDirectSession -bool YES`,
-/// or for one run with `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1`. The
-/// next start of the coordinator uses it.
+/// Turn one on with
+/// `defaults write com.GiantThings.toastty toastty.coordinator.claudeDirectSession -bool YES`
+/// (or `…codexDirectSession`), or for one run with
+/// `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1` (or
+/// `TOASTTY_COORDINATOR_CODEX_DIRECT_SESSION=1`). The next start of the
+/// coordinator uses it.
 enum CoordinatorDirectSessionSetting {
-    static let defaultsKey = "toastty.coordinator.claudeDirectSession"
-    static let environmentKey = "TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION"
+    /// The settings of an agent, or `nil` for an agent that runs in a
+    /// terminal only.
+    static func keys(for agent: AgentKind) -> (defaultsKey: String, environmentKey: String)? {
+        switch agent {
+        case .claude:
+            ("toastty.coordinator.claudeDirectSession", "TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION")
+        case .codex:
+            ("toastty.coordinator.codexDirectSession", "TOASTTY_COORDINATOR_CODEX_DIRECT_SESSION")
+        default:
+            nil
+        }
+    }
 
     static func isOn(
+        for agent: AgentKind,
         defaults: UserDefaults?,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
-        if let value = environment[environmentKey] {
+        guard let keys = keys(for: agent) else { return false }
+        if let value = environment[keys.environmentKey] {
             return value == "1"
         }
-        return defaults?.bool(forKey: defaultsKey) ?? false
+        return defaults?.bool(forKey: keys.defaultsKey) ?? false
     }
 }
 
@@ -39,26 +54,35 @@ protocol DirectConversationSessionHost: AnyObject {
 
 extension RemoteAccessService: DirectConversationSessionHost {}
 
-/// One Claude Code process that Toastty runs for a conversation and talks to
-/// in stream-json. `ClaudeStreamSession` holds the conversation's state and
-/// makes the lines. `ClaudeStreamProcess` runs the process. This class
-/// joins them to the app: observations go to `host`, and the owner hears of
-/// each turn's end and of the session's end.
+/// One agent process that Toastty runs for a conversation and exchanges
+/// lines of JSON with: Claude Code in stream-json mode, or the Codex
+/// app-server. A `DirectSessionDriver` holds the conversation's state and
+/// makes the lines (`ClaudeStreamSession`, `CodexAppServerSession`).
+/// `AgentLineProcess` runs the process. This class joins them to the app:
+/// observations go to `host`, and the owner hears of each turn's start and
+/// end and of the session's end.
 @MainActor
-final class ClaudeDirectSession: DirectConversationSession {
+final class AgentDirectSession: DirectConversationSession {
     let panelID: UUID
     /// Toastty's ID of the managed session, as in the session registry.
     let sessionID: String
+    let agent: AgentKind
 
-    private var model: ClaudeStreamSession
-    private var process: ClaudeStreamProcess?
+    private var model: any DirectSessionDriver
+    private var process: AgentLineProcess?
     private weak var host: (any DirectConversationSessionHost)?
-    private let onTurnEnd: @MainActor (ClaudeStreamSession.TurnEnd) -> Void
+    /// Called when the agent's process names its conversation. Claude Code
+    /// reports its conversation through its hooks, and not here.
+    private let onConversation: @MainActor (DirectSessionConversation) -> Void
+    /// Called when a turn begins, by a driver that reports it. Claude
+    /// Code's hooks report its turns.
+    private let onTurnStart: @MainActor () -> Void
+    private let onTurnEnd: @MainActor (DirectSessionTurnEnd) -> Void
     /// Called when the request that waits for the user's answer changes:
     /// with the request when one starts to wait, and with `nil` when the
-    /// last one has its answer or Claude withdrew it.
-    private let onWaitingRequestChange: @MainActor (ClaudeStreamSession.WaitingRequest?) -> Void
-    private var reportedWaitingRequest: ClaudeStreamSession.WaitingRequest?
+    /// last one has its answer or the agent withdrew it.
+    private let onWaitingRequestChange: @MainActor (DirectSessionWaitingRequest?) -> Void
+    private var reportedWaitingRequest: DirectSessionWaitingRequest?
     /// Called once when the session ends by itself, with the reason. Not
     /// called after `stop`.
     private let onEnd: @MainActor (String) -> Void
@@ -70,29 +94,38 @@ final class ClaudeDirectSession: DirectConversationSession {
     private var isAdmitted = false
     /// Why the session ended by itself, once it did.
     private(set) var endReason: String?
+    /// What the agent's process reported about itself when its start
+    /// checks passed, such as its plan.
+    private(set) var startDetails: [String: String] = [:]
 
     init(
         panelID: UUID,
         sessionID: String,
-        requirements: ClaudeStreamSession.Requirements,
+        agent: AgentKind,
+        driver: any DirectSessionDriver,
         host: (any DirectConversationSessionHost)?,
         now: @escaping () -> Date = Date.init,
-        onTurnEnd: @escaping @MainActor (ClaudeStreamSession.TurnEnd) -> Void,
-        onWaitingRequestChange: @escaping @MainActor (ClaudeStreamSession.WaitingRequest?) -> Void = { _ in },
+        onConversation: @escaping @MainActor (DirectSessionConversation) -> Void = { _ in },
+        onTurnStart: @escaping @MainActor () -> Void = {},
+        onTurnEnd: @escaping @MainActor (DirectSessionTurnEnd) -> Void,
+        onWaitingRequestChange: @escaping @MainActor (DirectSessionWaitingRequest?) -> Void = { _ in },
         onEnd: @escaping @MainActor (String) -> Void
     ) {
         self.panelID = panelID
         self.sessionID = sessionID
-        self.model = ClaudeStreamSession(requirements: requirements, at: now())
+        self.agent = agent
+        self.model = driver
         self.host = host
         self.now = now
+        self.onConversation = onConversation
+        self.onTurnStart = onTurnStart
         self.onTurnEnd = onTurnEnd
         self.onWaitingRequestChange = onWaitingRequestChange
         self.onEnd = onEnd
     }
 
     /// The processes that run, so that quitting the app can end them.
-    private static var runningProcesses: [ObjectIdentifier: ClaudeStreamProcess] = [:]
+    private static var runningProcesses: [ObjectIdentifier: AgentLineProcess] = [:]
 
     /// Ends every direct session's process, for app quit. A process that
     /// outlived the app would go on with its turn with nobody to read it.
@@ -104,8 +137,7 @@ final class ClaudeDirectSession: DirectConversationSession {
         runningProcesses.removeAll()
     }
 
-    var phase: ClaudeStreamSession.Phase { model.phase }
-    var account: ClaudeStreamSession.Account? { model.account }
+    var phase: DirectSessionPhase { model.phase }
 
     var acceptsInput: Bool {
         isAdmitted && isStopped == false && didEnd == false && model.phase == .ready
@@ -122,10 +154,10 @@ final class ClaudeDirectSession: DirectConversationSession {
         host?.attachDirectSession(self)
     }
 
-    /// Starts the process and asks it for its account and commands. The
+    /// Starts the process and writes the driver's start requests. The
     /// session takes messages once `phase` is `ready`.
-    func start(launch: ClaudeStreamLaunch) throws {
-        let process = ClaudeStreamProcess(launch: launch) { [weak self] event in
+    func start(launch: AgentProcessLaunch) throws {
+        let process = AgentLineProcess(launch: launch) { [weak self] event in
             // In the order of the output: the main queue keeps it.
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated { self?.receive(event) }
@@ -134,12 +166,14 @@ final class ClaudeDirectSession: DirectConversationSession {
         try process.start()
         self.process = process
         Self.runningProcesses[ObjectIdentifier(self)] = process
-        process.write(line: model.startRequestLine())
-        ToasttyLog.info("Started a Claude Code process for a direct session", category: .tasks, metadata: [
+        for line in model.startLines() {
+            process.write(line: line)
+        }
+        ToasttyLog.info("Started an agent process for a direct session", category: .tasks, metadata: [
             "session_id": sessionID,
+            "agent": agent.rawValue,
             "panel_id": panelID.uuidString,
             "pid": process.processIdentifier.map(String.init) ?? "none",
-            "resumes": launch.arguments.contains("--resume") ? "true" : "false",
         ])
     }
 
@@ -169,7 +203,7 @@ final class ClaudeDirectSession: DirectConversationSession {
 
     func send(text: String, clientRequestID: String, deliveryMode: RemoteMessageDeliveryMode) -> TerminalInputDeliveryResult {
         guard acceptsInput, let process,
-              let line = model.userMessageLine(text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode) else {
+              let line = model.messageLine(text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode) else {
             return .unavailable
         }
         return process.write(line: line) ? .delivered : .unavailable
@@ -209,7 +243,7 @@ final class ClaudeDirectSession: DirectConversationSession {
 
     // MARK: - The process
 
-    private func receive(_ event: ClaudeStreamProcess.Event) {
+    private func receive(_ event: AgentLineProcess.Event) {
         guard didEnd == false else { return }
         switch event {
         case .line(let line):
@@ -222,13 +256,17 @@ final class ClaudeDirectSession: DirectConversationSession {
                     if isAdmitted {
                         host?.ingestDirectSessionObservations(observations, from: self)
                     }
-                case .ready(let account):
-                    ToasttyLog.info("A direct session takes messages", category: .tasks, metadata: [
-                        "session_id": sessionID,
-                        "plan": account.subscriptionType ?? "none",
-                        "claude_code_version": account.claudeCodeVersion ?? "unknown",
-                        "permission_mode": account.permissionMode ?? "unknown",
-                    ])
+                case .ready(let details):
+                    startDetails = details
+                    ToasttyLog.info(
+                        "A direct session takes messages",
+                        category: .tasks,
+                        metadata: details.merging(["session_id": sessionID, "agent": agent.rawValue]) { _, new in new }
+                    )
+                case .conversation(let conversation):
+                    onConversation(conversation)
+                case .turnStarted:
+                    onTurnStart()
                 case .turnEnded(let end):
                     onTurnEnd(end)
                 case .write(let line):
@@ -245,7 +283,7 @@ final class ClaudeDirectSession: DirectConversationSession {
             didEnd = true
             let detail = errorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
                 .split(separator: "\n").suffix(3).joined(separator: " ")
-            let reason = "Claude Code ended (status \(status))" + (detail.isEmpty ? "." : ": \(detail)")
+            let reason = "\(agent.displayName) ended (status \(status))" + (detail.isEmpty ? "." : ": \(detail)")
             endReason = reason
             ToasttyLog.warning("A direct session's process ended", category: .tasks, metadata: [
                 "session_id": sessionID,

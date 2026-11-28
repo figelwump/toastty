@@ -1,134 +1,19 @@
 import Darwin
 import Foundation
 
-/// What to run for one Claude Code process that the host talks to in
-/// stream-json: the command, its arguments and its environment. Made from the
-/// same launch plan that a terminal launch types, so the process gets the
-/// same settings, hooks, skills, model and working directory.
-public struct ClaudeStreamLaunch: Equatable, Sendable {
+/// What to run for one agent process that the host exchanges lines with: the
+/// command, its arguments, its environment and its working directory.
+public struct AgentProcessLaunch: Equatable, Sendable {
     public var executablePath: String
     public var arguments: [String]
     public var environment: [String: String]
     public var directory: String
 
-    public enum LaunchError: Error, Equatable, LocalizedError {
-        case emptyCommand
-        /// The profile's arguments ask for a mode that cannot hold the
-        /// coordinator's conversation.
-        case unsupportedArgument(String)
-
-        public var errorDescription: String? {
-            switch self {
-            case .emptyCommand:
-                "The agent profile has no command."
-            case .unsupportedArgument(let argument):
-                "The agent profile passes \(argument) to Claude Code. A session that Toastty runs without a terminal cannot use it: "
-                    + "it needs the Claude plan sign-in, hooks and skills, and its own input and output format."
-            }
-        }
-    }
-
-    /// The arguments that put Claude Code in print mode with one JSON object
-    /// on each line, in both directions. `--replay-user-messages` makes
-    /// Claude write each message of the host back when it takes it.
-    /// `--permission-prompt-tool stdio` sends each permission request to the
-    /// host and waits for the answer.
-    public static let streamArguments = [
-        "-p",
-        "--input-format", "stream-json",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--replay-user-messages",
-        "--permission-prompt-tool", "stdio",
-    ]
-
-    /// Arguments of a profile that this launch cannot keep. `--bare` reads
-    /// no plan sign-in, hooks or skills. The others change the format of
-    /// the lines or name a different conversation.
-    static let refusedArguments: Set<String> = [
-        "--bare", "--safe-mode", "-p", "--print", "--input-format", "--output-format",
-        "--permission-prompt-tool", "--permission-prompts", "--no-session-persistence",
-        "--resume", "-r", "--continue", "-c", "--session-id", "--bg", "--background",
-    ]
-
-    /// Variables that mark a process as started inside another Claude Code
-    /// session. The app has them only when a developer started it from one.
-    static let nestedSessionKeys: Set<String> = [
-        "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
-        "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID",
-        "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_CHILD_NOTES_DIR", "CLAUDE_PID",
-    ]
-
-    /// Variables that make Claude Code bill an API key. In print mode a key
-    /// in the environment wins over the plan sign-in.
-    public static let apiKeyKeys: Set<String> = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
-
-    /// - Parameters:
-    ///   - plannedArguments: the launch plan's `argv`: the profile's command
-    ///     with the settings, plugin, model and effort arguments in place.
-    ///   - resumeNativeSessionID: Claude's ID of the conversation to go on
-    ///     with, or `nil` for a new one. A plan that was made for this
-    ///     resume has `--resume` with the ID already.
-    ///   - baseEnvironment: the app's own environment.
-    ///   - terminalEnvironment: what a terminal of the panel gets on top of
-    ///     that: Toastty's socket, CLI and `PATH`.
-    ///   - plannedEnvironment: the launch plan's environment.
-    public static func make(
-        plannedArguments: [String],
-        resumeNativeSessionID: String?,
-        baseEnvironment: [String: String],
-        terminalEnvironment: [String: String],
-        plannedEnvironment: [String: String],
-        directory: String
-    ) throws -> ClaudeStreamLaunch {
-        guard plannedArguments.isEmpty == false else { throw LaunchError.emptyCommand }
-        let commandIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .claude, argv: plannedArguments)
-        // A wrapper before the command, such as `env`, can set a variable
-        // for it. That would bring back a key that is removed below.
-        for argument in plannedArguments.prefix(commandIndex) {
-            let name = argument.split(separator: "=", maxSplits: 1).first.map(String.init) ?? argument
-            if argument.contains("="), apiKeyKeys.contains(name) {
-                throw LaunchError.unsupportedArgument("\(name)=…")
-            }
-        }
-        let options = Array(plannedArguments.dropFirst(commandIndex + 1).prefix { $0 != "--" })
-        var planResumes = false
-        for (index, option) in options.enumerated() {
-            let name = option.split(separator: "=", maxSplits: 1).first.map(String.init) ?? option
-            if name == "--resume", let resumeNativeSessionID,
-               option == "--resume=\(resumeNativeSessionID)"
-                || (option == "--resume" && index + 1 < options.count && options[index + 1] == resumeNativeSessionID) {
-                planResumes = true
-                continue
-            }
-            if refusedArguments.contains(name) {
-                throw LaunchError.unsupportedArgument(name)
-            }
-        }
-        var arguments = plannedArguments
-        var inserted = streamArguments
-        if let resumeNativeSessionID, planResumes == false {
-            inserted += ["--resume", resumeNativeSessionID]
-        }
-        arguments.insert(contentsOf: inserted, at: commandIndex + 1)
-
-        var environment = baseEnvironment.filter { key, _ in
-            nestedSessionKeys.contains(key) == false && apiKeyKeys.contains(key) == false
-        }
-        environment.merge(terminalEnvironment) { _, new in new }
-        environment.merge(plannedEnvironment) { _, new in new }
-        for key in apiKeyKeys {
-            environment.removeValue(forKey: key)
-        }
-        // The command is found on PATH, where Toastty's own launcher for
-        // agent commands comes first. This launch is already planned.
-        environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
-        return ClaudeStreamLaunch(
-            executablePath: "/usr/bin/env",
-            arguments: arguments,
-            environment: environment,
-            directory: directory
-        )
+    public init(executablePath: String, arguments: [String], environment: [String: String], directory: String) {
+        self.executablePath = executablePath
+        self.arguments = arguments
+        self.environment = environment
+        self.directory = directory
     }
 }
 
@@ -138,20 +23,20 @@ public struct ClaudeStreamLaunch: Equatable, Sendable {
 /// the end of what it wrote to its standard error.
 ///
 /// `onEvent` runs on a private queue, in the order of the output.
-public final class ClaudeStreamProcess: @unchecked Sendable {
+public final class AgentLineProcess: @unchecked Sendable {
     public enum Event: Equatable, Sendable {
         case line(String)
         case exited(status: Int32, errorOutput: String)
     }
 
-    private let launch: ClaudeStreamLaunch
+    private let launch: AgentProcessLaunch
     private let onEvent: @Sendable (Event) -> Void
     private let process = Process()
     private let inputPipe = Pipe()
     private let outputPipe = Pipe()
     private let errorPipe = Pipe()
-    private let eventQueue = DispatchQueue(label: "toastty.claude-stream.events")
-    private let writeQueue = DispatchQueue(label: "toastty.claude-stream.input")
+    private let eventQueue = DispatchQueue(label: "toastty.agent-line-process.events")
+    private let writeQueue = DispatchQueue(label: "toastty.agent-line-process.input")
     private let lock = NSLock()
     private var isRunning = false
     private var pendingOutput = Data()
@@ -167,7 +52,7 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
     /// dropped, so that a broken process cannot fill the app's memory.
     private static let lineLimit = 32 * 1024 * 1024
 
-    public init(launch: ClaudeStreamLaunch, onEvent: @escaping @Sendable (Event) -> Void) {
+    public init(launch: AgentProcessLaunch, onEvent: @escaping @Sendable (Event) -> Void) {
         self.launch = launch
         self.onEvent = onEvent
     }
@@ -243,9 +128,10 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
         return true
     }
 
-    /// Ends the process: its input closes, which ends Claude Code after the
-    /// work it has in hand, and SIGTERM follows for a process that is still
-    /// there after `gracePeriod`.
+    /// Ends the process: its input closes, which ends the agent (Claude Code
+    /// after the work it has in hand, the Codex app-server at once), and
+    /// SIGTERM follows for a process that is still there after
+    /// `gracePeriod`.
     public func terminate(gracePeriod: TimeInterval = 2) {
         guard lock.withLock({ isRunning }) else { return }
         writeQueue.async { [self] in
@@ -258,7 +144,7 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
     }
 
     /// Ends the process now with SIGTERM, for the moment the host quits:
-    /// Claude Code leaves its turn unfinished and exits.
+    /// the agent leaves its turn unfinished and exits.
     public func terminateNow() {
         guard lock.withLock({ isRunning }), process.isRunning else { return }
         process.terminate()
@@ -337,7 +223,9 @@ public final class ClaudeStreamProcess: @unchecked Sendable {
 /// crash. Claude Code does not end at the close of its input while a turn
 /// runs. Without this, it would go on with the turn with no host to answer
 /// its requests, and the next launch of the app would resume the same
-/// conversation in a second process.
+/// conversation in a second process. The Codex app-server ends at the close
+/// of its input by itself; the guard covers a wrapper command that does not
+/// pass that close on.
 ///
 /// A small shell process waits on a pipe whose other end only the app
 /// holds. The system closes that end when the app ends, in any way. The

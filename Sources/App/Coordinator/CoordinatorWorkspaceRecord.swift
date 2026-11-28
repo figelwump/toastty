@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// The workspace and terminal panel the coordinator lives in, saved beside
 /// the layout.
@@ -17,19 +18,26 @@ struct CoordinatorWorkspaceRecord: Codable, Equatable {
     /// `nil` while the coordinator's terminal is closed.
     var panelID: UUID?
     /// Set while the coordinator's agent is a direct session
-    /// (`ClaudeDirectSession`): Claude's own ID of the conversation and its
-    /// transcript file. After a relaunch Toastty resumes that conversation
+    /// (`AgentDirectSession`): the agent's own ID of the conversation and
+    /// its transcript file. After a relaunch Toastty resumes that conversation
     /// as a direct session again, and the terminal starts no agent. A
     /// Toastty without direct sessions does not read this, and resumes the
     /// conversation in the terminal.
     var directSession: DirectSession?
 
     struct DirectSession: Codable, Equatable {
+        /// The agent's `AgentKind` value. A record from before Codex could
+        /// be a direct session has none, and is Claude's.
+        var agent: String?
         var nativeSessionID: String
         var transcriptPath: String
         /// The workspaces that the session was limited to, as its resume
         /// record has them. `nil` for no limit.
         var scopedWorkspaceIDs: Set<UUID>?
+
+        var agentKind: AgentKind {
+            agent.flatMap(AgentKind.init(rawValue:)) ?? .claude
+        }
     }
 
     init(workspaceID: UUID, panelID: UUID?, directSession: DirectSession? = nil) {

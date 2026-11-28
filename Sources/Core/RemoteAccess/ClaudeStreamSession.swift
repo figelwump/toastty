@@ -29,7 +29,7 @@ import RemoteProtocol
 /// the history and this stream for what happens now, in any order. The
 /// turn's start and end and each request are separate observations that
 /// only this value makes.
-public struct ClaudeStreamSession: Sendable {
+public struct ClaudeStreamSession: DirectSessionDriver {
     /// What must hold before the first message goes to the process.
     public struct Requirements: Equatable, Sendable {
         /// The process must use the user's Claude plan sign-in. Without
@@ -55,49 +55,22 @@ public struct ClaudeStreamSession: Sendable {
         public var apiProvider: String?
         public var claudeCodeVersion: String?
         public var permissionMode: String?
+
+        /// What the log says about the start.
+        public var details: [String: String] {
+            [
+                "plan": subscriptionType ?? "none",
+                "claude_code_version": claudeCodeVersion ?? "unknown",
+                "permission_mode": permissionMode ?? "unknown",
+            ]
+        }
     }
 
-    public enum Phase: Equatable, Sendable {
-        /// The process runs. Its answer to the start request has not come.
-        case starting
-        /// It takes messages.
-        case ready
-        /// It must get no message. The host stops the process.
-        case failed(String)
-    }
-
-    /// The end of one turn, from Claude's `result`.
-    public struct TurnEnd: Equatable, Sendable {
-        /// The host's IDs of the messages that this turn answered.
-        public var clientRequestIDs: [String]
-        /// The turn ended with an error, and no interrupt caused it.
-        public var failed: Bool
-        /// An interrupt or a denied request ended the turn.
-        public var interrupted: Bool
-        /// Messages that Claude already holds for turns that follow. Each
-        /// starts its turn without a new message from the host.
-        public var queuedTurnCount: Int
-    }
-
-    public enum Output: Equatable, Sendable {
-        case observations([ProviderTranscriptObservation])
-        /// The start request was answered and the requirements hold.
-        case ready(Account)
-        case turnEnded(TurnEnd)
-        /// A line that the host must write to the process now.
-        case write(String)
-        /// The session must stop; see `Phase.failed`.
-        case failed(String)
-    }
-
-    public enum AnswerOutcome: Equatable, Sendable {
-        /// Write `line`, then ingest `observations`.
-        case submitted(line: String, observations: [ProviderTranscriptObservation])
-        /// No request with this ID waits: it was answered or withdrawn.
-        case notPending
-        /// The answers do not fit the request.
-        case invalid
-    }
+    public typealias Phase = DirectSessionPhase
+    public typealias TurnEnd = DirectSessionTurnEnd
+    public typealias Output = DirectSessionOutput
+    public typealias AnswerOutcome = DirectSessionAnswerOutcome
+    public typealias WaitingRequest = DirectSessionWaitingRequest
 
     public private(set) var phase: Phase = .starting
     public private(set) var account: Account?
@@ -164,14 +137,6 @@ public struct ClaudeStreamSession: Sendable {
         pendingRequests.map(\.requestID)
     }
 
-    /// A request that waits for the user's answer, as the session's status
-    /// names it.
-    public struct WaitingRequest: Equatable, Sendable {
-        public var requestID: String
-        /// What a permission request asks for. `nil` for a question.
-        public var permissionSummary: String?
-    }
-
     /// The oldest request that waits for an answer, or `nil` when none
     /// waits. The session knows the moment a request starts to wait and
     /// the moment it has its answer; no hook reports the second.
@@ -187,6 +152,10 @@ public struct ClaudeStreamSession: Sendable {
     }
 
     // MARK: - Lines the host writes
+
+    public mutating func startLines() -> [String] {
+        [startRequestLine()]
+    }
 
     /// The first line the host writes. The process answers with its account
     /// and its commands before it gets any message, so the requirements are
@@ -205,7 +174,7 @@ public struct ClaudeStreamSession: Sendable {
     /// takes none. `clientRequestID` comes back on the transcript's user
     /// message when Claude takes this message. A `steer` goes into the
     /// running turn; Claude reads it after the tool call that runs.
-    public mutating func userMessageLine(
+    public mutating func messageLine(
         text: String,
         clientRequestID: String,
         deliveryMode: RemoteMessageDeliveryMode = .prompt
@@ -376,7 +345,7 @@ public struct ClaudeStreamSession: Sendable {
         }
         phase = .ready
         return [
-            .ready(account),
+            .ready(details: account.details),
             .observations([lifecycleObservation(.turnEnded(turnID: nil, reason: .completed), label: "prompt_open", at: date)]),
         ]
     }

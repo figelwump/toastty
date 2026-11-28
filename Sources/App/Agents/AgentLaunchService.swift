@@ -376,7 +376,9 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     /// With `resumeNativeSessionID`, the plan is the one of a restored
     /// launch that goes on with that conversation: the panel keeps its
     /// conversation, and the session gets `scopedWorkspaceIDs` as its
-    /// workspace scope, as the saved conversation had it.
+    /// workspace scope, as the saved conversation had it. The plan has the
+    /// agent's own arguments for that: `--resume <ID>` for Claude Code,
+    /// `resume <ID>` for Codex.
     func planLaunchWithoutTerminal(
         profileID: String,
         workspaceID: UUID,
@@ -386,7 +388,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         model: String?,
         reasoningEffort: String?,
         resumeNativeSessionID: String? = nil,
-        scopedWorkspaceIDs: Set<UUID>? = nil
+        scopedWorkspaceIDs: Set<UUID>? = nil,
+        codexProjectDocMaxBytes: Int? = nil
     ) async throws -> ManagedAgentLaunchPlan {
         let preparation = try makeLaunchPreparation(
             profileID: profileID,
@@ -402,6 +405,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             additionalDirectories: [],
             parentSessionID: nil,
             focusPolicy: .preserveFirstResponder,
+            codexProjectDocMaxBytes: codexProjectDocMaxBytes,
             validatePromptState: false
         )
         guard let resumeNativeSessionID else {
@@ -412,7 +416,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         }
         var argv = preparation.request.argv
         argv.insert(
-            contentsOf: ["--resume", resumeNativeSessionID],
+            contentsOf: [preparation.agent == .codex ? "resume" : "--resume", resumeNativeSessionID],
             at: min(argv.count, ManagedAgentCommandResolver.launchInsertionIndex(for: preparation.agent, argv: argv) + 1)
         )
         return try managedLaunchPlanner.prepareRestoredManagedLaunch(
