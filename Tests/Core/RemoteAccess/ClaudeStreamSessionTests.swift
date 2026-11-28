@@ -23,6 +23,8 @@ struct ClaudeStreamSessionTests {
             return
         }
         #expect(reason.contains("without a Claude plan sign-in"))
+        // The host can offer the sign-in for this failure.
+        #expect(session.failedForMissingSignIn)
         let refused = session.userMessageLine(text: "hello", clientRequestID: "m1")
         #expect(refused == nil)
         let ignored = session.receive(line: Self.systemInit(), at: Self.start)
@@ -41,6 +43,8 @@ struct ClaudeStreamSessionTests {
             return
         }
         #expect(reason.contains("without Toastty's skills"))
+        // A sign-in does not fix this failure.
+        #expect(session.failedForMissingSignIn == false)
 
         var withSkill = ClaudeStreamSession(
             requirements: .init(anyOfCommands: ["toastty:toastty-coordinator", "toastty-coordinator"]),
@@ -63,6 +67,40 @@ struct ClaudeStreamSessionTests {
         }
         #expect(reason.contains("ANTHROPIC_API_KEY"))
         #expect(session.phase == .failed(reason))
+    }
+
+    @Test func aTurnRefusedForALostSignInStopsTheSessionAndOffersTheSignIn() throws {
+        // The user signed out in another Claude Code. Claude Code 2.1.332
+        // then answers the next message itself, with this record.
+        var session = Self.readySession()
+        let sent = try Self.send("What needs me?", id: "m1", to: &session)
+        let messageID = try Self.messageID(of: sent)
+        _ = session.receive(line: Self.systemInit(), at: Self.start)
+        _ = session.receive(line: Self.user("What needs me?", uuid: messageID, replay: true), at: Self.start)
+        #expect(session.failedForMissingSignIn == false)
+
+        let refused = #"{"type":"assistant","message":{"id":"58ac80a7","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","stop_sequence":"","type":"message","content":[{"type":"text","text":"Not logged in · Please run /login"}]},"parent_tool_use_id":null,"session_id":"native-1","uuid":"254a239c","timestamp":"\#(Self.stamp)","error":"authentication_failed","is_api_error_message":true,"user_message_uuids":["\#(messageID)"]}"#
+        let outputs = session.receive(line: refused, at: Self.start)
+        guard case .failed(let reason)? = outputs.last else {
+            Issue.record("Expected the session to fail, got \(outputs)")
+            return
+        }
+        #expect(reason.contains("lost its Claude plan sign-in"))
+        #expect(session.phase == .failed(reason))
+        #expect(session.failedForMissingSignIn)
+        // No further message goes to a process without a sign-in.
+        #expect(session.userMessageLine(text: "again", clientRequestID: "m2") == nil)
+    }
+
+    @Test func anAnswerWithAnotherErrorDoesNotStopTheSession() throws {
+        // A rate limit or a server error ends the turn, not the session.
+        var session = Self.readySession()
+        _ = session.receive(line: Self.systemInit(), at: Self.start)
+        let overloaded = #"{"type":"assistant","message":{"id":"m-err","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"API Error: Overloaded"}]},"parent_tool_use_id":null,"session_id":"native-1","uuid":"u-err","timestamp":"\#(Self.stamp)","error":"server_error","is_api_error_message":true}"#
+        let outputs = session.receive(line: overloaded, at: Self.start)
+        #expect(outputs.contains { if case .failed = $0 { return true } else { return false } } == false)
+        #expect(session.phase == .ready)
+        #expect(session.failedForMissingSignIn == false)
     }
 
     // MARK: - Messages and turns

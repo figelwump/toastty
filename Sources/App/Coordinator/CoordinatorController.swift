@@ -44,9 +44,47 @@ protocol CoordinatorAgentLaunching: AnyObject {
         resumeNativeSessionID: String?,
         scopedWorkspaceIDs: Set<UUID>?
     ) async throws -> ManagedAgentLaunchPlan
+
+    /// Types, into the given terminal, the launch that goes on with the
+    /// conversation `resumeNativeSessionID`: the launch that
+    /// `planCoordinatorLaunch` plans for it. The conversation of a process
+    /// of Toastty's own moves to the terminal this way.
+    func resumeCoordinatorInTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) async throws -> AgentLaunchResult
+
+    /// Types the sign-in command of the profile's Claude Code into the
+    /// given terminal's shell. It starts no agent session.
+    func typeSignInCommand(profileID: String, panelID: UUID) throws
 }
 
 extension CoordinatorAgentLaunching {
+    func resumeCoordinatorInTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) async throws -> AgentLaunchResult {
+        throw CoordinatorError("This launcher cannot go on with a conversation in a terminal.")
+    }
+
+    func typeSignInCommand(profileID: String, panelID: UUID) throws {
+        throw CoordinatorError("This launcher cannot type a sign-in command.")
+    }
+
     func planCoordinatorLaunch(
         profileID: String,
         workspaceID: UUID,
@@ -63,6 +101,34 @@ extension CoordinatorAgentLaunching {
 }
 
 extension AgentLaunchService: CoordinatorAgentLaunching {
+    func resumeCoordinatorInTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) async throws -> AgentLaunchResult {
+        try await resumeInTerminal(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            resumeNativeSessionID: resumeNativeSessionID,
+            scopedWorkspaceIDs: scopedWorkspaceIDs
+        )
+    }
+
+    func typeSignInCommand(profileID: String, panelID: UUID) throws {
+        try typeClaudeSignInCommand(profileID: profileID, panelID: panelID)
+    }
+
     func planCoordinatorLaunch(
         profileID: String,
         workspaceID: UUID,
@@ -115,10 +181,13 @@ struct CoordinatorError: LocalizedError, Equatable {
     /// An installed agent that can start the coordinator in place of a
     /// configured one that is not installed.
     let alternativeAgent: CoordinatorAgentChoice?
+    /// The agent has no Claude plan sign-in: a sign-in is the fix.
+    let needsSignIn: Bool
 
-    init(_ message: String, alternativeAgent: CoordinatorAgentChoice? = nil) {
+    init(_ message: String, alternativeAgent: CoordinatorAgentChoice? = nil, needsSignIn: Bool = false) {
         self.message = message
         self.alternativeAgent = alternativeAgent
+        self.needsSignIn = needsSignIn
     }
 
     var errorDescription: String? { message }
@@ -158,6 +227,12 @@ final class CoordinatorController: ObservableObject {
         var session: SessionRecord?
         /// Why the last start did not work, until the next start.
         var startFailure: String?
+        /// The start did not work because Claude Code has no Claude plan
+        /// sign-in. `signIn` is the fix.
+        var startFailureNeedsSignIn = false
+        /// The sign-in command runs in the coordinator's terminal, and the
+        /// agent starts again when it ends; see `signIn`.
+        var awaitsSignIn = false
         var queuedCount: Int
         /// Why the first queued entry waits.
         var hold: CoordinatorSendHold?
@@ -280,7 +355,25 @@ final class CoordinatorController: ObservableObject {
     private struct FailedStart {
         var workspaceID: UUID
         var reason: String
+        /// Claude Code has no Claude plan sign-in; see `signIn`.
+        var needsSignIn = false
     }
+
+    /// Waits for the end of the sign-in command in the coordinator's
+    /// terminal, and then starts the agent again; see `signIn`.
+    private var signInWatch: Task<Void, Never>? {
+        didSet {
+            let waits = signInWatch != nil
+            if awaitsSignIn != waits { awaitsSignIn = waits }
+        }
+    }
+    @Published private var awaitsSignIn = false
+    /// Names the wait that `signInWatch` holds, so that a wait that was
+    /// replaced does not clear the new one.
+    private var signInWatchID: UUID?
+    /// Counts the starts of the agent, so that the wait for a sign-in ends
+    /// when another start came first.
+    private var startCount = 0
 
     /// A terminal chosen for a start. `replacedPanelID` is the coordinator's
     /// terminal that closes once the agent runs in the new one.
@@ -812,6 +905,10 @@ final class CoordinatorController: ObservableObject {
         return failedStart.reason
     }
 
+    private var startFailureNeedsSignIn: Bool {
+        failedStart?.needsSignIn == true && failedStart?.workspaceID == location?.workspaceID
+    }
+
     /// The agent session in the coordinator's terminal, while one runs.
     var session: SessionRecord? {
         location?.panelID.flatMap { sessionRuntimeStore.sessionRegistry.activeSession(for: $0) }
@@ -857,6 +954,8 @@ final class CoordinatorController: ObservableObject {
             agentState: session != nil ? .running : (isStarting ? .starting : .notRunning),
             session: session,
             startFailure: session == nil && isStarting == false ? startFailure : nil,
+            startFailureNeedsSignIn: session == nil && isStarting == false && startFailureNeedsSignIn,
+            awaitsSignIn: session == nil && isStarting == false && awaitsSignIn,
             queuedCount: queuedEntries.count + pausedEntries.count,
             hold: queuedEntries.isEmpty ? nil : hold,
             agentIsDirectSession: session.map { sessionRuntimeStore.isDirectSession(sessionID: $0.sessionID) }
@@ -1122,11 +1221,17 @@ final class CoordinatorController: ObservableObject {
     enum UserCommand: Equatable {
         case open
         case restart
+        /// Sign In on the notice of a start that failed for no sign-in.
+        case signIn
+        /// Continue in Terminal, for a coordinator that is a direct session.
+        case continueInTerminal
 
         var failureTitle: String {
             switch self {
             case .open: "Unable to Start the Coordinator"
             case .restart: "Unable to Restart the Coordinator"
+            case .signIn: "Unable to Start the Sign-In"
+            case .continueInTerminal: "Unable to Continue in the Terminal"
             }
         }
     }
@@ -1185,6 +1290,21 @@ final class CoordinatorController: ObservableObject {
         switch command {
         case .open: try await open(windowID: windowID, agent: agent)
         case .restart: try await restart(windowID: windowID, agent: agent)
+        case .signIn, .continueInTerminal:
+            do {
+                if command == .signIn {
+                    try signIn()
+                } else {
+                    try await continueInTerminal()
+                }
+            } catch {
+                // The alert shows the reason. The log keeps it.
+                ToasttyLog.warning("The coordinator refused a command for its terminal", category: .tasks, metadata: [
+                    "command": command == .signIn ? "sign_in" : "continue_in_terminal",
+                    "reason": error.localizedDescription,
+                ])
+                throw error
+            }
         }
     }
 
@@ -1400,6 +1520,7 @@ final class CoordinatorController: ObservableObject {
         let workspaceID = location.workspaceID
         startingWorkspaceID = workspaceID
         failedStart = nil
+        startCount += 1
         defer {
             if startingWorkspaceID == workspaceID { startingWorkspaceID = nil }
             drain()
@@ -1409,7 +1530,11 @@ final class CoordinatorController: ObservableObject {
         } catch {
             let reason = Self.startFailureReason(for: error)
             if self.location?.workspaceID == workspaceID {
-                failedStart = FailedStart(workspaceID: workspaceID, reason: reason)
+                failedStart = FailedStart(
+                    workspaceID: workspaceID,
+                    reason: reason,
+                    needsSignIn: (error as? CoordinatorError)?.needsSignIn == true
+                )
             }
             ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: [
                 "reason": reason,
@@ -1670,11 +1795,11 @@ final class CoordinatorController: ObservableObject {
         let deadline = ContinuousClock.now + directSessionStartTimeout
         while true {
             if let reason = session.endReason {
-                throw CoordinatorError(reason)
+                throw CoordinatorError(reason, needsSignIn: session.failedForMissingSignIn)
             }
             switch session.phase {
             case .failed(let reason):
-                throw CoordinatorError(reason)
+                throw CoordinatorError(reason, needsSignIn: session.failedForMissingSignIn)
             case .ready where sessionRuntimeStore.hasStartReportFromHook(sessionID: session.sessionID)
                 && sessionRuntimeStore.nativeSessionBindingConfirmation(for: session.sessionID) != nil:
                 return
@@ -1755,7 +1880,11 @@ final class CoordinatorController: ObservableObject {
         directSessionHost?.detachDirectSession(session)
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: now())
         if let location {
-            failedStart = FailedStart(workspaceID: location.workspaceID, reason: reason)
+            failedStart = FailedStart(
+                workspaceID: location.workspaceID,
+                reason: reason,
+                needsSignIn: session.failedForMissingSignIn
+            )
         }
         ToasttyLog.warning("The coordinator's direct session ended", category: .tasks, metadata: [
             "session_id": sessionID,
@@ -1795,6 +1924,245 @@ final class CoordinatorController: ObservableObject {
                   self.session == nil, self.isStarting == false else { return }
             _ = try? await self.startAgent(location, replacingBusyTerminal: false, agent: nil)
         }
+    }
+
+    // MARK: - Work handed to the coordinator's terminal
+
+    /// How often the wait for the sign-in command looks at the terminal.
+    static let signInPollInterval: Duration = .milliseconds(250)
+    /// A command that the shell reports as running within this time has
+    /// started. One that never shows as running, such as a command that is
+    /// not found, counts as ended after it.
+    static let signInCommandStartGrace: Duration = .seconds(3)
+    /// The wait for the sign-in command gives up after this time. The
+    /// notice then offers Sign In and Restart Coordinator again.
+    static let signInTimeout: Duration = .seconds(900)
+    /// How long the direct session's process may take to end before its
+    /// conversation moves to the terminal.
+    static let directSessionEndTimeout: Duration = .seconds(8)
+
+    /// The coordinator's terminal, when its shell can take a command now:
+    /// the sign-in command, or the launch that moves the conversation
+    /// there. The terminal of a direct session is a plain shell, and the
+    /// user can run anything in it: a command typed while a program runs
+    /// there would go to that program.
+    private func terminalForHandoff() throws -> (location: CoordinatorLocation, panelID: UUID) {
+        guard let location, let panelID = location.panelID else {
+            throw CoordinatorError("The coordinator has no terminal. Restart Coordinator opens one.")
+        }
+        guard managedAgentRestoreState(panelID) == .inactive, promptState(panelID) == .idleAtPrompt else {
+            throw CoordinatorError(Self.busyTerminalReason)
+        }
+        return (location, panelID)
+    }
+
+    static let busyTerminalReason = "The coordinator's terminal is busy or not ready. "
+        + "Show the terminal, end the command that runs there, and try again."
+
+    private static func handoffFailureReason(for error: any Error) -> String {
+        if let error = error as? CoordinatorError {
+            return error.message
+        }
+        switch error as? AgentLaunchError {
+        case .panelBusy, .terminalUnavailable:
+            return busyTerminalReason
+        case .commandDeliveryUncertain:
+            return "The command may not have reached the terminal. Check the coordinator's terminal."
+        default:
+            return error.localizedDescription
+        }
+    }
+
+    /// Sign In, on the notice of a start that failed because Claude Code
+    /// has no Claude plan sign-in. A direct session refuses `/login`, so
+    /// the sign-in runs in the coordinator's terminal, which is a plain
+    /// shell: Toastty types the sign-in command there and shows the
+    /// terminal. The user finishes the sign-in in the browser.
+    ///
+    /// When the command ends, Toastty starts the agent again by itself, as
+    /// Open does, so a saved conversation goes on. The start checks run
+    /// before any message goes to the agent. A start after a sign-in that
+    /// the user gave up therefore costs nothing: it fails with the same
+    /// reason, and the notice shows again.
+    func signIn() throws {
+        guard isStarting == false, session == nil else {
+            throw CoordinatorError("The coordinator's agent runs or starts already.")
+        }
+        let config = try startConfiguration(agent: nil)
+        guard config.agent == AgentKind.claude.rawValue, let launcher else {
+            throw CoordinatorError("Toastty can start a sign-in only for Claude Code.")
+        }
+        let terminal = try terminalForHandoff()
+        do {
+            try launcher.typeSignInCommand(profileID: config.agent, panelID: terminal.panelID)
+        } catch {
+            throw CoordinatorError(Self.handoffFailureReason(for: error))
+        }
+        ToasttyLog.info("Typed the sign-in command into the coordinator's terminal", category: .tasks, metadata: [
+            "panel_id": terminal.panelID.uuidString,
+        ])
+        openFullView(showingTerminal: true)
+        startWhenSignInEnds(location: terminal.location, panelID: terminal.panelID)
+    }
+
+    private func startWhenSignInEnds(location: CoordinatorLocation, panelID: UUID) {
+        signInWatch?.cancel()
+        let startCount = startCount
+        let watchID = UUID()
+        signInWatchID = watchID
+        signInWatch = Task { @MainActor [weak self] in
+            let clock = ContinuousClock()
+            let typedAt = clock.now
+            var commandRan = false
+            var ended = false
+            while ended == false {
+                do {
+                    try await Task.sleep(for: Self.signInPollInterval)
+                } catch {
+                    return
+                }
+                // Another start, an agent in the terminal or another
+                // coordinator ends the wait.
+                guard let self, self.signInWatchID == watchID else { return }
+                guard self.startCount == startCount, self.session == nil,
+                      self.location?.workspaceID == location.workspaceID, self.location?.panelID == panelID,
+                      clock.now - typedAt < Self.signInTimeout else {
+                    self.signInWatch = nil
+                    return
+                }
+                switch self.promptState(panelID) {
+                case .busy:
+                    commandRan = true
+                case .idleAtPrompt:
+                    ended = commandRan || clock.now - typedAt >= Self.signInCommandStartGrace
+                case .exited, .unavailable:
+                    break
+                }
+            }
+            guard let self, self.signInWatchID == watchID else { return }
+            self.signInWatch = nil
+            guard let location = self.location, location.panelID == panelID else { return }
+            ToasttyLog.info("The sign-in command ended; starting the coordinator's agent", category: .tasks)
+            guard (try? await self.startAgent(location, replacingBusyTerminal: false, agent: nil)) != nil else { return }
+            // The sign-in showed the terminal. The agent does not run
+            // there, so the chat shows again.
+            if self.directSession != nil, self.location?.panelID == panelID {
+                self.showsTerminal = false
+            }
+        }
+    }
+
+    /// The coordinator's agent is a direct session that runs: Continue in
+    /// Terminal applies.
+    var offersContinueInTerminal: Bool {
+        guard let directSession, isStarting == false else { return false }
+        return session?.sessionID == directSession.sessionID
+    }
+
+    /// Continue in Terminal: ends the direct session's process and goes on
+    /// with the same conversation in a Claude Code in the coordinator's
+    /// terminal, where the user can use what a direct session refuses,
+    /// such as `/login` and `/permissions`. The setting does not change.
+    ///
+    /// - It is refused while a turn runs, a request waits or a message is
+    ///   on its way to the agent. The end of the process would cut that
+    ///   work off, and a message that the process holds is in no
+    ///   transcript. The user stops the turn or waits for its end.
+    /// - Messages that wait in the queue stay there. They go to the Claude
+    ///   Code in the terminal when its prompt opens, in order.
+    /// - The saved record of the direct session stays. With the setting
+    ///   still on, the next launch of Toastty goes on with the same
+    ///   conversation as a direct session (`resumesAsDirectSession`), and
+    ///   so does Open after the Claude Code in the terminal ended. Restart
+    ///   starts a new conversation as a direct session.
+    func continueInTerminal() async throws {
+        guard isStarting == false else {
+            throw CoordinatorError("The coordinator is starting. Try again when it runs.")
+        }
+        guard let direct = directSession, session?.sessionID == direct.sessionID else {
+            throw CoordinatorError("The coordinator's agent runs in its terminal already, or does not run.")
+        }
+        let moment = now()
+        let promptIsOpen: Bool
+        if let summary = syncConversationSubscription()?.snapshot(at: moment)?.summary {
+            if case .openPrompt = summary.inputAvailability { promptIsOpen = true } else { promptIsOpen = false }
+        } else {
+            promptIsOpen = true
+        }
+        guard direct.isAtOpenPrompt, promptIsOpen else {
+            throw CoordinatorError(
+                "The coordinator works on a turn or waits for an answer. Stop the turn, or wait for its end, "
+                    + "then choose Continue in Terminal again."
+            )
+        }
+        let config = try startConfiguration(agent: nil)
+        guard let launcher else {
+            throw CoordinatorError("The agent launcher is not available.")
+        }
+        let terminal = try terminalForHandoff()
+        let directory = try preparedDirectory()
+        guard let binding = sessionRuntimeStore.nativeSessionBindingConfirmation(for: direct.sessionID),
+              binding.panelID == terminal.panelID,
+              FileManager.default.fileExists(atPath: binding.sessionFilePath) else {
+            throw CoordinatorError(
+                "The coordinator's conversation has no message yet, so there is nothing to continue. Send a message first."
+            )
+        }
+        let scopedWorkspaceIDs = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: direct.sessionID)?
+            .scopedWorkspaceIDs.map { $0.intersection(Set(store.state.workspacesByID.keys)) }
+        // The next launch finds the conversation as it is now.
+        saveDirectSessionRecord(sessionID: direct.sessionID)
+
+        let workspaceID = terminal.location.workspaceID
+        startingWorkspaceID = workspaceID
+        failedStart = nil
+        startCount += 1
+        defer {
+            if startingWorkspaceID == workspaceID { startingWorkspaceID = nil }
+            drain()
+        }
+        // From here no sender reaches the process, and it ends: at its
+        // open prompt Claude Code ends when its input closes.
+        endDirectSession(direct)
+        do {
+            let deadline = ContinuousClock.now + Self.directSessionEndTimeout
+            while direct.processIsRunning {
+                guard ContinuousClock.now < deadline else {
+                    throw CoordinatorError("The coordinator's Claude Code process did not end.")
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let result = try await launcher.resumeCoordinatorInTerminal(
+                profileID: config.agent,
+                workspaceID: workspaceID,
+                panelID: terminal.panelID,
+                cwd: directory,
+                environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
+                model: config.model,
+                reasoningEffort: config.effort,
+                resumeNativeSessionID: binding.nativeSessionID,
+                scopedWorkspaceIDs: scopedWorkspaceIDs
+            )
+            ToasttyLog.info("Moved the coordinator's direct session to its terminal", category: .tasks, metadata: [
+                "session_id": result.sessionID,
+                "ended_session_id": direct.sessionID,
+                "panel_id": terminal.panelID.uuidString,
+                "native_session_id": binding.nativeSessionID,
+            ])
+        } catch {
+            // The managed session of the process that ended is over too.
+            sessionRuntimeStore.stopSession(sessionID: direct.sessionID, at: now())
+            let reason = "The conversation did not move to the terminal: \(Self.handoffFailureReason(for: error)) "
+                + "Open Coordinator goes on with it without a terminal."
+            if location?.workspaceID == workspaceID {
+                failedStart = FailedStart(workspaceID: workspaceID, reason: reason)
+            }
+            ToasttyLog.warning("Could not move the coordinator's direct session to its terminal", category: .tasks, metadata: [
+                "reason": reason,
+            ])
+            throw CoordinatorError(reason)
+        }
+        openFullView(showingTerminal: true)
     }
 
     /// The terminal the agent starts in: the coordinator's own when it can

@@ -56,8 +56,12 @@ struct CoordinatorControllerTests {
 
         /// `trustFolder` is the app's step that tells the agent that the
         /// coordinator's folder is trusted.
+        /// With `directSession`, the setting for a direct session is on, as
+        /// `CoordinatorDirectSessionSetting` turns it on in the app, and the
+        /// controller saves where the coordinator lives.
         init(
             readinessTimeout: Duration = .seconds(3),
+            directSession: Bool = false,
             trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in }
         ) throws {
             let tasks = try TaskCoordinatorTests.Fixture()
@@ -77,6 +81,9 @@ struct CoordinatorControllerTests {
                 directoryURL: directory,
                 folder: folder,
                 queueFileURL: queueFileURL,
+                workspaceFileURL: directSession
+                    ? tasks.root.appendingPathComponent("runtime-home/coordinator-workspace.json")
+                    : nil,
                 configLoader: { [unowned tasks] in
                     if let configError = tasks.configError { throw configError }
                     return tasks.config
@@ -93,7 +100,9 @@ struct CoordinatorControllerTests {
                     return true
                 },
                 terminalReadinessTimeout: readinessTimeout,
-                defaults: defaults
+                defaults: defaults,
+                directSessionEnabled: { directSession },
+                directSessionStartTimeout: .seconds(10)
             )
             tasks.coordinator.coordinatorController = controller
             terminals.setAutomationSendTextHandlerForTesting { [unowned self] text, submit, panelID, _ in
@@ -764,10 +773,13 @@ struct CoordinatorControllerTests {
         let button = CoordinatorActionsMenuButton.Coordinator()
         var opened: [CoordinatorDocument] = []
         var restarts = 0
+        var handoffs = 0
         button.openDocument = { opened.append($0) }
         button.restart = { restarts += 1 }
+        button.continueInTerminal = { handoffs += 1 }
 
-        let menu = button.menu()
+        // A coordinator that runs in its terminal: the menu is as it was.
+        var menu = button.menu()
         #expect(menu.items.map(\.title) == [
             "Open Policy", "Open Ledger", "Open Friction Notes", "", "Restart Coordinator",
         ])
@@ -776,6 +788,18 @@ struct CoordinatorControllerTests {
         }
 
         #expect(opened == [.policy, .ledger, .friction])
+        #expect(restarts == 1)
+        #expect(handoffs == 0)
+
+        // A coordinator that is a direct session: Continue in Terminal
+        // comes before Restart Coordinator.
+        button.offersContinueInTerminal = { true }
+        menu = button.menu()
+        #expect(menu.items.map(\.title) == [
+            "Open Policy", "Open Ledger", "Open Friction Notes", "", "Continue in Terminal", "Restart Coordinator",
+        ])
+        menu.performActionForItem(at: 4)
+        #expect(handoffs == 1)
         #expect(restarts == 1)
     }
 

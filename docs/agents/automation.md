@@ -479,8 +479,12 @@ stand in for paired iPhones on the loopback gateway; two may approve
 permission requests. The run marks only its temporary coordinator folder
 trusted in `~/.claude.json`, and removes that entry and the folder's Claude
 project directory afterward. `--gui-session` reruns the check through
-Terminal in the GUI session, where the Claude login is readable. Nothing
-moves focus.
+Terminal in the GUI session, where the Claude login is readable.
+
+Two parts use the app's real window through `ax-drive.swift`, as the
+coordinator chat check does: Continue in Terminal and Sign In. They bring
+the check's app to the front and need the remote Mac's screen unlocked. The
+other parts move no focus.
 
 It checks, in this order:
 
@@ -507,6 +511,15 @@ It checks, in this order:
 - `/model` as a message: Claude Code's answer shows as the coordinator's
   message, and the prompt opens again.
 - `/compact` at the open prompt, then one message: one receipt, one reply.
+- Continue in Terminal, from the "…" menu of the coordinator's panel: it is
+  refused while a turn runs, and the turn finishes. At the open prompt the
+  Claude Code process ends, the same conversation resumes in a Claude Code
+  in the coordinator's terminal, and a message sent right after the click
+  waits in the queue and runs there. The menu of a terminal coordinator has
+  no Continue in Terminal.
+- The way back: after a kill of the app, the relaunched app goes on with
+  that conversation as a direct session, and Claude knows what was said in
+  the terminal.
 - Closing the coordinator's workspace ends the Claude Code process.
 - A second coordinator starts in the same app. After a kill of the app at
   the open prompt, the relaunched app resumes the same conversation with the
@@ -517,6 +530,15 @@ It checks, in this order:
   turn does not finish, and the next message runs.
 - With the setting off, the next launch resumes the same conversation in
   the terminal, and it takes a message there.
+- Sign In: the profile's command becomes a script that runs the real Claude
+  Code with an empty config folder, so it has no sign-in. The relaunched
+  app's start fails for no sign-in, and the chat's notice has Sign In. A
+  click types the sign-in command into the coordinator's terminal and
+  shows it, and starts no agent session. After a sign-in that is given up,
+  the start fails again and the notice offers Sign In again. After a
+  sign-in that works, the coordinator starts by itself, goes on with the
+  saved conversation and takes a message. The script's `auth login` is a
+  stand-in: the real one needs a person at a browser.
 
 A wake's turn may ask for a command that the profile does not allow; the
 check denies such a request, as a user would. It writes

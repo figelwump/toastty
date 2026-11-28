@@ -45,6 +45,12 @@ final class CoordinatorChatModel: ObservableObject {
     enum Notice: Equatable {
         /// No agent runs in the coordinator's terminal.
         case agentNotRunning(reason: String?)
+        /// The start of a direct session failed because Claude Code has no
+        /// Claude plan sign-in. Sign In runs the sign-in in the terminal.
+        case agentNeedsSignIn
+        /// The sign-in command runs in the coordinator's terminal. The
+        /// agent starts again when it ends.
+        case awaitingSignIn
         case agentStarting
         /// The agent's process has run for `startGrace` and the agent has
         /// not reported its session. It most likely waits for an answer
@@ -723,6 +729,8 @@ final class CoordinatorChatModel: ObservableObject {
         guard let controller, let status = controller.status else { return nil }
         switch status.agentState {
         case .notRunning:
+            if status.awaitsSignIn { return .awaitingSignIn }
+            if status.startFailureNeedsSignIn { return .agentNeedsSignIn }
             return .agentNotRunning(reason: status.startFailure)
         case .starting:
             return status.agentIsDirectSession ? .directAgentStarting : .agentStarting

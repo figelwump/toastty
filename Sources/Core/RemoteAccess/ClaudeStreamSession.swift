@@ -100,6 +100,10 @@ public struct ClaudeStreamSession: Sendable {
     }
 
     public private(set) var phase: Phase = .starting
+    /// The process failed because it has no Claude plan sign-in: at its
+    /// start, or later, when a request of a turn was refused for it. The
+    /// host can offer the sign-in for this failure, and for no other.
+    public private(set) var failedForMissingSignIn = false
     public private(set) var account: Account?
     /// Claude's own ID of the conversation, from its first turn.
     public private(set) var nativeSessionID: String?
@@ -359,6 +363,7 @@ public struct ClaudeStreamSession: Sendable {
         )
         self.account = account
         if requirements.requiresPlanSignIn, account.subscriptionType == nil {
+            failedForMissingSignIn = true
             return fail(
                 "Claude Code started without a Claude plan sign-in, so its work would be billed another way or would fail. "
                     + "Toastty sent it no message. Sign in with `claude auth login`, then start the coordinator again."
@@ -422,6 +427,17 @@ public struct ClaudeStreamSession: Sendable {
         let recordedAt = ClaudeTranscriptParser.streamTimestamp(object["timestamp"]) ?? date
         if isRootMessage, recordedAt >= startedAt {
             outputs += turnStartedOutputs(at: date)
+        }
+        // Claude Code writes this answer itself when a request had no
+        // valid sign-in, for example after a sign-out in another Claude
+        // Code. No later turn can work, and `/login` is refused here.
+        if isRootMessage, object["type"] as? String == "assistant",
+           requirements.requiresPlanSignIn, object["error"] as? String == "authentication_failed" {
+            failedForMissingSignIn = true
+            return outputs + fail(
+                "Claude Code lost its Claude plan sign-in: a request of the coordinator's turn was refused. "
+                    + "Toastty stopped it. Sign in with `claude auth login`, then start the coordinator again."
+            )
         }
         let message = object["message"] as? [String: Any]
         let messageID = message?["id"] as? String

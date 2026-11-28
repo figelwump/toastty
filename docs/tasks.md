@@ -1506,9 +1506,10 @@ defaults write com.GiantThings.toastty toastty.coordinator.claudeDirectSession -
 ```
 
 `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1` in the app's environment does
-the same for one run, and `0` forces the terminal. To go back, turn the
-setting off and relaunch Toastty: the same conversation then resumes in the
-terminal.
+the same for one run, and `0` forces the terminal. To go back for good, turn
+the setting off and relaunch Toastty: the same conversation then resumes in
+the terminal. To move one conversation to the terminal with the setting on,
+use [Continue in Terminal](#continue-in-terminal).
 
 What is different from the terminal:
 
@@ -1546,6 +1547,50 @@ with the reason when one does not hold:
 
 No message from any sender reaches the agent before all three hold.
 
+#### Sign In
+
+When check 1 fails, the chat's notice has **Sign In** beside Restart
+Coordinator. A direct session refuses `/login`, so the sign-in runs in the
+coordinator's terminal, which is a plain shell. Sign In shows the terminal
+and types `claude auth login` there, with the command of your `claude`
+profile. Finish the sign-in in the browser. When the command ends, Toastty
+starts the coordinator again by itself, goes on with a saved conversation,
+and shows the chat. If you give the sign-in up, the start fails for the same
+reason and the notice shows again; no message went to Claude Code. Sign In
+is refused while another command runs in that terminal.
+
+Toastty waits up to 15 minutes for the end of the command. After that,
+choose Restart Coordinator, or Open Coordinator to go on with a saved
+conversation.
+
+A sign-out in another Claude Code also reaches a direct session that runs:
+Claude Code answers the next message itself with "Not logged in". Toastty
+then stops the process and shows the same notice with Sign In. The message
+of that turn is in the conversation, and it has no answer: send it again
+after the sign-in.
+
+#### Continue in Terminal
+
+**Continue in Terminal** is in the "…" menu of the coordinator's panel
+while the coordinator is a direct session. It ends the direct session's
+process and goes on with the same conversation in a Claude Code in the
+coordinator's terminal (`claude --resume`), and shows the terminal. Use it
+for what a direct session refuses, such as `/permissions`. The setting does
+not change.
+
+- It is refused while a turn runs or a request waits. Stop the turn, or
+  wait for its end, and choose it again. It is also refused while another
+  command runs in the coordinator's terminal, and for a conversation that
+  has no message yet.
+- Messages that wait in the coordinator's queue stay there. They go to the
+  Claude Code in the terminal when its prompt opens, in order.
+- The way back: with the setting still on, the next launch of Toastty goes
+  on with the same conversation as a direct session, and so does Open
+  Coordinator after you end the Claude Code in the terminal. Restart
+  Coordinator starts a new conversation as a direct session at once. After
+  `/clear` in the terminal, the terminal's new conversation is the saved
+  one, and the next launch resumes it in the terminal.
+
 A Claude Code that reads no sign-in, hooks or skills, as `--bare` does,
 fails these checks. An agent profile whose arguments ask for such a mode
 is refused.
@@ -1570,8 +1615,9 @@ Limits of the prototype:
 - A Claude Code command that answers with text works as a message, for
   example `/model`, `/model opus`, `/context`, `/compact` and `/mcp` (a
   summary). `/login` and `/permissions` open a screen of Claude Code's
-  own, and Claude Code refuses them here. To sign in, run `claude` in any
-  terminal and sign in there, then open the coordinator again.
+  own, and Claude Code refuses them here. To sign in, use
+  [Sign In](#sign-in) on the notice of the failed start. For
+  `/permissions`, use [Continue in Terminal](#continue-in-terminal).
 - The usage-limit recovery of a terminal coordinator does not run.
 
 ### The coordinator's dock

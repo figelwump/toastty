@@ -205,10 +205,13 @@ struct CoordinatorChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             switch notice {
             case .agentNotRunning:
-                noticeButton("Restart Coordinator", identifier: "coordinator.chat.notice.restart") {
-                    controller.perform(.restart)
+                restartButton
+            case .agentNeedsSignIn:
+                noticeButton("Sign In", identifier: "coordinator.chat.notice.sign-in") {
+                    controller.perform(.signIn)
                 }
-            case .agentStarting, .startWaitsInTerminal, .awaitingAnswerInTerminal:
+                restartButton
+            case .agentStarting, .startWaitsInTerminal, .awaitingAnswerInTerminal, .awaitingSignIn:
                 showTerminalButton
             case .directAgentStarting, .awaitingAnswerOutsideChat:
                 // Nothing of a direct session waits in its terminal.
@@ -224,9 +227,7 @@ struct CoordinatorChatView: View {
             case .typingInterrupted:
                 showTerminalButton
             case .instructionsMayBeCut:
-                noticeButton("Restart Coordinator", identifier: "coordinator.chat.notice.restart") {
-                    controller.perform(.restart)
-                }
+                restartButton
                 noticeButton("Don't Show Again", identifier: "coordinator.chat.notice.hide") {
                     controller.hideInstructionsNotice()
                 }
@@ -257,6 +258,12 @@ struct CoordinatorChatView: View {
         }
     }
 
+    private var restartButton: some View {
+        noticeButton("Restart Coordinator", identifier: "coordinator.chat.notice.restart") {
+            controller.perform(.restart)
+        }
+    }
+
     private var dismissButton: some View {
         noticeButton("Dismiss", identifier: "coordinator.chat.notice.dismiss") {
             model.dismissNotice()
@@ -284,6 +291,10 @@ struct CoordinatorChatView: View {
         switch notice {
         case .agentNotRunning(let reason):
             reason ?? "The coordinator's agent is not running. A message you send waits for it."
+        case .agentNeedsSignIn:
+            "Claude Code has no Claude plan sign-in, so the coordinator did not start. Toastty sent it no message."
+        case .awaitingSignIn:
+            "The sign-in runs in the coordinator's terminal. The coordinator starts when it ends."
         case .agentStarting:
             "The agent is starting. If this takes long, it may wait for you in the terminal."
         case .startWaitsInTerminal:
