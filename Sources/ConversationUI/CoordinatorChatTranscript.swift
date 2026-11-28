@@ -31,6 +31,12 @@ public enum ToasttyTranscriptRows {
             case .answerable: interactionResponseClosures(in: events)
             case .shownOnly: [:]
             }
+        // A later presentation of the same interaction replaces an earlier
+        // one, as Claude's second request for one tool call replaces its
+        // first. Only the newest card takes an answer.
+        let newestPresentations: [RemotePendingInteraction.ID: UInt64] = events.reduce(into: [:]) { newest, event in
+            if case .interactionPresented(let payload) = event.payload { newest[payload.id] = event.sequence }
+        }
         var toolNames: [String: String] = [:]
         // The newest row of each agent message so far, by its text as a
         // reply quotes it and by its time as the reply's line writes it: a
@@ -95,11 +101,16 @@ public enum ToasttyTranscriptRows {
                     payload.state = resolution.resolution
                     payload.answers = resolution.answers
                 }
+                let replaced = newestPresentations[payload.id] != event.sequence
+                if replaced {
+                    payload.state = .superseded
+                    payload.answers = nil
+                }
                 switch interactions {
                 case .answerable:
-                    // A resolved question, or one whose answer window the
-                    // host closed, takes no answer.
-                    if resolution != nil || responseClosures[payload.id] != nil {
+                    // A resolved or replaced question, or one whose answer
+                    // window the host closed, takes no answer.
+                    if resolution != nil || replaced || responseClosures[payload.id] != nil {
                         payload.responseID = nil
                     }
                     content = .interaction(ToasttyInteractionPresentation(

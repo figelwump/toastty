@@ -213,6 +213,10 @@ final class CoordinatorController: ObservableObject {
     /// belongs to its workspace: a coordinator opened after that one closed
     /// gets its own start.
     @Published private var startingWorkspaceID: UUID?
+    /// The start that runs makes a direct session. It is known before the
+    /// session exists, so that the status never shows such a start as an
+    /// agent's in the terminal.
+    @Published private var startsDirectSession = false
     @Published private var failedStart: FailedStart?
     /// For one session of the coordinator, checked as it starts or
     /// resumes: the argv of its Codex profile when that argv could not take
@@ -860,7 +864,7 @@ final class CoordinatorController: ObservableObject {
             queuedCount: queuedEntries.count + pausedEntries.count,
             hold: queuedEntries.isEmpty ? nil : hold,
             agentIsDirectSession: session.map { sessionRuntimeStore.isDirectSession(sessionID: $0.sessionID) }
-                ?? (directSession != nil)
+                ?? (directSession != nil || (self.isStarting && startsDirectSession))
         )
     }
 
@@ -1401,7 +1405,10 @@ final class CoordinatorController: ObservableObject {
         startingWorkspaceID = workspaceID
         failedStart = nil
         defer {
-            if startingWorkspaceID == workspaceID { startingWorkspaceID = nil }
+            if startingWorkspaceID == workspaceID {
+                startingWorkspaceID = nil
+                startsDirectSession = false
+            }
             drain()
         }
         do {
@@ -1425,12 +1432,14 @@ final class CoordinatorController: ObservableObject {
         guard let launcher else {
             throw CoordinatorError("The agent launcher is not available.")
         }
+        let direct = directSessionEnabled() && config.agent == AgentKind.claude.rawValue
+        startsDirectSession = direct
         let directory = try preparedDirectory()
         await prepareRepository()
         // Toastty made this folder and wrote every file in it, so the agent
         // need not ask the user whether to trust it.
         await trustFolder(config.agent, directory)
-        if directSessionEnabled(), config.agent == AgentKind.claude.rawValue {
+        if direct {
             return try await launchDirectSession(
                 location,
                 config: config,

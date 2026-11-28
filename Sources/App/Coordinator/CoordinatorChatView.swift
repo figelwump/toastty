@@ -42,7 +42,8 @@ struct CoordinatorChatView: View {
         readOnlyInteractionMessage: "Answer in the terminal",
         shortenedPreviewMessage: "Preview shortened. The terminal shows the full request.",
         showsMessageCopyButton: true,
-        foldsRunningWork: true
+        foldsRunningWork: true,
+        answeringDevice: .mac
     )
 
     var body: some View {
@@ -88,9 +89,7 @@ struct CoordinatorChatView: View {
         .environment(\.conversationLinkPresenter, chips.presenter)
         .environment(\.conversationTextScale, model.textScale)
         .environment(\.openURL, linkOpener.action)
-        .environment(\.showQuestionTerminal, { [controller, host] in
-            Self.showTerminal(using: controller, from: host)
-        })
+        .environment(\.showQuestionTerminal, showQuestionTerminal)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coordinator.chat")
         // Read the conversation only while the chat is on screen.
@@ -108,6 +107,16 @@ struct CoordinatorChatView: View {
         .onDisappear { model.hide(panelID: panelID, host: host) }
         .onChange(of: isOnScreen && hasPanelFocus, initial: true) { _, takesKeyboard in
             if takesKeyboard { model.requestComposerFocus() }
+        }
+    }
+
+    /// The Show Terminal button of a question's card. The terminal of a
+    /// direct session is a plain shell: its question waits in the chat and
+    /// on a paired phone, not there.
+    private var showQuestionTerminal: (@MainActor @Sendable () -> Void)? {
+        guard controller.status?.agentIsDirectSession != true else { return nil }
+        return { [controller, host] in
+            Self.showTerminal(using: controller, from: host)
         }
     }
 
@@ -293,7 +302,7 @@ struct CoordinatorChatView: View {
         case .directAgentStarting:
             "The agent is starting."
         case .awaitingAnswerOutsideChat:
-            "The coordinator asks for a permission, and this chat cannot give it yet. Answer on a paired iPhone, or stop the turn."
+            "The coordinator asks for something that this chat cannot answer. Answer on a paired iPhone, or stop the turn."
         case .terminalDraft:
 "You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there. If you only answered a question there, choose Send Anyway."
         case .deliveryNotConfirmed:
