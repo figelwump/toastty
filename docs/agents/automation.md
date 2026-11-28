@@ -523,6 +523,39 @@ check denies such a request, as a user would. It writes
 `remote-coordinator-direct-session-check.json`, the app logs and Claude's
 transcripts under the run's artifacts directory.
 
+### Coordinator direct session: the Mac's permission card
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-permission-card-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home, in automation
+mode so that it can save frames of its window. The installed production app
+is not touched. Like the direct session check above, it runs with
+`TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1`, the real Claude CLI and
+subscription usage, the same narrow profile and the same folder trust
+handling. It drives the coordinator's chat with real clicks and keys through
+`ax-drive`, so it takes the screen of the validation Mac, which must be
+unlocked. A seeded device on the loopback gateway only reads events.
+
+It checks, in this order:
+
+- The notice while the direct session starts names no terminal.
+- A message from the chat's composer makes Claude ask to run a command. The
+  card shows the command and the Allow once and Deny buttons, the chat shows
+  no notice, and the status is `needs_approval`. A click on Allow once runs
+  the command, and the card then says "Sent from this Mac: Allow once".
+- A second request: a click on Deny, the command does not run, and the card
+  says "Sent from this Mac: Deny".
+- A question: its card has no Show Terminal button, and a click on a choice
+  and Submit answers it.
+
+It writes `remote-coordinator-permission-card-check.json`, its frames under
+`remote-coordinator-permission-card-check-frames/`, the app log and Claude's
+transcripts under the run's artifacts directory.
+
 ### Prompt reopen
 
 ```bash

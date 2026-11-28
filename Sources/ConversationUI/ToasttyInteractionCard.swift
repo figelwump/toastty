@@ -138,7 +138,7 @@ public struct ToasttyInteractionAnswerState: Equatable, Sendable {
         return status
     }
 
-    /// The decision this phone sent for a permission request, if any.
+    /// The decision this device sent for a permission request, if any.
     public var sentOptionID: String? {
         retryRequest?.answers.first?.selectedOptionIDs.first
     }
@@ -258,9 +258,11 @@ struct ToasttyInteractionCard: View {
                 }
             } else {
                 submitButton(state)
-                Label("You can also answer on the desktop", systemImage: "desktopcomputer")
-                    .conversationFont(.caption)
-                    .foregroundStyle(ConversationDesignTokens.mutedText)
+                if options.answeringDevice == .phone {
+                    Label("You can also answer on the desktop", systemImage: "desktopcomputer")
+                        .conversationFont(.caption)
+                        .foregroundStyle(ConversationDesignTokens.mutedText)
+                }
             }
         }
     }
@@ -481,7 +483,7 @@ struct ToasttyInteractionCard: View {
     }
 
     private var readOnlyMessage: String {
-        guard showQuestionTerminal == nil, let reason = presentation.responseClosedReason else {
+        guard options.answeringDevice == .phone, let reason = presentation.responseClosedReason else {
             return options.readOnlyInteractionMessage
         }
         return switch reason {

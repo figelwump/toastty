@@ -521,21 +521,98 @@ struct CoordinatorChatSendPathTests {
         fixture.report(.needsApproval)
         #expect(fixture.chat.notice == nil)
 
-        // A permission request has no form in the chat yet. The notice
-        // says where it can be answered.
-        session.agentWrites(#"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#)
-        session.agentWrites(#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_1","input":{"command":"git push"}}}"#)
-        try await fixture.waitUntil("the notice of the permission request") {
-            fixture.chat.notice == .awaitingAnswerOutsideChat
-        }
-        session.agentWrites(#"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"}"#)
-        try await fixture.waitUntil("the end of the notice") { fixture.chat.notice == nil }
-
-        // A question has its card in the chat: no notice.
+        // A question has its card in the chat: no notice. So does a
+        // permission request (`aDirectSessionsPermissionRequestIsAnsweredOnItsCard`).
         session.agentWrites(#"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#)
         session.agentWrites(#"{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","requires_user_interaction":true,"input":{"questions":[{"question":"Which color?","header":"Color","multiSelect":false,"options":[{"label":"Red","description":"Warm"},{"label":"Blue","description":"Cool"}]}]}}}"#)
         try await fixture.waitUntil("the question's card") { fixture.chat.interactionAnswerStates.count == 1 }
         #expect(fixture.chat.notice == nil)
+    }
+
+    /// The chat answers a direct session's permission request on its card,
+    /// with the decisions that a phone's card offers. A terminal's request
+    /// keeps its answer in the terminal.
+    @MainActor
+    @Test func aDirectSessionsPermissionRequestIsAnsweredOnItsCard() async throws {
+        let fixture = try CoordinatorChatFixture(agent: .claude)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") { fixture.controller.promptIsOpenForTesting }
+        let conversations = fixture.conversations
+        let session = DirectSessionStandIn(
+            panelID: fixture.panelID, sessionID: conversations.sessionID, service: conversations.service
+        )
+        conversations.service.attachDirectSession(session)
+        let start = #"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#
+        let end = #"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"}"#
+        func request(_ id: String, command: String) -> String {
+            #"{"type":"control_request","request_id":"\#(id)","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_\#(id)","input":{"command":"\#(command)"}}}"#
+        }
+        let decision = ClaudePermissionDecision.questionID
+
+        // Until the session store knows the agent as a direct session, the
+        // chat treats it as a terminal's: the request gets no form, and the
+        // notice sends the user to the terminal, as before.
+        #expect(fixture.controller.status?.agentIsDirectSession == false)
+        session.agentWrites(start)
+        session.agentWrites(request("req-t", command: "git status"))
+        try await fixture.waitUntil("the request without a form") {
+            fixture.chat.pendingRequestsWithoutForm.count == 1
+        }
+        #expect(fixture.chat.interactionAnswerStates.isEmpty)
+        #expect(fixture.chat.notice == .awaitingAnswerInTerminal)
+        session.agentWrites(end)
+        try await fixture.waitUntil("the end of the request") { fixture.chat.pendingRequestsWithoutForm.isEmpty }
+
+        // A direct session's request has a form in the chat, and no notice.
+        conversations.sessionRuntimeStore.markDirectSession(sessionID: conversations.sessionID)
+        session.agentWrites(start)
+        session.agentWrites(request("req-1", command: "git push"))
+        try await fixture.waitUntil("the request's form") { fixture.chat.interactionAnswerStates.count == 1 }
+        let allowed = try #require(fixture.chat.interactionAnswerStates.first)
+        #expect(allowed.value.questions.first?.options.map(\.id) == [
+            ClaudePermissionDecision.allowOnce.optionID, ClaudePermissionDecision.deny.optionID,
+        ])
+        #expect(fixture.chat.pendingRequestsWithoutForm.isEmpty)
+        #expect(fixture.chat.notice == nil)
+
+        // Allow once, as the card's button sends it: Claude gets it, and the
+        // card keeps the decision this Mac sent after the request ends.
+        fixture.chat.editQuestionAnswer(allowed.key, .selectOnly(
+            questionID: decision, optionID: ClaudePermissionDecision.allowOnce.optionID
+        ))
+        fixture.chat.submitQuestionAnswer(allowed.key)
+        #expect(session.written.last?.contains(#""request_id":"req-1""#) == true)
+        #expect(session.written.last?.contains(#""behavior":"allow""#) == true)
+        try await fixture.waitUntil("the allowed request's end") {
+            fixture.chat.interactionAnswerStates[allowed.key]?.status == .resolved([])
+        }
+        #expect(fixture.chat.interactionAnswerStates[allowed.key]?.sentOptionID
+            == ClaudePermissionDecision.allowOnce.optionID)
+        #expect(fixture.chat.notice == nil)
+
+        // Deny on the next request. A second answer to it is refused.
+        session.agentWrites(request("req-2", command: "rm -rf build"))
+        try await fixture.waitUntil("the second request's form") {
+            fixture.chat.interactionAnswerStates.contains { $0.key != allowed.key && $0.value.status == .editing }
+        }
+        let denied = try #require(fixture.chat.interactionAnswerStates.first { $0.key != allowed.key })
+        fixture.chat.editQuestionAnswer(denied.key, .selectOnly(
+            questionID: decision, optionID: ClaudePermissionDecision.deny.optionID
+        ))
+        fixture.chat.submitQuestionAnswer(denied.key)
+        #expect(session.written.last?.contains(#""request_id":"req-2""#) == true)
+        #expect(session.written.last?.contains(#""behavior":"deny""#) == true)
+        let responses = session.written.filter { $0.contains(#""type":"control_response""#) }.count
+        fixture.chat.submitQuestionAnswer(denied.key)
+        #expect(session.written.filter { $0.contains(#""type":"control_response""#) }.count == responses)
+        try await fixture.waitUntil("the denied request's end") {
+            fixture.chat.interactionAnswerStates[denied.key]?.status == .resolved([])
+        }
+        #expect(fixture.chat.interactionAnswerStates[denied.key]?.sentOptionID == ClaudePermissionDecision.deny.optionID)
+        #expect(fixture.chat.interactionAnswerStates[allowed.key]?.sentOptionID
+            == ClaudePermissionDecision.allowOnce.optionID)
+        session.agentWrites(end)
     }
 
     // MARK: - The user's text in the terminal

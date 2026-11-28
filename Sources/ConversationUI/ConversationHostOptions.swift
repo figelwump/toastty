@@ -28,6 +28,10 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
     /// above the messages would move them each time the app reconnects.
     /// The working row then also stays while the transcript recovers.
     public var showsConnectionStatus: Bool
+    /// The device that answers a card in this transcript. It decides what
+    /// an answer card says about other places to answer and about the
+    /// decision that this device sent.
+    public var answeringDevice: ToasttyAnsweringDevice
 
     public init(
         maximumContentWidth: CGFloat? = nil,
@@ -35,7 +39,8 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
         shortenedPreviewMessage: String = "Preview shortened. Check the desktop for the full request.",
         showsMessageCopyButton: Bool = false,
         foldsRunningWork: Bool = false,
-        showsConnectionStatus: Bool = true
+        showsConnectionStatus: Bool = true,
+        answeringDevice: ToasttyAnsweringDevice = .phone
     ) {
         self.maximumContentWidth = maximumContentWidth
         self.readOnlyInteractionMessage = readOnlyInteractionMessage
@@ -43,7 +48,17 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
         self.showsMessageCopyButton = showsMessageCopyButton
         self.foldsRunningWork = foldsRunningWork
         self.showsConnectionStatus = showsConnectionStatus
+        self.answeringDevice = answeringDevice
     }
+}
+
+/// The device that shows an answer card.
+public enum ToasttyAnsweringDevice: Equatable, Sendable {
+    /// A paired iPhone. The Mac can answer the same card, so the card says
+    /// so, and says when the phone can no longer answer it.
+    case phone
+    /// The Mac that runs the agent. Its card points to no other place.
+    case mac
 }
 
 /// A message that the host typed for the agent, such as a digest of events.

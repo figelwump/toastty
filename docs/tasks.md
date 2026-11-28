@@ -1524,13 +1524,14 @@ What is different from the terminal:
   summary it writes is not a message, and the next message starts one
   turn.
 - **A permission request or a question is a request with an ID.** It takes
-  one answer: the first that fits, from the Mac or a paired iPhone. An
-  iPhone that may approve requests answers with the card it has today.
-  The Mac's chat has no buttons for a permission request yet, and says so
-  while one waits. Until it has, set the coordinator's rules so that it
-  does not ask, or answer from the iPhone. The coordinator's row shows
-  that a request waits, and shows the agent as working again from the
-  moment of the answer.
+  one answer: the first that fits, from the Mac or a paired iPhone. The
+  Mac's chat shows a permission request as a card with the choices of the
+  iPhone's card: Allow once, Claude's "always allow" suggestions, and Deny.
+  After your answer, the card names the choice that the Mac sent. An
+  iPhone that may approve requests answers with its own card. A question's
+  card has no Show Terminal button, because nothing waits in the terminal.
+  The coordinator's row shows that a request waits, and shows the agent as
+  working again from the moment of the answer.
 - **The terminal of the coordinator's panel is a plain shell.** Keys typed
   there are not a draft and do not reach the agent.
 

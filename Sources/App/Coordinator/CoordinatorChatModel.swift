@@ -58,8 +58,8 @@ final class CoordinatorChatModel: ObservableObject {
         /// checks or fails with a reason; nothing of it waits in a terminal.
         case directAgentStarting
         /// The agent of a direct session asks for something that the chat
-        /// has no form for, such as a permission. The terminal cannot
-        /// answer it either: a paired iPhone can, and Stop withdraws it.
+        /// has no form for. The terminal cannot answer it either: a paired
+        /// iPhone can, and Stop withdraws it.
         case awaitingAnswerOutsideChat
         /// Text typed in the terminal may be in the agent's prompt. Messages
         /// and Toastty's digests wait for it. Keys that answered a question
@@ -84,7 +84,8 @@ final class CoordinatorChatModel: ObservableObject {
     @Published private(set) var summary: RemoteConversationSummary?
     @Published private(set) var interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
     /// The waiting requests that the chat has no form for: a permission
-    /// request, or a question that the answer form cannot show.
+    /// request in a terminal, or a question that the answer form cannot
+    /// show.
     @Published private(set) var pendingRequestsWithoutForm: Set<RemotePendingInteraction.ID> = []
     /// The composer's text. It is kept here so that it survives a switch to
     /// the terminal and back.
@@ -382,14 +383,24 @@ final class CoordinatorChatModel: ObservableObject {
         }
     }
 
+    /// Gives each waiting request that the chat can answer its form. A
+    /// question has one. A permission request has one only while the agent
+    /// is a direct session: a terminal's permission prompt takes its answer
+    /// in the terminal, and Toastty does not type it there.
     private func reconcileQuestionAnswers(_ pending: [RemotePendingInteraction]) {
         var updated: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
         var withoutForm: Set<RemotePendingInteraction.ID> = []
         defer {
             if withoutForm != pendingRequestsWithoutForm { pendingRequestsWithoutForm = withoutForm }
         }
+        let answersPermissions = controller?.status?.agentIsDirectSession == true
         for interaction in pending where interaction.state == .pending {
-            guard interaction.kind == .question,
+            let hasForm = switch interaction.kind {
+            case .question: true
+            case .permission: answersPermissions && interaction.permission != nil
+            case .structuredChoice, .freeForm: false
+            }
+            guard hasForm,
                   let responseID = interaction.responseID, !responseID.isEmpty,
                   let questions = interaction.questions, RemoteQuestionAnswerValidation.supports(questions) else {
                 withoutForm.insert(interaction.id)
@@ -402,6 +413,20 @@ final class CoordinatorChatModel: ObservableObject {
                 updated[interaction.id] = current
             } else {
                 updated[interaction.id] = ToasttyInteractionAnswerState(key: key, questions: questions)
+            }
+        }
+        // A permission request's resolution names no decision, so the card
+        // of one that this Mac answered keeps the decision it sent, while
+        // the card shows.
+        let answered = interactionAnswerStates.filter { updated[$0.key] == nil && $0.value.sentOptionID != nil }
+        if answered.isEmpty == false {
+            let shownPermissions = Set(presentation.rows.compactMap { row -> RemotePendingInteraction.ID? in
+                guard case .interaction(let card) = row.content, card.interaction.kind == .permission else { return nil }
+                return card.interaction.id
+            })
+            for (id, var state) in answered where shownPermissions.contains(id) {
+                state.status = .resolved([])
+                updated[id] = state
             }
         }
         if updated != interactionAnswerStates { interactionAnswerStates = updated }
@@ -428,6 +453,8 @@ final class CoordinatorChatModel: ObservableObject {
         switch subscription.answerQuestion(request) {
         case .submitted, .duplicate:
             state.status = .awaitingClaude
+            // The card names the decision that this Mac sent.
+            state.retryRequest = request
         case .rejected(reason: .invalidAnswers):
             state.status = .failed("Review every answer and try again.")
         case .rejected:

@@ -8,7 +8,7 @@ struct ToasttyPermissionRequestContent: View {
     let interaction: RemotePendingInteraction
     let permission: RemotePermissionRequestDetail
     let decision: RemoteInteractionQuestion
-    /// Present only while this phone can still answer.
+    /// Present only while this device can still answer.
     let answerState: ToasttyInteractionAnswerState?
     let sentOptionID: String?
     let readOnlyMessage: String
@@ -74,9 +74,11 @@ struct ToasttyPermissionRequestContent: View {
                 decisionButton(option, state: state, enabled: enabled)
             }
             statusView(state)
-            Label("You can also respond on the desktop", systemImage: "desktopcomputer")
-                .conversationFont(.caption)
-                .foregroundStyle(ConversationDesignTokens.mutedText)
+            if options.answeringDevice == .phone {
+                Label("You can also respond on the desktop", systemImage: "desktopcomputer")
+                    .conversationFont(.caption)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
+            }
         }
     }
 
@@ -138,12 +140,14 @@ struct ToasttyPermissionRequestContent: View {
         }
     }
 
-    /// No provider fact says which answer Claude took when the desktop
-    /// answered at the same moment, so the phone reports only what it sent.
+    /// No provider fact says which answer Claude took when another device
+    /// answered at the same moment, so a device reports only what it sent.
     @ViewBuilder
     private var outcome: some View {
         if let sentLabel {
-            Label("Sent from iPhone: \(sentLabel)", systemImage: "iphone")
+            let device = options.answeringDevice == .phone
+                ? (name: "iPhone", icon: "iphone") : (name: "this Mac", icon: "desktopcomputer")
+            Label("Sent from \(device.name): \(sentLabel)", systemImage: device.icon)
                 .conversationFont(.caption, weight: .semibold)
                 .foregroundStyle(interaction.state == .pending
                     ? ConversationDesignTokens.amberText : ConversationDesignTokens.secondaryText)
