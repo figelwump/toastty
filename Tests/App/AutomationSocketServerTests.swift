@@ -349,6 +349,16 @@ struct AutomationSocketServerSessionLifecycleTests: AutomationSocketServerTestSu
         let failed = await status()
         #expect(failed?.kind == .error)
         #expect(failed?.detail == "You've hit your usage limit.")
+
+        // A stop that Codex confirmed ends the turn's status too. Codex's
+        // rules for a terminal do not take a key as that end.
+        let stopped = await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionTurnStarted(sessionID: sessionID, at: Date())
+            return server.sessionRuntimeStore.noteDirectSessionTurnInterrupted(sessionID: sessionID, at: Date())
+        }
+        #expect(stopped)
+        let afterStop = await status()
+        #expect(afterStop?.kind == .idle)
     }
 
     @Test

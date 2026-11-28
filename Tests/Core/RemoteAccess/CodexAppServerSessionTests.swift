@@ -60,6 +60,27 @@ struct CodexAppServerSessionTests {
         #expect(started.map { $0["method"] as? String } == ["thread/start"])
     }
 
+    /// The account is Codex's own sign-in. A conversation that uses another
+    /// model provider, from the configuration or from the saved thread,
+    /// would bill that provider's key.
+    @Test func aThreadWithAnotherModelProviderFailsBeforeAnyMessage() {
+        var session = CodexAppServerSession(settings: .init(directory: "/work", resumeThreadID: Self.threadID), identity: "test")
+        _ = session.startLines()
+        _ = session.receive(line: Self.result(1, "{}"), at: Self.start)
+        _ = session.receive(line: Self.accountAnswer(2), at: Self.start)
+        let outputs = session.receive(
+            line: Self.threadAnswer(3).replacingOccurrences(of: #""modelProvider":"openai""#, with: #""modelProvider":"azure""#),
+            at: Self.start
+        )
+        guard case .failed(let reason)? = outputs.first else {
+            Issue.record("Expected the start to fail, got \(outputs)")
+            return
+        }
+        #expect(reason.contains(#"model provider "azure""#))
+        let refused = session.messageLine(text: "hello", clientRequestID: "m1")
+        #expect(refused == nil)
+    }
+
     @Test func theThreadRequestCarriesTheSettingsAndTheAnswerOpensThePrompt() throws {
         var session = CodexAppServerSession(
             settings: .init(directory: "/work", model: "gpt-6.2-sol", approvalPolicy: "on-request", sandbox: "workspace-write"),
@@ -130,10 +151,11 @@ struct CodexAppServerSessionTests {
         #expect(params["clientUserMessageId"] as? String == "m1")
         let requestID = try #require(line["id"] as? Int)
 
+        // Codex's answer to the request starts no turn: its own report does.
         var outputs = session.receive(line: Self.result(requestID, #"{"turn":{"id":"turn-1","status":"inProgress"}}"#), at: Self.start)
-        #expect(outputs.contains(.turnStarted))
-        // Codex says the same again as a notification. One turn started.
-        outputs += session.receive(line: Self.turnStarted("turn-1"), at: Self.start)
+        #expect(outputs.isEmpty)
+        #expect(session.isTurnRunning == false)
+        outputs = session.receive(line: Self.turnStarted("turn-1"), at: Self.start)
         #expect(outputs.filter { $0 == .turnStarted }.count == 1)
         #expect(session.isTurnRunning)
         Self.ingest(outputs, into: &projector)
@@ -293,6 +315,11 @@ struct CodexAppServerSessionTests {
         // The end of a turn that does not run changes nothing.
         let again = session.receive(line: Self.turnCompleted("turn-1", status: "completed"), at: Self.start)
         #expect(again.isEmpty)
+        // Codex can answer the request that started a turn after the turn's
+        // end. The answer does not start the turn a second time.
+        let lateAnswer = session.receive(line: Self.result(4, #"{"turn":{"id":"turn-1","status":"inProgress"}}"#), at: Self.start)
+        #expect(lateAnswer.isEmpty)
+        #expect(session.isTurnRunning == false)
         _ = session.receive(line: Self.turnStarted("turn-2"), at: Self.start)
         let other = session.receive(line: Self.turnCompleted("turn-1", status: "completed"), at: Self.start)
         #expect(other.isEmpty)
@@ -483,6 +510,35 @@ struct CodexAppServerSessionTests {
         #expect(interaction.permission?.toolName == "File change")
         #expect(interaction.permission?.preview == "add /work/notes.txt\n+hello")
         #expect(interaction.options.map(\.id) == ["allow", "deny"])
+
+        // A move shows where the file goes.
+        let move = #"{"method":"item/started","params":{"threadId":"\#(Self.threadID)","turnId":"turn-1","item":{"type":"fileChange","id":"patch-2","status":"inProgress","changes":[{"path":"/work/notes.txt","kind":{"type":"update","move_path":"/Users/me/.zshrc"},"diff":"-a\n+b"}]}}}"#
+        _ = session.receive(line: move, at: Self.start)
+        let moveApproval = approval.replacingOccurrences(of: "patch-1", with: "patch-2").replacingOccurrences(of: #""id":1"#, with: #""id":2"#)
+        Self.ingest(session.receive(line: moveApproval, at: Self.start), into: &projector)
+        #expect(projector.pendingInteractions.last?.permission?.preview
+            == "update /work/notes.txt (moved to /Users/me/.zshrc)\n-a\n+b")
+    }
+
+    @Test func twoRequestsWaitAndEachTakesItsOwnAnswer() throws {
+        var session = Self.readySession()
+        _ = session.receive(line: Self.turnStarted("turn-1"), at: Self.start)
+        _ = session.receive(line: Self.commandApproval(id: 0), at: Self.start)
+        _ = session.receive(
+            line: Self.commandApproval(id: 1).replacingOccurrences(of: "exec-1", with: "exec-2"),
+            at: Self.start
+        )
+        let responseIDs = session.pendingResponseIDs
+        #expect(responseIDs.count == 2)
+        // The newer one first: the older one still waits, and the status says so.
+        guard case .submitted(let line, _) = session.answer(responseID: responseIDs[1], answers: [Self.choice("allow")], at: Self.start) else {
+            Issue.record("Expected the newer request's answer to be taken")
+            return
+        }
+        let answer = try Self.object(line)
+        #expect(answer["id"] as? Int == 1)
+        #expect(session.waitingRequest?.requestID == responseIDs[0])
+        #expect(session.pendingResponseIDs == [responseIDs[0]])
     }
 
     @Test func aRequestTooLongToShowIsDeclined() throws {
@@ -659,7 +715,7 @@ struct CodexAppServerSessionTests {
     }
 
     static func threadAnswer(_ id: Int) -> String {
-        result(id, #"{"thread":{"id":"\#(threadID)","sessionId":"\#(threadID)","path":"\#(rolloutPath)","cliVersion":"0.172.0","status":{"type":"idle"},"turns":[]},"model":"gpt-6.2-sol","reasoningEffort":"high","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite"}}"#)
+        result(id, #"{"thread":{"id":"\#(threadID)","sessionId":"\#(threadID)","path":"\#(rolloutPath)","cliVersion":"0.172.0","status":{"type":"idle"},"turns":[]},"model":"gpt-6.2-sol","modelProvider":"openai","reasoningEffort":"high","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite"}}"#)
     }
 
     static func turnStarted(_ turnID: String) -> String {
@@ -726,7 +782,7 @@ struct CodexAppServerLaunchTests {
         let made = try CodexAppServerLaunch.make(
             plannedArguments: [
                 "sv", "exec", "--", "codex", "--profile", "toastty-managed",
-                "resume", "01a2234b-8287-7073-baa9-707e6972a2c1", "--model", "gpt-6.2-sol", "--full-auto",
+                "resume", "01a2234b-8287-7073-baa9-707e6972a2c1", "--model", "gpt-6.2-sol", "--yolo",
             ],
             managedProfile: ("toastty-managed", []),
             baseEnvironment: [:], terminalEnvironment: [:], plannedEnvironment: [:],
@@ -737,8 +793,8 @@ struct CodexAppServerLaunchTests {
             directory: "/work",
             resumeThreadID: "01a2234b-8287-7073-baa9-707e6972a2c1",
             model: "gpt-6.2-sol",
-            approvalPolicy: "on-request",
-            sandbox: "workspace-write"
+            approvalPolicy: "never",
+            sandbox: "danger-full-access"
         ))
     }
 
@@ -753,6 +809,10 @@ struct CodexAppServerLaunchTests {
         }
         #expect(throws: CodexAppServerLaunch.LaunchError.unsupportedArgument("--search")) {
             try make(["codex", "--search"])
+        }
+        // Codex 0.172.0 has no such option any more.
+        #expect(throws: CodexAppServerLaunch.LaunchError.unsupportedArgument("--full-auto")) {
+            try make(["codex", "--full-auto"])
         }
         // Only the profile file that Toastty wrote is known.
         #expect(throws: CodexAppServerLaunch.LaunchError.unsupportedArgument("--profile work")) {

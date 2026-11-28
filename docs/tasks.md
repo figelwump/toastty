@@ -1616,7 +1616,7 @@ What Codex does as Claude does:
   coordinator's workspace ends the process; Codex ends by itself when its
   input closes.
 
-Before the first message, Toastty checks two things and fails the start
+Before the first message, Toastty checks three things and fails the start
 with the reason when one does not hold:
 
 1. Codex uses your ChatGPT plan sign-in. Toastty removes `OPENAI_API_KEY`
@@ -1624,9 +1624,13 @@ with the reason when one does not hold:
    session if the sign-in changes to an API key.
 2. Codex offers Toastty's coordinator skill, when Toastty delivered its
    skills to this launch.
+3. The conversation uses Codex's own model provider (`openai`), which is
+   the one that the plan sign-in pays for. A provider from your
+   configuration, or from a saved conversation, would bill a key of its
+   own.
 
-Codex then names its conversation and its rollout file in its own answer,
-so the start needs no hook.
+Codex names its conversation and its rollout file in its own answer, so
+the start needs no hook.
 
 The launch is the one that a terminal launch types, moved to what the
 app-server takes: configuration values (`-c`), `--enable` and `--disable`

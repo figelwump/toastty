@@ -77,6 +77,9 @@ public struct CodexAppServerSession: DirectSessionDriver {
         }
     }
 
+    /// Codex's own model provider, which uses the ChatGPT plan sign-in.
+    static let planProvider = "openai"
+
     /// The text of a message that asks Codex to compact the conversation.
     /// Codex's terminal reads it as a command. The app-server has a request
     /// for it, and would give the text to the model as a message.
@@ -434,6 +437,16 @@ public struct CodexAppServerSession: DirectSessionDriver {
                   let path = Self.nonEmptyString(thread["path"]) else {
                 return fail("Codex gave Toastty no saved conversation to work in. Toastty sent it no message.")
             }
+            // The account is the sign-in of Codex's own provider. A thread
+            // can use another provider, from the configuration or from the
+            // saved conversation, and that one bills a key of its own.
+            let provider = Self.nonEmptyString(result["modelProvider"])
+            if requirements.requiresPlanSignIn, provider != Self.planProvider {
+                return fail(
+                    "Codex would use the model provider \"\(provider ?? "unknown")\" for this conversation, and not the "
+                        + "ChatGPT plan. Toastty sent it no message."
+                )
+            }
             let conversation = DirectSessionConversation(nativeSessionID: threadID, transcriptPath: path)
             self.conversation = conversation
             phase = .ready
@@ -455,8 +468,9 @@ public struct CodexAppServerSession: DirectSessionDriver {
             return [.conversation(conversation), .ready(details: startDetails), .observations(observations)]
 
         case .turnStart:
-            guard let turn = result["turn"] as? [String: Any], let turnID = Self.nonEmptyString(turn["id"]) else { return [] }
-            return turnStartedOutputs(turnID: turnID, at: date)
+            // Codex reports the turn's start by itself, and can report the
+            // turn's end before this answer.
+            return []
 
         case .compact(let clientRequestID):
             // Codex writes no user message for this request. Its answer is
@@ -750,15 +764,20 @@ public struct CodexAppServerSession: DirectSessionDriver {
         let outcome = exitCode.map { "Process exited with code \($0)" } ?? (item["status"] as? String ?? "")
         let argumentsText = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys, .withoutEscapingSlashes]))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        return (name, argumentsText, result.isEmpty ? outcome : "\(result)\n\(outcome)")
+        // The outcome comes first: the parser reads the first such line,
+        // and a command's own output could hold one.
+        return (name, argumentsText, result.isEmpty ? outcome : "\(outcome)\n\(result)")
     }
 
     private static func fileChangePreview(_ value: Any?) -> String {
         (value as? [[String: Any]] ?? []).map { change in
-            let kind = (change["kind"] as? [String: Any])?["type"] as? String ?? "change"
-            let path = change["path"] as? String ?? "a file"
+            let kind = change["kind"] as? [String: Any]
+            var title = "\(kind?["type"] as? String ?? "change") \(change["path"] as? String ?? "a file")"
+            if let destination = nonEmptyString(kind?["move_path"]) {
+                title += " (moved to \(destination))"
+            }
             let diff = change["diff"] as? String ?? ""
-            return diff.isEmpty ? "\(kind) \(path)" : "\(kind) \(path)\n\(diff)"
+            return diff.isEmpty ? title : "\(title)\n\(diff)"
         }.joined(separator: "\n\n")
     }
 

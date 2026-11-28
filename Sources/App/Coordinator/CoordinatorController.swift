@@ -1891,10 +1891,13 @@ final class CoordinatorController: ObservableObject {
               let location, let panelID = location.panelID,
               resumesAsDirectSession(panelID: panelID),
               session == nil else { return }
+        // The agent of the saved conversation, which can be another one
+        // than the configured agent: a restart can name its agent.
+        let agent = savedWorkspaceRecord?.directSession?.agentKind.rawValue
         Task { @MainActor [weak self] in
             guard let self, let location = self.location, location.panelID == panelID,
                   self.session == nil, self.isStarting == false else { return }
-            _ = try? await self.startAgent(location, replacingBusyTerminal: false, agent: nil)
+            _ = try? await self.startAgent(location, replacingBusyTerminal: false, agent: agent)
         }
     }
 

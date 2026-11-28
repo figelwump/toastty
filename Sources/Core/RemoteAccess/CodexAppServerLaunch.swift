@@ -116,9 +116,6 @@ public enum CodexAppServerLaunch {
                 settings.sandbox = try value(of: name, attached: attached)
             case "-a", "--ask-for-approval":
                 settings.approvalPolicy = try value(of: name, attached: attached)
-            case "--full-auto" where attached == nil:
-                settings.approvalPolicy = "on-request"
-                settings.sandbox = "workspace-write"
             case "--dangerously-bypass-approvals-and-sandbox" where attached == nil, "--yolo" where attached == nil:
                 settings.approvalPolicy = "never"
                 settings.sandbox = "danger-full-access"

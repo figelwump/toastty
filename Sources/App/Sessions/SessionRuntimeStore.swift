@@ -6237,6 +6237,9 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     func handleCodexTerminalPermissionReport(_ event: TerminalProgramStatusEvent, record: SessionRecord, at now: Date) {
         guard record.agent == .codex,
               record.usesSessionStatusNotifications,
+              // A program in the shell of a direct session's terminal is
+              // not the session's agent.
+              directSessionIDs.contains(record.sessionID) == false,
               !programStatusRuntime.fallbackSessionIDs.contains(record.sessionID) else { return }
 
         if case .report(let report) = event {
@@ -6399,6 +6402,14 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     func noteDirectSessionTurnInterrupted(sessionID: String, at now: Date) -> Bool {
         guard directSessionIDs.contains(sessionID),
               let record = sessionRegistry.activeSession(sessionID: sessionID) else { return false }
+        if takesStatusFromItsProcess(sessionID: sessionID) {
+            // Codex's status rules do not take an Escape key as the end of
+            // a turn: in a terminal, Codex's own report follows. Here the
+            // process's report is this call.
+            guard record.status?.kind == .working || record.status?.kind == .needsApproval else { return false }
+            updateStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: now)
+            return true
+        }
         return handleLocalInterrupt(record: record, kind: .escape, at: now)
     }
 

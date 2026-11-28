@@ -5317,7 +5317,7 @@ final class DirectSessionStandIn: DirectConversationSession {
         _ = model.startLines()
         agentWrites(#"{"id":1,"result":{}}"#)
         agentWrites(#"{"id":2,"result":{"account":{"type":"chatgpt","planType":"pro"}}}"#)
-        agentWrites(#"{"id":3,"result":{"thread":{"id":"thread-direct","path":"/tmp/rollout-thread-direct.jsonl","cliVersion":"0.172.0"},"model":"gpt-6.2-sol","approvalPolicy":"on-request","approvalsReviewer":"user"}}"#)
+        agentWrites(#"{"id":3,"result":{"thread":{"id":"thread-direct","path":"/tmp/rollout-thread-direct.jsonl","cliVersion":"0.172.0"},"model":"gpt-6.2-sol","modelProvider":"openai","approvalPolicy":"on-request","approvalsReviewer":"user"}}"#)
     }
 
     var acceptsInput: Bool { model.phase == .ready }
@@ -5332,7 +5332,8 @@ final class DirectSessionStandIn: DirectConversationSession {
 
     /// The last line that Toastty wrote for the agent, as an object.
     func lastWritten() throws -> [String: Any] {
-        try #require(JSONSerialization.jsonObject(with: Data(try #require(written.last).utf8)) as? [String: Any])
+        let line = try #require(written.last)
+        return try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
     }
 
     /// Claude's ID of the last message that Toastty wrote.
@@ -5484,6 +5485,7 @@ extension RemoteAccessServiceSafetyTests {
         let turnStartID = try #require(turnStart["id"] as? Int)
 
         session.agentWrites(#"{"id":\#(turnStartID),"result":{"turn":{"id":"turn-1","status":"inProgress"}}}"#)
+        session.agentWrites(#"{"method":"turn/started","params":{"threadId":"thread-direct","turn":{"id":"turn-1","status":"inProgress"}}}"#)
         #expect(fixture.summary.state == .working)
         session.agentWrites(#"{"method":"item/completed","params":{"threadId":"thread-direct","turnId":"turn-1","item":{"type":"userMessage","id":"item-u1","clientId":"phone-1","content":[{"type":"text","text":"Push the branch"}]}}}"#)
         try await Self.waitForReceipt("phone-1", mode: nil, in: fixture)
