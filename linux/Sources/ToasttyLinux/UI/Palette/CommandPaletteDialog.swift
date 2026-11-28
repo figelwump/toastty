@@ -1,4 +1,5 @@
 import CGtk
+import CGtkShim
 import Foundation
 
 /// Centered command palette: an `AdwDialog` with a search entry and a
@@ -116,7 +117,7 @@ public final class CommandPaletteDialog {
         }
         Gtk.append(row, text)
         if let accelerator = item.accelerator {
-            let shortcut = adw_shortcut_label_new(accelerator)!
+            let shortcut = toastty_shortcut_label_new(accelerator)!
             gtk_widget_set_valign(shortcut, GTK_ALIGN_CENTER)
             Gtk.append(row, shortcut)
         }

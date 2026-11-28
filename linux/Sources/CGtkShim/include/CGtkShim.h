@@ -64,4 +64,14 @@ void toastty_signal_emit_void(gpointer instance, const char *signal_name);
 // again at 0°). CSS node "spinner", class "clock-spinner". ClockSpinner.c.
 GtkWidget *toastty_clock_spinner_new(void);
 
+// Keep the newer Adwaita widgets on recent distributions and use their GTK /
+// Adwaita 1.5 equivalents on Ubuntu 24.04.
+GtkWidget *toastty_adw_button_row_new(const char *title, const char *icon_name);
+GtkWidget *toastty_shortcut_label_new(const char *accelerator);
+GtkWidget *toastty_shortcuts_dialog_new(void);
+gpointer toastty_shortcuts_dialog_add_section(GtkWidget *dialog, const char *title);
+void toastty_shortcuts_section_add(gpointer section, const char *title, const char *accelerator);
+void toastty_shortcuts_dialog_present(GtkWidget *dialog, GtkWidget *parent);
+const char *toastty_adw_accent_name(void);
+
 G_END_DECLS

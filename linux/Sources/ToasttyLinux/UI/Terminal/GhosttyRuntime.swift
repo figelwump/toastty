@@ -242,7 +242,7 @@ final class GhosttyRuntime {
             g_object_unref(UnsafeMutableRawPointer(hostStyleProvider))
         }
         let provider = gtk_css_provider_new()!
-        gtk_css_provider_load_from_string(provider, css)
+        gtk_css_provider_load_from_string(provider, LinuxTheme.compatibleCSS(css))
         gtk_style_context_add_provider_for_display(display, OpaquePointer(provider), guint(GTK_STYLE_PROVIDER_PRIORITY_APPLICATION) + 1)
         hostStyleProvider = OpaquePointer(provider)
     }

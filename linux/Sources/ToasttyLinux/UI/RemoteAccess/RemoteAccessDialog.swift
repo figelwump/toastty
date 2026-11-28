@@ -100,7 +100,7 @@ public final class RemoteAccessDialog {
         adw_action_row_set_subtitle(cast(state), status.detail)
         let indicator = Gtk.image(Self.icon(for: status.indicator), pixelSize: 16, classes: [Self.cssClass(for: status.indicator)])
         if status.indicator == .progress {
-            let spinner = adw_spinner_new()!
+            let spinner = toastty_clock_spinner_new()!
             adw_action_row_add_prefix(cast(state), spinner)
         } else {
             adw_action_row_add_prefix(cast(state), indicator)
@@ -140,9 +140,7 @@ public final class RemoteAccessDialog {
             adw_preferences_group_add(cast(group), origin)
 
             if status.isReady == false || status.indicator == .failure {
-                let setup = adw_button_row_new()!
-                adw_preferences_row_set_title(cast(setup), "Set Up Tailscale Serve")
-                adw_button_row_set_start_icon_name(cast(setup), "view-refresh-symbolic")
+                let setup = toastty_adw_button_row_new("Set Up Tailscale Serve", "view-refresh-symbolic")!
                 Signal.connect(setup, "activated") { [weak self] in self?.logic.retryRemoteAccessTailnetSetup() }
                 adw_preferences_group_add(cast(group), setup)
             }
@@ -186,9 +184,7 @@ public final class RemoteAccessDialog {
             Gtk.append(box, buttons)
             adw_preferences_group_add(cast(group), box)
         } else {
-            let pair = adw_button_row_new()!
-            adw_preferences_row_set_title(cast(pair), "Show Pairing Code")
-            adw_button_row_set_start_icon_name(cast(pair), "phone-symbolic")
+            let pair = toastty_adw_button_row_new("Show Pairing Code", "phone-symbolic")!
             gtk_widget_set_sensitive(pair, status.canIssuePairingOffer.gboolean)
             Signal.connect(pair, "activated") { [weak self] in self?.logic.issueRemoteAccessPairingOffer() }
             adw_preferences_group_add(cast(group), pair)
@@ -212,8 +208,7 @@ public final class RemoteAccessDialog {
             adw_preferences_group_add(cast(group), row)
         }
         if devices.count > 1 {
-            let all = adw_button_row_new()!
-            adw_preferences_row_set_title(cast(all), "Revoke All Devices")
+            let all = toastty_adw_button_row_new("Revoke All Devices", nil)!
             Gtk.addClasses(all, ["destructive-action"])
             Signal.connect(all, "activated") { [weak self] in
                 guard let self else { return }

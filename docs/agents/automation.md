@@ -6,13 +6,15 @@ The smoke scripts (`smoke-ui`, `workspace-tabs`, `workspace-scope`, `smoke-cli-l
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. Hosted CI is mostly manual: one developer works on Toastty, and the task's own toastty-mini runs are the review check.
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**.
 
-- **On every PR**, Toastty CI runs only **CI workflow tests** (`npm test --prefix Tests/CI` on Linux, about a minute) and the **CI gate**. Branch protection on `main` requires the **CI gate** check, so this part must stay. A newer PR commit cancels that PR's older run.
-- **On manual dispatch**, it runs every job: **Script tests**, **Web panel tests**, **macOS contract tests**, and **iOS tests** in Debug and Release. Full dispatches have separate groups so they can retain evidence for their own source.
+- **On every PR**, Toastty CI runs its workflow tests and native desktop validation on GitHub-hosted macOS 26 (arm64), Ubuntu 24.04 and Ubuntu 26.04 (both x64). A newer PR commit cancels that PR's older run.
+- **On manual dispatch**, it also runs **Script tests**, **Web panel tests**, and **iOS tests** in Debug and Release. Full dispatches have separate groups so they can retain evidence for their own source.
 - There is no nightly schedule.
 
-The **CI gate** requires the workflow tests on every run. On a PR it also requires every test job to be skipped; on a manual run it requires every job to pass. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs the gate's shell logic locally without launching an app.
+The **CI gate** is the stable check name required by `main`. It requires the workflow tests and all three desktop jobs on every run. The manual-only jobs must be skipped on PRs and pass on manual runs. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` tests the gate's shell logic without launching an app.
+
+The Mac job builds the documented GhosttyKit revision, runs Debug XCTest, builds an unsigned Release app, and runs UI, workspace-tab, workspace-scope, and shortcut-hint smoke checks. Hosted builds opt out of the push relay and distribution signing. Both Linux jobs build libghostty with the distribution's native GTK stack and run `scripts/linux/check.sh`, including Debug and Release builds, private Broadway UI smoke, the Tasks end-to-end flow, Swift tests, and launch checks for the `.deb` and AppImage. CI uploads test results and smoke evidence, not signed releases or DerivedData. Broadway does not exercise the hardware OpenGL path.
 
 The separate `.github/workflows/push-worker.yml` runs the push-worker checks and bundle dry runs only by manual dispatch (`gh workflow run push-worker.yml --ref <branch>`). For push-worker changes, run `npm run check` in `workers/push` locally or start the workflow. The `iOS TestFlight` archive/upload workflow is also manual-only.
 

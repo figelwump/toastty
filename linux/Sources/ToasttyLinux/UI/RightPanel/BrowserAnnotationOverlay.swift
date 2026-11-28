@@ -695,7 +695,7 @@ private enum AnnotationStyles {
         guard installed == false, let display = gdk_display_get_default() else { return }
         installed = true
         let provider = gtk_css_provider_new()!
-        gtk_css_provider_load_from_string(provider, css)
+        gtk_css_provider_load_from_string(provider, LinuxTheme.compatibleCSS(css))
         gtk_style_context_add_provider_for_display(display, OpaquePointer(provider), guint(GTK_STYLE_PROVIDER_PRIORITY_APPLICATION))
     }
 

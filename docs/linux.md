@@ -1,6 +1,6 @@
 # Toastty on Linux
 
-Working notes for the Ubuntu port (branch `feat/linux-port`). The plan and
+Working notes for the Ubuntu port. The plan and
 architecture live in `docs/plans/linux-port.md`; this file covers how to build
 and test, and which shared files carry Linux-specific code.
 
@@ -9,6 +9,11 @@ and test, and which shared files carry Linux-specific code.
 No root is required. `source linux/env.sh` puts Swift 6.4.1
 (`~/.local/toolchains/swift-6.4.1-RELEASE-ubuntu26.04`) on `PATH` and points
 `PKG_CONFIG_PATH` at `linux/.sysroot`. The scripts below source it themselves.
+
+GitHub's desktop CI builds and runs Toastty on stock x64 Ubuntu 24.04 and
+26.04, using the Swift 6.4.1 toolchain for each distribution and its native
+GTK, libadwaita, and WebKitGTK packages. Ubuntu 24.04 uses compatibility
+widgets and CSS for its GTK 4.14/libadwaita 1.5 stack.
 
 ## Build
 

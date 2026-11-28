@@ -1,4 +1,5 @@
 import CGtk
+import CGtkShim
 import CoreState
 import Foundation
 
@@ -312,26 +313,25 @@ public final class PreferencesDialog {
     }
 }
 
-/// Keyboard shortcuts help (`AdwShortcutsDialog`), generated from
+/// Keyboard shortcuts help, generated from
 /// `LinuxCommandTable`.
 @MainActor
 public enum ShortcutsDialog {
     public static func make() -> WidgetPtr {
-        let dialog = adw_shortcuts_dialog_new()!
+        let dialog = toastty_shortcuts_dialog_new()!
         for section in LinuxShortcutSection.allCases {
-            let sectionWidget = adw_shortcuts_section_new(section.rawValue)!
+            let sectionWidget = toastty_shortcuts_dialog_add_section(dialog, section.rawValue)
             var added = Set<String>()
             for binding in LinuxCommandTable.all where binding.section == section && binding.accelerators.isEmpty == false {
                 let family = numberedFamily(binding.id)
                 if let family {
                     guard added.insert(family.key).inserted else { continue }
-                    adw_shortcuts_section_add(sectionWidget, adw_shortcuts_item_new(family.title, family.accelerators))
+                    toastty_shortcuts_section_add(sectionWidget, family.title, family.accelerators)
                 } else {
                     let accelerators = binding.accelerators.joined(separator: " ")
-                    adw_shortcuts_section_add(sectionWidget, adw_shortcuts_item_new(binding.title, accelerators))
+                    toastty_shortcuts_section_add(sectionWidget, binding.title, accelerators)
                 }
             }
-            adw_shortcuts_dialog_add(cast(dialog), sectionWidget)
         }
         return widget(dialog)
     }

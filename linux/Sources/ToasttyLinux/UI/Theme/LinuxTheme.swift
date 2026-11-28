@@ -1,4 +1,5 @@
 import CGtk
+import CGtkShim
 import Foundation
 
 public enum LinuxColorSchemePreference: String, CaseIterable, Sendable {
@@ -34,7 +35,7 @@ public enum LinuxTheme {
     public static func install() {
         guard provider == nil, let display = gdk_display_get_default() else { return }
         let cssProvider = gtk_css_provider_new()!
-        gtk_css_provider_load_from_string(cssProvider, css)
+        gtk_css_provider_load_from_string(cssProvider, compatibleCSS(css))
         gtk_style_context_add_provider_for_display(display, OpaquePointer(cssProvider), guint(GTK_STYLE_PROVIDER_PRIORITY_APPLICATION))
         provider = OpaquePointer(cssProvider)
     }
@@ -56,17 +57,34 @@ public enum LinuxTheme {
     /// Name of the current system accent (`blue`, `teal`, … ; Ubuntu's Yaru
     /// accents map onto these through the portal).
     public static var accentName: String {
-        switch adw_style_manager_get_accent_color(adw_style_manager_get_default()) {
-        case ADW_ACCENT_COLOR_BLUE: return "blue"
-        case ADW_ACCENT_COLOR_TEAL: return "teal"
-        case ADW_ACCENT_COLOR_GREEN: return "green"
-        case ADW_ACCENT_COLOR_YELLOW: return "yellow"
-        case ADW_ACCENT_COLOR_ORANGE: return "orange"
-        case ADW_ACCENT_COLOR_RED: return "red"
-        case ADW_ACCENT_COLOR_PINK: return "pink"
-        case ADW_ACCENT_COLOR_PURPLE: return "purple"
-        case ADW_ACCENT_COLOR_SLATE: return "slate"
-        default: return "unknown"
+        String(cString: toastty_adw_accent_name())
+    }
+
+    /// GTK 4.14 (Ubuntu 24.04) only understands symbolic colors and its
+    /// original shade/alpha functions. Translate our small, fixed palette
+    /// vocabulary on that GTK, including CSS loaded by the other providers.
+    static func compatibleCSS(_ css: String) -> String {
+        guard gtk_check_version(4, 16, 0) != nil else { return css }
+        let references = /var\(--([a-z-]+)\)/
+        var result = css.replacing(references) { match in
+            let name = String(match.1)
+            if name == "toastty-card-radius" { return "12px" }
+            return "@" + name.replacingOccurrences(of: "-", with: "_")
+        }
+        // The modern scoped accent overrides used by suggested-action
+        // buttons have no direct equivalent in GTK 4.14.
+        result = result.replacing(/(?s)\.task-success-action \{.*?\}/, with: """
+        .task-success-action { background-color: shade(@success_bg_color, 0.65); color: @success_fg_color; }
+        .task-success-action:hover { background-color: shade(@success_bg_color, 0.75); }
+        """)
+        let palettes = /(?s):root \{(.*?)\}/
+        result = result.replacing(palettes) { palette in
+            palette.1.matches(of: /--(toastty-[a-z-]+): (#[a-f0-9]+);/).map { declaration in
+                "@define-color \(declaration.1.replacingOccurrences(of: "-", with: "_")) \(declaration.2);"
+            }.joined(separator: "\n")
+        }
+        return result.replacing(/color-mix\(in srgb, ([@#][a-z_0-9]+) ([0-9]+)%, transparent\)/) { match in
+            "alpha(\(match.1), \(Double(match.2)! / 100))"
         }
     }
 

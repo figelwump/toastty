@@ -726,7 +726,7 @@ public final class LinuxWindowController {
                 self?.perform(id)
             }.present(over: window)
         case .shortcuts:
-            adw_dialog_present(cast(ShortcutsDialog.make()), window)
+            toastty_shortcuts_dialog_present(ShortcutsDialog.make(), window)
         case .about:
             AboutDialog.present(over: window)
         case .toggleFullscreen:
