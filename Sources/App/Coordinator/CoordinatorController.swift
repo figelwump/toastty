@@ -269,6 +269,21 @@ final class CoordinatorController: ObservableObject {
     /// The coordinator's agent as a process of Toastty's own, while one
     /// runs. See `ClaudeDirectSession`.
     private var directSession: ClaudeDirectSession?
+    /// The direct session's messages whose turn has not ended, with who
+    /// sent each, as `CoordinatorWorkspaceRecord` saves them. After a quit,
+    /// or after the process ended by itself, they wait here for the next
+    /// start of the conversation (`recoverDirectTurn`).
+    private var directMessagesInTurn: [CoordinatorWorkspaceRecord.UnfinishedMessage] = []
+    /// The entry that this controller gives the direct session in this
+    /// moment, so that the session's report of the message says whether a
+    /// person sent it. A message that the session reports without it came
+    /// from a paired phone.
+    private var directSendInProgress: QueuedEntry?
+    /// The message whose turn a quit or a crash cut off, while the chat
+    /// says so: from the last start of the direct session's conversation
+    /// until the user dismisses it, sends it again or sends another
+    /// message. Saved, so a relaunch keeps it.
+    @Published private(set) var cutOffMessage: CoordinatorWorkspaceRecord.UnfinishedMessage?
 
     /// Takes the direct session's observations and gives it its input. Set
     /// once the app has it. A coordinator whose direct session Toastty
@@ -304,6 +319,11 @@ final class CoordinatorController: ObservableObject {
         /// have it already. It waits with the paused entries until the
         /// user sends it again or removes it.
         var typingWasInterrupted = false
+        /// A direct session's process got this entry, Toastty quit before
+        /// Claude took it, and Claude's transcript does not have it: the
+        /// coordinator never got it. It waits with the paused entries until
+        /// the user sends it again or removes it.
+        var quitBeforeTaken = false
         /// The folders of attached files that the message owns, by name
         /// (`CoordinatorAttachments`): its own, and the folders of the
         /// copies that it carried over from an Edit. Remove deletes these
@@ -316,12 +336,14 @@ final class CoordinatorController: ObservableObject {
             text: String,
             byUser: Bool,
             typingWasInterrupted: Bool = false,
+            quitBeforeTaken: Bool = false,
             attachmentFolders: [String]? = nil
         ) {
             self.id = id
             self.text = text
             self.byUser = byUser
             self.typingWasInterrupted = typingWasInterrupted
+            self.quitBeforeTaken = quitBeforeTaken
             var folders = [id]
             for folder in attachmentFolders ?? [] where folders.contains(folder) == false {
                 folders.append(folder)
@@ -640,6 +662,12 @@ final class CoordinatorController: ObservableObject {
             }
             let workspaceID = nextState.coordinatorWorkspaceID
             guard previousState.coordinatorWorkspaceID != workspaceID else { return }
+            // The unfinished turn belonged to the conversation of the
+            // coordinator that closed, as did its saved record.
+            if previousState.coordinatorWorkspaceID != nil {
+                self?.directMessagesInTurn = []
+                self?.cutOffMessage = nil
+            }
             // A coordinator opened later starts with the chat.
             self?.showsTerminal = false
             self?.onWorkspaceChange?(workspaceID)
@@ -671,6 +699,8 @@ final class CoordinatorController: ObservableObject {
     private func restoreWorkspaceMark() {
         guard let workspaceFileURL else { return }
         savedWorkspaceRecord = CoordinatorWorkspaceRecord.load(from: workspaceFileURL)
+        directMessagesInTurn = savedWorkspaceRecord?.directSession?.messagesInTurn ?? []
+        cutOffMessage = savedWorkspaceRecord?.directSession?.cutOffMessage
         guard store.state.coordinator == nil, let saved = savedWorkspaceRecord,
               store.send(.restoreCoordinatorWorkspace(workspaceID: saved.workspaceID, panelID: saved.panelID)) else { return }
         ToasttyLog.warning("Restored the coordinator's mark, which the saved layout had lost", category: .tasks, metadata: [
@@ -692,6 +722,13 @@ final class CoordinatorController: ObservableObject {
                     ? savedWorkspaceRecord?.directSession
                     : nil
             )
+        }
+        // The unfinished turn belongs to the saved conversation. Without it,
+        // and without a process that reports its own, it is another
+        // coordinator's.
+        if record?.directSession == nil, directSession == nil {
+            directMessagesInTurn = []
+            cutOffMessage = nil
         }
         guard record != savedWorkspaceRecord else { return }
         do {
@@ -1558,6 +1595,15 @@ final class CoordinatorController: ObservableObject {
         let resume = replacingBusyTerminal
             ? nil
             : directSessionToResume(panelID: location.panelID, workspaceID: location.workspaceID)
+        // What the last process of the conversation left unfinished, before
+        // a new process can take a message. A process that still runs
+        // reports its own messages: a Restart ends it only once the new one
+        // started.
+        if directSession == nil {
+            recoverDirectTurn(resumes: resume != nil)
+        } else if resume == nil {
+            cutOffMessage = nil
+        }
         let previous = directSession
         let terminal = try terminalForStart(location, directory: directory, replacingBusyTerminal: replacingBusyTerminal)
         let plan: ManagedAgentLaunchPlan
@@ -1608,8 +1654,14 @@ final class CoordinatorController: ObservableObject {
                     at: self.now()
                 )
             },
+            onMessagesInTurnChange: { [weak self] messages in
+                self?.noteDirectMessagesInTurn(messages, sessionID: plan.sessionID)
+            },
             onEnd: { [weak self] reason in self?.directSessionEnded(sessionID: plan.sessionID, reason: reason) }
         )
+        // The new process's turn starts empty. A process that goes on after
+        // a failed start keeps its own list.
+        let previousMessages = directMessagesInTurn
         do {
             let launch = try ClaudeStreamLaunch.make(
                 plannedArguments: plan.argv,
@@ -1619,6 +1671,7 @@ final class CoordinatorController: ObservableObject {
                 plannedEnvironment: plan.environment,
                 directory: directory
             )
+            directMessagesInTurn = []
             directSession = session
             directSessionHost.attachDirectSession(session)
             try session.start(launch: launch)
@@ -1631,6 +1684,8 @@ final class CoordinatorController: ObservableObject {
             // it, so that a later Restart or a close can end it.
             if directSession === session || directSession == nil {
                 directSession = previous.flatMap { $0.panelID != terminal.panelID ? $0 : nil }
+                // The old process goes on with the messages of its turn.
+                if directSession != nil { directMessagesInTurn = previousMessages }
             }
             session.stop()
             directSessionHost.detachDirectSession(session)
@@ -1709,7 +1764,9 @@ final class CoordinatorController: ObservableObject {
             directSession: .init(
                 nativeSessionID: confirmation.nativeSessionID,
                 transcriptPath: confirmation.sessionFilePath,
-                scopedWorkspaceIDs: sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.scopedWorkspaceIDs
+                scopedWorkspaceIDs: sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.scopedWorkspaceIDs,
+                messagesInTurn: directMessagesInTurn.isEmpty ? nil : directMessagesInTurn,
+                cutOffMessage: cutOffMessage
             )
         )
         guard record != savedWorkspaceRecord else { return }
@@ -1724,6 +1781,9 @@ final class CoordinatorController: ObservableObject {
     }
 
     private func clearDirectSessionRecord() {
+        // The terminal's agent goes on with its own conversation.
+        directMessagesInTurn = []
+        cutOffMessage = nil
         guard savedWorkspaceRecord?.directSession != nil else { return }
         savedWorkspaceRecord?.directSession = nil
         guard let workspaceFileURL, let record = savedWorkspaceRecord else { return }
@@ -1780,6 +1840,145 @@ final class CoordinatorController: ObservableObject {
             promptsAwaitingTurnEnd.removeFirst(index + 1)
         }
         onTurnEnd?(TurnEnd(sessionID: sessionID, failed: end.failed, startedByKey: startedByKey))
+    }
+
+    // MARK: - A turn that a quit cut off
+
+    /// The direct session's messages whose turn has not ended changed:
+    /// saved before the line of a new one is written, so that a quit in
+    /// any moment after leaves a record of it.
+    private func noteDirectMessagesInTurn(_ messages: [ClaudeDirectSession.MessageInTurn], sessionID: String) {
+        guard directSession?.sessionID == sessionID else { return }
+        let known = Dictionary(directMessagesInTurn.map { ($0.messageID, $0) }, uniquingKeysWith: { first, _ in first })
+        directMessagesInTurn = messages.map { message in
+            if let saved = known[message.messageID] { return saved }
+            // This controller's own entry, or else a paired phone's message.
+            let entry = directSendInProgress?.id == message.clientRequestID ? directSendInProgress : nil
+            return CoordinatorWorkspaceRecord.UnfinishedMessage(
+                id: message.clientRequestID,
+                messageID: message.messageID,
+                text: message.text,
+                byUser: entry?.byUser ?? true,
+                attachmentFolders: entry?.attachmentFolders
+            )
+        }
+        saveDirectSessionTurnState()
+    }
+
+    /// Writes `directMessagesInTurn` and `cutOffMessage` into the saved
+    /// record of the direct session, when there is one.
+    private func saveDirectSessionTurnState() {
+        guard let workspaceFileURL, var record = savedWorkspaceRecord, record.directSession != nil else { return }
+        record.directSession?.messagesInTurn = directMessagesInTurn.isEmpty ? nil : directMessagesInTurn
+        record.directSession?.cutOffMessage = cutOffMessage
+        guard record != savedWorkspaceRecord else { return }
+        do {
+            try record.save(to: workspaceFileURL)
+            savedWorkspaceRecord = record
+        } catch {
+            ToasttyLog.warning("Could not save the direct session's unfinished turn", category: .tasks, metadata: [
+                "path": workspaceFileURL.path, "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    /// Before a new process of the direct session's conversation starts:
+    /// reads the messages that the last process got and whose turn did not
+    /// end against Claude's transcript (`DirectTurnRecovery`).
+    ///
+    /// - A message that Claude took had its turn cut off. When the start
+    ///   goes on with the same conversation, the chat says so
+    ///   (`cutOffMessage`), and the user can send it again.
+    /// - A message that Claude never took waits with the paused entries,
+    ///   marked as such, until the user sends it, edits it or removes it.
+    ///   Nothing is sent again without the user.
+    /// - When the transcript cannot be read, such a message waits as one
+    ///   whose typing a quit interrupted: the coordinator may have it.
+    private func recoverDirectTurn(resumes: Bool) {
+        let messages = directMessagesInTurn
+        // A new conversation does not go on from the old one's turn.
+        if resumes == false { cutOffMessage = nil }
+        guard messages.isEmpty == false else {
+            saveDirectSessionTurnState()
+            return
+        }
+        directMessagesInTurn = []
+        let outcome = savedWorkspaceRecord?.directSession.map {
+            DirectTurnRecovery.resolve(messages, transcriptPath: $0.transcriptPath)
+        } ?? DirectTurnRecovery.Outcome(unknown: messages)
+        if resumes, let first = outcome.taken.first {
+            cutOffMessage = first
+        }
+        var paused = pausedEntries
+        // A taken message is in the conversation: it does not wait as an
+        // interrupted one.
+        let takenIDs = Set(outcome.taken.map(\.id))
+        paused.removeAll { takenIDs.contains($0.id) && $0.typingWasInterrupted }
+        // In the order they were sent, before the entries that waited. Each
+        // gets a new ID: the conversation refuses an ID that it took in this
+        // run as a duplicate, and the process can end without a quit. The ID
+        // comes from the message's line, so a recovery that a second quit
+        // interrupts finds its copy and makes no other. The entry keeps the
+        // folders of its files.
+        var front: [QueuedEntry] = []
+        for message in outcome.notTaken + outcome.unknown {
+            let recoveredID = "recovered-\(message.messageID)"
+            // Recovered before a second quit, or never typed at all.
+            guard (queuedEntries + paused).contains(where: { $0.id == recoveredID }) == false,
+                  queuedEntries.contains(where: { $0.id == message.id }) == false else { continue }
+            let notTaken = outcome.notTaken.contains(message)
+            let earlier = paused.firstIndex(where: { $0.id == message.id }).map { paused.remove(at: $0) }
+            front.append(QueuedEntry(
+                id: recoveredID,
+                text: message.text,
+                byUser: message.byUser,
+                typingWasInterrupted: notTaken == false,
+                quitBeforeTaken: notTaken,
+                attachmentFolders: (earlier?.attachmentFolders ?? message.attachmentFolders ?? []) + [message.id]
+            ))
+        }
+        paused.insert(contentsOf: front, at: 0)
+        if paused != pausedEntries {
+            pausedEntries = paused
+            heldSetToken = UUID().uuidString
+            queuedCount = queuedEntries.count + pausedEntries.count
+            // Until the queue file holds the copies, the record keeps the
+            // messages: the next start finds them again.
+            if saveQueue() == false { directMessagesInTurn = messages }
+        }
+        saveDirectSessionTurnState()
+        directMessagesInTurn = []
+        ToasttyLog.info("Read the direct session's unfinished turn against its transcript", category: .tasks, metadata: [
+            "taken": String(outcome.taken.count),
+            "not_taken": String(outcome.notTaken.count),
+            "unknown": String(outcome.unknown.count),
+            "resumes": resumes ? "true" : "false",
+        ])
+    }
+
+    /// Sends the message whose turn a quit cut off again, as a new message:
+    /// at the open prompt, or queued behind what waits.
+    func sendCutOffMessageAgain() throws {
+        guard let message = cutOffMessage else {
+            throw CoordinatorError("There is no message to send again.")
+        }
+        // The save of the send writes the notice away with it, so a quit
+        // after the send cannot offer it a second time.
+        cutOffMessage = nil
+        do {
+            try send(message.text, byUser: message.byUser)
+        } catch {
+            cutOffMessage = message
+            throw error
+        }
+        saveDirectSessionTurnState()
+    }
+
+    /// The chat stops saying that the turn was cut off.
+    func dismissCutOffMessage() {
+        guard cutOffMessage != nil else { return }
+        cutOffMessage = nil
+        saveDirectSessionTurnState()
     }
 
     /// After a relaunch: goes on with the conversation of the direct
@@ -2000,14 +2199,20 @@ final class CoordinatorController: ObservableObject {
         attachmentFolders: [String] = []
     ) throws -> SendResult {
         let text = AgentPasteText.keepingImagePathsAsText(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        // The user goes on from the cut-off turn: its notice has done its
+        // work once the message is taken.
+        var didSend = false
+        defer { if didSend { dismissCutOffMessage() } }
         if steering, text.isEmpty == false {
             switch steer(QueuedEntry(id: id, text: text, byUser: true, attachmentFolders: attachmentFolders)) {
-            case .delivered?: return .steered
-            case .uncertain?: return .steeredUnconfirmed
+            case .delivered?: didSend = true; return .steered
+            case .uncertain?: didSend = true; return .steeredUnconfirmed
             case .unavailable?, nil: break
             }
         }
-        return try send(text, byUser: true, id: id, attachmentFolders: attachmentFolders)
+        let result = try send(text, byUser: true, id: id, attachmentFolders: attachmentFolders)
+        didSend = true
+        return result
     }
 
     /// Types a waiting message of the user's into the running turn, for
@@ -2044,6 +2249,7 @@ final class CoordinatorController: ObservableObject {
         // A saved entry: the file says that it is being typed, so a crash
         // in this moment cannot type it twice.
         guard noteTypingStarts(entry) else { return nil }
+        directSendInProgress = entry
         let result = target.subscription.send(RemoteMessageSendRequest(
             conversationID: target.conversationID,
             clientRequestID: entry.id,
@@ -2051,6 +2257,7 @@ final class CoordinatorController: ObservableObject {
             text: entry.text,
             deliveryMode: .steer
         ), byUser: true)
+        directSendInProgress = nil
         switch result {
         case .accepted, .duplicate:
             noteTyped(entry, session: target.session, result: .delivered, throughConversation: true, steered: true)
@@ -2125,6 +2332,7 @@ final class CoordinatorController: ObservableObject {
         queuedEntries.insert(contentsOf: pausedEntries.map { entry in
             var entry = entry
             entry.typingWasInterrupted = false
+            entry.quitBeforeTaken = false
             return entry
         }, at: 0)
         pausedEntries.removeAll()
@@ -2183,6 +2391,12 @@ final class CoordinatorController: ObservableObject {
         guard result == .released else { return false }
         drain()
         return true
+    }
+
+    /// What a start of the direct session's conversation does first, with
+    /// no process: tests seed the saved record and call this.
+    func recoverDirectTurnForTesting(resumes: Bool) {
+        recoverDirectTurn(resumes: resumes)
     }
 
     /// The agent's conversation shows an open prompt now.
@@ -2514,12 +2728,14 @@ final class CoordinatorController: ObservableObject {
         guard noteTypingStarts(entry) else {
             return .held(.notSaved, recheckAt: moment.addingTimeInterval(Self.saveRetryInterval))
         }
+        directSendInProgress = entry
         let result = subscription.send(RemoteMessageSendRequest(
             conversationID: summary.conversationID,
             clientRequestID: entry.id,
             expectedInputEpoch: epoch,
             text: entry.text
         ), byUser: byUser)
+        directSendInProgress = nil
         switch result {
         case .accepted, .duplicate:
             noteTyped(entry, session: session, result: .delivered, throughConversation: true)
@@ -2640,6 +2856,7 @@ final class CoordinatorController: ObservableObject {
                 text: $0.text,
                 byUser: true,
                 typingWasInterrupted: $0.typingWasInterrupted ?? false,
+                quitBeforeTaken: $0.quitBeforeTaken ?? false,
                 attachmentFolders: $0.ownedAttachmentFolders
             )
         }
@@ -2721,6 +2938,7 @@ final class CoordinatorController: ObservableObject {
                     id: $0.id,
                     text: $0.text,
                     typingWasInterrupted: $0.typingWasInterrupted ? true : nil,
+                    quitBeforeTaken: $0.quitBeforeTaken ? true : nil,
                     attachmentFolders: $0.attachmentFolders
                 )
             },

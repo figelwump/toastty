@@ -71,6 +71,17 @@ final class CoordinatorChatModel: ObservableObject {
         /// Toastty quit while it typed a message. The message waits,
         /// paused, until the user sends it again or removes it.
         case typingInterrupted
+        /// The same for a direct session: Toastty quit while it gave the
+        /// process a message, and Claude's transcript could not be read to
+        /// tell whether Claude took it.
+        case directMessageInterrupted
+        /// A direct session's process did not confirm that it took a
+        /// message. Its terminal shows nothing of the agent.
+        case directDeliveryNotConfirmed
+        /// Toastty quit, or the direct session's process ended, during the
+        /// turn of this message (its display text, shortened). Claude took
+        /// the message, so the reply may be missing or incomplete.
+        case turnCutOff(message: String)
         /// The Codex coordinator may read only part of its instructions:
         /// its profile's arguments cannot take the raised limit.
         case instructionsMayBeCut
@@ -623,7 +634,8 @@ final class CoordinatorChatModel: ObservableObject {
                     position: index + 1,
                     attachmentCount: Self.attachmentCount(of: entry.text),
                     isPaused: true,
-                    canSteer: turnTakesSteer && entry.canBeSteered
+                    canSteer: turnTakesSteer && entry.canBeSteered,
+                    warning: entry.quitBeforeTaken ? Self.quitBeforeTakenWarning : nil
                 )),
                 quote: CoordinatorChatTranscript.quote(of: entry.text),
                 hostMessage: CoordinatorChatTranscript.hostMessage(entry.text, timeText: waitingTime)
@@ -669,6 +681,11 @@ final class CoordinatorChatModel: ObservableObject {
         }
         return items
     }
+
+    /// On a paused message that a direct session's process got before
+    /// Toastty quit, and that Claude's transcript does not have.
+    static let quitBeforeTakenWarning = "Not sent: Toastty or Claude Code quit before the coordinator took this message, "
+        + "so the conversation does not have it. Send it, edit it, or remove it."
 
     /// The files that a waiting message names, as Toastty wrote them.
     static func attachmentCount(of text: String) -> Int {
@@ -773,8 +790,27 @@ final class CoordinatorChatModel: ObservableObject {
         if case .pendingInteraction(let ids) = summary.inputAvailability {
             return ids.contains(where: pendingRequestsWithoutForm.contains) ? .awaitingAnswerOutsideChat : nil
         }
-        if controller.hasInterruptedEntry { return .typingInterrupted }
+        if let cutOff = controller.cutOffMessage {
+            return .turnCutOff(message: Self.excerpt(of: cutOff.text))
+        }
+        if controller.hasInterruptedEntry { return .directMessageInterrupted }
         return nil
+    }
+
+    /// The first line of a message's display text, shortened for a notice.
+    static func excerpt(of text: String, limit: Int = 80) -> String {
+        var display = CoordinatorMessageHeader.displayText(of: text)
+        switch CoordinatorMessageHeader.kind(of: text) {
+        case .fromSender, .digest:
+            // Toastty's first line names the sender: the text is after it.
+            display = display.firstIndex(where: \.isNewline).map { String(display[display.index(after: $0)...]) } ?? display
+        default:
+            break
+        }
+        display = display.trimmingCharacters(in: .whitespacesAndNewlines)
+        let line = display.split(whereSeparator: \.isNewline).first.map(String.init) ?? display
+        guard line.count > limit || line.count < display.count else { return line }
+        return String(line.prefix(limit)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     private var needsTerminalForPendingAnswer: Bool {
@@ -829,7 +865,9 @@ final class CoordinatorChatModel: ObservableObject {
             } else if case .sendDeliveryUnconfirmed(let payload) = event.payload,
                       pendingSends.contains(where: { $0.id == payload.clientRequestID }) {
                 pendingSends.removeAll { $0.id == payload.clientRequestID }
-                transientNotice = .deliveryNotConfirmed
+                transientNotice = controller?.status?.agentIsDirectSession == true
+                    ? .directDeliveryNotConfirmed
+                    : .deliveryNotConfirmed
             }
         }
     }
@@ -1040,6 +1078,16 @@ final class CoordinatorChatModel: ObservableObject {
 
     func dismissNotice() {
         transientNotice = nil
+    }
+
+    /// Send Again on the notice of a turn that a quit cut off.
+    func sendCutOffMessageAgain() {
+        do {
+            try controller?.sendCutOffMessageAgain()
+            transientNotice = nil
+        } catch {
+            transientNotice = .failure(error.localizedDescription)
+        }
     }
 
     func perform(_ action: ToasttyQueuedMessageAction) {
