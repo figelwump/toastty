@@ -351,6 +351,10 @@ toastty coordinator reply <message-id> --text-file message.md
    sooner than Toastty's 30 minutes, with a check of your own, but not
    later.
 
+**Never wait in a turn.** Do not `sleep`, and do not poll to see whether
+something changed: the user waits for the whole turn. Toastty wakes you
+when something may need you.
+
 **The user started the turn:** route what the user wrote. First see First
 run: it can add a question to this answer.
 
@@ -554,6 +558,9 @@ COORDINATOR_MESSAGE_END
   its agent with the model and effort you passed (or "the default"), and one
   sentence that says what the task will do. Do not answer the request
   yourself.
+- Tell the user as soon as `toastty task create` returns. Do not `sleep`
+  or read the task again to see whether its agent starts: a start that
+  waits in its terminal moves the task into Needs you, and that wakes you.
 
 **Learn from the answer.** After the user answers a project or agent
 question, or corrects your choice, add a rule to `policy.md` when the answer
