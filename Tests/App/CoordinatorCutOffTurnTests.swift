@@ -144,6 +144,14 @@ struct CoordinatorCutOffTurnTests {
         }
     }
 
+    @MainActor
+    @Test func theNoticeQuotesTheMessageWithoutToasttysFirstLine() {
+        let fromSender = "[Toastty] From a terminal command: Toastty cannot tell who ran it. Message ID 0AC62612-B148-49A9-88AE-A5EE72F1E3FF.\nRun the slow check"
+        #expect(CoordinatorChatModel.excerpt(of: fromSender) == "Run the slow check")
+        #expect(CoordinatorChatModel.excerpt(of: "First line\nSecond line") == "First line…")
+        #expect(CoordinatorChatModel.excerpt(of: String(repeating: "a", count: 100)) == String(repeating: "a", count: 80) + "…")
+    }
+
     // MARK: - Claude's transcript
 
     @Test func onlyAWholeUserRecordCountsAsTaken() {

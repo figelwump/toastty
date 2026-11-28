@@ -799,7 +799,15 @@ final class CoordinatorChatModel: ObservableObject {
 
     /// The first line of a message's display text, shortened for a notice.
     static func excerpt(of text: String, limit: Int = 80) -> String {
-        let display = CoordinatorMessageHeader.displayText(of: text).trimmingCharacters(in: .whitespacesAndNewlines)
+        var display = CoordinatorMessageHeader.displayText(of: text)
+        switch CoordinatorMessageHeader.kind(of: text) {
+        case .fromSender, .digest:
+            // Toastty's first line names the sender: the text is after it.
+            display = display.firstIndex(where: \.isNewline).map { String(display[display.index(after: $0)...]) } ?? display
+        default:
+            break
+        }
+        display = display.trimmingCharacters(in: .whitespacesAndNewlines)
         let line = display.split(whereSeparator: \.isNewline).first.map(String.init) ?? display
         guard line.count > limit || line.count < display.count else { return line }
         return String(line.prefix(limit)).trimmingCharacters(in: .whitespaces) + "…"
