@@ -649,6 +649,10 @@ def run(check):
         mark_log()
         launch(direct)
         started_direct(resumes=True)
+        # The relaunch read the cut-off message against Claude's transcript: Claude had taken it.
+        recovered = log_records("Read the direct session's unfinished turn against its transcript")
+        require(recovered and recovered[-1].get('taken') == '1' and recovered[-1].get('resumes') == 'true',
+                f'The relaunch did not find the cut-off turn: {recovered}')
         time.sleep(15)
         copies = [t for t in user_texts() if 'SHOULD-NOT-FINISH-AFTER-CRASH' in t]
         require(len(copies) == 1, f'The message of the crashed turn is in the transcript {len(copies)} times')

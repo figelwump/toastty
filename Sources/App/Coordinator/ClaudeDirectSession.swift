@@ -62,6 +62,9 @@ final class ClaudeDirectSession: DirectConversationSession {
     /// Called once when the session ends by itself, with the reason. Not
     /// called after `stop`.
     private let onEnd: @MainActor (String) -> Void
+    /// Called when `messagesInTurn` changes, before the line of a new
+    /// message is written.
+    private let onMessagesInTurnChange: @MainActor ([MessageInTurn]) -> Void
     private let now: () -> Date
     private var isStopped = false
     private var didEnd = false
@@ -71,6 +74,28 @@ final class ClaudeDirectSession: DirectConversationSession {
     /// Why the session ended by itself, once it did.
     private(set) var endReason: String?
 
+    /// A message that the process got and whose turn has not ended.
+    struct MessageInTurn: Equatable {
+        var clientRequestID: String
+        /// The `uuid` of the message's line. The message's record in
+        /// Claude's transcript file has it once Claude took the message.
+        var messageID: String
+        var text: String
+        /// Claude took the message: its receipt came.
+        var isTaken = false
+    }
+
+    /// The messages that the process got and whose turn has not ended, in
+    /// the order they were written. A message leaves the list at the end
+    /// of the turn that took it. One that Claude has not taken at a
+    /// turn's end stays: Claude holds it for the next turn. If Toastty
+    /// quits now, these are the messages that the quit cut off.
+    private(set) var messagesInTurn: [MessageInTurn] = [] {
+        didSet {
+            if messagesInTurn != oldValue { onMessagesInTurnChange(messagesInTurn) }
+        }
+    }
+
     init(
         panelID: UUID,
         sessionID: String,
@@ -79,6 +104,7 @@ final class ClaudeDirectSession: DirectConversationSession {
         now: @escaping () -> Date = Date.init,
         onTurnEnd: @escaping @MainActor (ClaudeStreamSession.TurnEnd) -> Void,
         onWaitingRequestChange: @escaping @MainActor (ClaudeStreamSession.WaitingRequest?) -> Void = { _ in },
+        onMessagesInTurnChange: @escaping @MainActor ([MessageInTurn]) -> Void = { _ in },
         onEnd: @escaping @MainActor (String) -> Void
     ) {
         self.panelID = panelID
@@ -88,6 +114,7 @@ final class ClaudeDirectSession: DirectConversationSession {
         self.now = now
         self.onTurnEnd = onTurnEnd
         self.onWaitingRequestChange = onWaitingRequestChange
+        self.onMessagesInTurnChange = onMessagesInTurnChange
         self.onEnd = onEnd
     }
 
@@ -168,11 +195,21 @@ final class ClaudeDirectSession: DirectConversationSession {
     // MARK: - DirectConversationSession
 
     func send(text: String, clientRequestID: String, deliveryMode: RemoteMessageDeliveryMode) -> TerminalInputDeliveryResult {
+        let messageID = UUID().uuidString.lowercased()
         guard acceptsInput, let process,
-              let line = model.userMessageLine(text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode) else {
+              let line = model.userMessageLine(
+                text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode, messageID: messageID
+              ) else {
             return .unavailable
         }
-        return process.write(line: line) ? .delivered : .unavailable
+        // The owner hears of the message before the process can take it,
+        // so that a quit in any moment after this leaves a record of it.
+        messagesInTurn.append(MessageInTurn(clientRequestID: clientRequestID, messageID: messageID, text: text))
+        guard process.write(line: line) else {
+            messagesInTurn.removeAll { $0.messageID == messageID }
+            return .unavailable
+        }
+        return .delivered
     }
 
     func interrupt() -> TerminalInputDeliveryResult {
@@ -200,6 +237,17 @@ final class ClaudeDirectSession: DirectConversationSession {
         return model.currentStateObservations(at: now())
     }
 
+    /// Marks each message whose receipt is among `observations` as taken.
+    private func noteReceipts(in observations: [ProviderTranscriptObservation]) {
+        for observation in observations {
+            guard case .transcript(.userMessage(let payload)) = observation.payload,
+                  let clientRequestID = payload.clientRequestID,
+                  let index = messagesInTurn.firstIndex(where: { $0.clientRequestID == clientRequestID && $0.isTaken == false })
+            else { continue }
+            messagesInTurn[index].isTaken = true
+        }
+    }
+
     private func reportWaitingRequest() {
         let waiting = model.waitingRequest
         guard waiting != reportedWaitingRequest else { return }
@@ -217,6 +265,7 @@ final class ClaudeDirectSession: DirectConversationSession {
             for output in model.receive(line: line, at: now()) {
                 switch output {
                 case .observations(let observations):
+                    noteReceipts(in: observations)
                     // Before the owner admits the session there is only its
                     // open prompt to report, and `admit` gives that.
                     if isAdmitted {
@@ -230,6 +279,7 @@ final class ClaudeDirectSession: DirectConversationSession {
                         "permission_mode": account.permissionMode ?? "unknown",
                     ])
                 case .turnEnded(let end):
+                    messagesInTurn.removeAll { $0.isTaken || end.clientRequestIDs.contains($0.clientRequestID) }
                     onTurnEnd(end)
                 case .write(let line):
                     process?.write(line: line)

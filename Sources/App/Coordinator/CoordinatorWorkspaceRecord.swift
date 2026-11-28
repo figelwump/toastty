@@ -30,6 +30,45 @@ struct CoordinatorWorkspaceRecord: Codable, Equatable {
         /// The workspaces that the session was limited to, as its resume
         /// record has them. `nil` for no limit.
         var scopedWorkspaceIDs: Set<UUID>?
+        /// The messages that the session's process got and whose turn had
+        /// not ended, each saved before its line was written. After a quit
+        /// or a crash, the next start of the conversation reads them
+        /// against Claude's transcript file: the turn of a message that
+        /// Claude took was cut off, and a message that it did not take
+        /// never reached it. `nil` for none.
+        var messagesInTurn: [UnfinishedMessage]?
+        /// The message whose turn a quit or a crash cut off, while the
+        /// chat says so. `nil` when there is none, or the user dismissed it.
+        var cutOffMessage: UnfinishedMessage?
+
+        init(
+            nativeSessionID: String,
+            transcriptPath: String,
+            scopedWorkspaceIDs: Set<UUID>?,
+            messagesInTurn: [UnfinishedMessage]? = nil,
+            cutOffMessage: UnfinishedMessage? = nil
+        ) {
+            self.nativeSessionID = nativeSessionID
+            self.transcriptPath = transcriptPath
+            self.scopedWorkspaceIDs = scopedWorkspaceIDs
+            self.messagesInTurn = messagesInTurn
+            self.cutOffMessage = cutOffMessage
+        }
+    }
+
+    /// A message that a direct session's process got, as the record keeps
+    /// it until its turn ends.
+    struct UnfinishedMessage: Codable, Equatable {
+        /// The sender's ID of the message (its `clientRequestID`).
+        var id: String
+        /// The `uuid` of the message's line, which its record in Claude's
+        /// transcript file has once Claude took it.
+        var messageID: String
+        /// The text as the process got it.
+        var text: String
+        /// A person sent it: in the Mac's chat or on a phone. `false` for
+        /// Toastty's digest or a message from `coordinator send`.
+        var byUser: Bool
     }
 
     init(workspaceID: UUID, panelID: UUID?, directSession: DirectSession? = nil) {

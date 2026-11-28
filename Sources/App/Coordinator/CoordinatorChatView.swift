@@ -223,6 +223,18 @@ struct CoordinatorChatView: View {
                 dismissButton
             case .typingInterrupted:
                 showTerminalButton
+            case .directMessageInterrupted:
+                // The paused message's own row offers Send next and Remove.
+                EmptyView()
+            case .directDeliveryNotConfirmed:
+                dismissButton
+            case .turnCutOff:
+                noticeButton("Send Again", identifier: "coordinator.chat.notice.send-again") {
+                    model.sendCutOffMessageAgain()
+                }
+                noticeButton("Dismiss", identifier: "coordinator.chat.notice.dismiss") {
+                    controller.dismissCutOffMessage()
+                }
             case .instructionsMayBeCut:
                 noticeButton("Restart Coordinator", identifier: "coordinator.chat.notice.restart") {
                     controller.perform(.restart)
@@ -300,6 +312,12 @@ struct CoordinatorChatView: View {
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
         case .typingInterrupted:
             "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation. If the message is there, choose Remove on the paused message. If it is not, choose Send next to send it."
+        case .directMessageInterrupted:
+            "Toastty quit while it gave the coordinator a message, and cannot tell whether the coordinator took it. Check the conversation. If the message is there, choose Remove on the paused message. If it is not, choose Send next to send it."
+        case .directDeliveryNotConfirmed:
+            "Claude Code did not confirm that it took your message. Check the conversation before you send it again."
+        case .turnCutOff(let message):
+            "The turn for “\(message)” was cut off: Toastty or Claude Code quit during it. Its reply may be missing or incomplete. Nothing was sent again."
         case .instructionsMayBeCut:
             "Codex may read only the first 32 KiB of the coordinator's instructions: Toastty cannot add project_doc_max_bytes to the arguments of your codex profile. "
                 + "Use a codex profile in ~/.toastty/agents.toml that runs codex itself, or set project_doc_max_bytes = \(CoordinatorFolder.codexProjectDocMaxBytes) in Codex's config.toml, then restart the coordinator."

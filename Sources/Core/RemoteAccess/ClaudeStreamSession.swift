@@ -205,13 +205,15 @@ public struct ClaudeStreamSession: Sendable {
     /// takes none. `clientRequestID` comes back on the transcript's user
     /// message when Claude takes this message. A `steer` goes into the
     /// running turn; Claude reads it after the tool call that runs.
+    /// `messageID` is the line's `uuid`: the record of the message in
+    /// Claude's transcript file has it once Claude took the message.
     public mutating func userMessageLine(
         text: String,
         clientRequestID: String,
-        deliveryMode: RemoteMessageDeliveryMode = .prompt
+        deliveryMode: RemoteMessageDeliveryMode = .prompt,
+        messageID: String = UUID().uuidString.lowercased()
     ) -> String? {
         guard phase == .ready else { return nil }
-        let messageID = UUID().uuidString.lowercased()
         sentMessages[messageID] = SentMessage(clientRequestID: clientRequestID, deliveryMode: deliveryMode)
         sentMessageOrder.append(messageID)
         if sentMessageOrder.count > Self.rememberedSentMessages {

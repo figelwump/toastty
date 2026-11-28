@@ -1918,6 +1918,9 @@ final class CoordinatorChatFixture {
     /// Where the controller saves the user's waiting messages, as the app
     /// does. `nil` saves none.
     let queueFileURL: URL?
+    /// Where the controller saves where the coordinator lives and its
+    /// direct session (`CoordinatorWorkspaceRecord`). `nil` saves none.
+    let workspaceFileURL: URL?
     /// The coordinator's folder, which holds the attached files.
     var coordinatorDirectory: URL { Self.coordinatorDirectory(conversations) }
 
@@ -1945,6 +1948,7 @@ final class CoordinatorChatFixture {
     init(
         pairsNativeDevice: Bool = false,
         savesQueue: Bool = false,
+        savesWorkspaceRecord: Bool = false,
         agentReportsStart: Bool = true,
         agent: AgentKind = .codex,
         initialUserMessages: [String] = [],
@@ -1966,9 +1970,13 @@ final class CoordinatorChatFixture {
         queueFileURL = savesQueue
             ? URL(filePath: conversations.runtimeHome).appendingPathComponent("saved/coordinator-queue.json")
             : nil
+        workspaceFileURL = savesWorkspaceRecord
+            ? URL(filePath: conversations.runtimeHome).appendingPathComponent("saved/coordinator-workspace.json")
+            : nil
         self.chatDefaults = chatDefaults
         (controller, chat) = Self.makeController(
-            conversations, gate: gate, queueFileURL: queueFileURL, clock: clock, defaults: chatDefaults
+            conversations, gate: gate, queueFileURL: queueFileURL, workspaceFileURL: workspaceFileURL,
+            clock: clock, defaults: chatDefaults
         )
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
         second = initialUserMessages.count + 5
@@ -1989,6 +1997,7 @@ final class CoordinatorChatFixture {
         _ conversations: LocalConversationFixture,
         gate: StatusGateTyping,
         queueFileURL: URL?,
+        workspaceFileURL: URL?,
         clock: Clock,
         defaults: UserDefaults?
     ) -> (CoordinatorController, CoordinatorChatModel) {
@@ -1998,6 +2007,7 @@ final class CoordinatorChatFixture {
             launcher: nil,
             directoryURL: coordinatorDirectory(conversations),
             queueFileURL: queueFileURL,
+            workspaceFileURL: workspaceFileURL,
             configLoader: { TasksConfig() },
             deliverText: { text, _ in
                 gate.texts.append(text)
@@ -2029,7 +2039,8 @@ final class CoordinatorChatFixture {
         chat.hide()
         typedObserver = nil
         (controller, chat) = Self.makeController(
-            conversations, gate: gate, queueFileURL: queueFileURL, clock: clock, defaults: chatDefaults
+            conversations, gate: gate, queueFileURL: queueFileURL, workspaceFileURL: workspaceFileURL,
+            clock: clock, defaults: chatDefaults
         )
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
     }

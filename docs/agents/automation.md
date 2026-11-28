@@ -513,8 +513,10 @@ It checks, in this order:
   same conversation ID, shows its history, and Claude remembers its first
   answer.
 - After a kill of the app during a turn, the Claude Code process ends
-  within 15 seconds, the relaunched app sends nothing again, the cut-off
-  turn does not finish, and the next message runs.
+  within 15 seconds, the relaunched app finds the cut-off message in
+  Claude's transcript (its log line "Read the direct session's unfinished
+  turn against its transcript" has `taken=1`), sends nothing again, the
+  cut-off turn does not finish, and the next message runs.
 - With the setting off, the next launch resumes the same conversation in
   the terminal, and it takes a message there.
 

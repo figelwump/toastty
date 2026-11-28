@@ -16,6 +16,9 @@ struct CoordinatorQueueSnapshot: Codable, Equatable {
         var text: String
         /// Set on a paused entry whose typing a quit interrupted.
         var typingWasInterrupted: Bool?
+        /// Set on a paused entry that a direct session's process got before
+        /// a quit, and that Claude's transcript shows it never took.
+        var quitBeforeTaken: Bool?
         /// The folders of attached files that the entry owns, by name
         /// (`CoordinatorController.QueuedEntry.attachmentFolders`). `nil` in
         /// a file of a build before the list.
