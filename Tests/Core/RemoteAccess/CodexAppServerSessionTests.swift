@@ -91,7 +91,8 @@ struct CodexAppServerSessionTests {
         let request = try Self.requiredObject(Self.written(session.receive(line: Self.accountAnswer(2), at: Self.start)).first)
         #expect(request["method"] as? String == "thread/start")
         let params = try #require(request["params"] as? [String: Any])
-        #expect(params["cwd"] as? String == "/work")
+        // The conversation's folder is the folder of the process.
+        #expect(params["cwd"] == nil)
         #expect(params["model"] as? String == "gpt-6.2-sol")
         #expect(params["approvalPolicy"] as? String == "on-request")
         #expect(params["sandbox"] as? String == "workspace-write")

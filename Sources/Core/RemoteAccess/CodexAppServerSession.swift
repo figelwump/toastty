@@ -1087,7 +1087,12 @@ public struct CodexAppServerSession: DirectSessionDriver {
     }
 
     private mutating func threadRequestLine() -> String {
-        var params: [String: Any] = ["cwd": settings.directory]
+        // No working directory: Codex takes the one of its process, in the
+        // form that its terminal program would record for the same folder.
+        // A folder behind a symbolic link has two forms, and Codex's
+        // terminal program asks which to use when a resumed conversation
+        // has the other one.
+        var params: [String: Any] = [:]
         if let model = settings.model { params["model"] = model }
         if let approvalPolicy = settings.approvalPolicy { params["approvalPolicy"] = approvalPolicy }
         if let sandbox = settings.sandbox { params["sandbox"] = sandbox }

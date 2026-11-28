@@ -88,6 +88,8 @@ class Claude:
     shell_tool = 'Bash'
     api_keys = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
     has_text_commands = True
+    # This profile has no tool for Toastty's CLI, so Claude answers every sender in the chat.
+    answers_other_senders_in_the_chat = True
     permission_prompt = ('Use the Bash tool to run exactly this command and nothing else: `touch direct-allowed.txt`. '
                          'If it succeeds, reply with exactly: TOUCH-RAN. If it is refused, reply with exactly: '
                          'TOUCH-REFUSED')
@@ -165,9 +167,12 @@ class Claude:
                    if isinstance(block, dict) and block.get('type') == 'tool_use'
                    and 'sleep 4' in json.dumps(block.get('input')))
 
-    def replied(self, marker):
+    def took_in_the_terminal(self, marker):
         return any(r.get('type') == 'assistant' and marker in json.dumps((r.get('message') or {}).get('content'))
                    for r in self.records())
+
+    def allows(self, preview):
+        return False
 
     def terminal_composer(self, text):
         return '❯' in text and ('for shortcuts' in text or 'shift+tab to cycle' in text)
@@ -199,6 +204,9 @@ class Codex:
     api_keys = ('OPENAI_API_KEY', 'CODEX_API_KEY')
     # Codex's commands, such as /model, belong to its terminal program.
     has_text_commands = False
+    # Codex works by the coordinator's instructions: it answers a sender that is not the user through
+    # `toastty coordinator reply`, and writes no reply for that sender in the chat.
+    answers_other_senders_in_the_chat = False
     # A command in the workspace needs no approval, so the request is asked for in words.
     permission_prompt = ('Use the shell to run exactly this command and nothing else: `touch direct-allowed.txt`. Ask '
                          'for my approval for it: request escalated permissions for this one command '
@@ -271,8 +279,15 @@ class Codex:
     def sleep_calls(self):
         return sum(1 for item in self.items('CommandExecution') if 'sleep 4' in json.dumps(item.get('command')))
 
-    def replied(self, marker):
-        return any(marker in json.dumps(item.get('content')) for item in self.items('AgentMessage'))
+    def took_in_the_terminal(self, marker):
+        # The message is in the same conversation's rollout file. Codex answers its sender through
+        # Toastty's CLI, which needs an approval in the terminal that the check does not give.
+        return any(marker in text for text in self.user_texts())
+
+    def allows(self, preview):
+        # Toastty's own CLI, which the coordinator's work needs and Codex's sandbox does not reach. It
+        # acts on the check's disposable instance only.
+        return 'toastty ' in (preview or '')
 
     def terminal_composer(self, text):
         # The check answers no dialog of Codex's terminal program.
@@ -371,7 +386,7 @@ def run(check, agent_type, frames):
                  *coordinator_check.base.START_OFFER_ANSWERED)
     step = check.step
     # `deny` is on while a turn that the check did not write may ask for a command, as a wake's turn can.
-    state = dict(instance=None, counter=0, log_offset=0, pids=set(), deny=False, denied=[])
+    state = dict(instance=None, counter=0, log_offset=0, pids=set(), deny=False, denied=[], allowed=[])
 
     def launch(environment):
         state['instance'] = Instance(check.binary, environment, environment['TOASTTY_SOCKET_PATH'], runtime_home,
@@ -475,8 +490,7 @@ def run(check, agent_type, frames):
         """The first event that matches, among those after the event `after`."""
         def probe():
             listed = events()
-            if state['deny']:
-                deny_requests(listed)
+            answer_requests(listed)
             return next((e for e in listed if predicate(e) and (after is None or e['sequence'] > after['sequence'])),
                         None)
         try:
@@ -569,21 +583,26 @@ def run(check, agent_type, frames):
             thread.join(timeout=60)
         return results
 
-    def deny_requests(listed):
-        """Denies each open permission request, as a user would who is asked for a command that the check
-        does not allow."""
+    def answer_requests(listed):
+        """Answers each open permission request as a user would: yes to a command that the agent's profile
+        of this check allows (`agent.allows`), and no to any other one while `deny` is on."""
         for event in listed:
             pending = event['payload'] if event['kind'] == 'interaction_presented' else {}
-            if pending.get('kind') == 'permission' and pending.get('responseID') and pending['id'] not in seen:
+            if pending.get('kind') != 'permission' or not pending.get('responseID') or pending['id'] in seen:
+                continue
+            preview = (pending.get('permission') or {}).get('preview')
+            if agent.allows(preview):
                 seen.add(pending['id'])
-                state['denied'].append(dict(preview=(pending.get('permission') or {}).get('preview'),
-                                            result=phone_answer(pending, 'decision', 'deny')))
+                state['allowed'].append(dict(preview=preview, result=phone_answer(pending, 'decision', 'allow')))
+            elif state['deny']:
+                seen.add(pending['id'])
+                state['denied'].append(dict(preview=preview, result=phone_answer(pending, 'decision', 'deny')))
 
     def settle(timeout=240):
-        """Waits for the open prompt, and denies each permission request on the way."""
+        """Waits for the open prompt, and answers each permission request on the way."""
         deadline, since = time.time() + timeout, None
         while time.time() < deadline:
-            deny_requests(events())
+            answer_requests(events())
             # A turn that just started can still show the prompt of the turn before it.
             since = (since or time.time()) if prompt_open() else None
             if since and time.time() - since >= 5:
@@ -646,14 +665,19 @@ def run(check, agent_type, frames):
         before, cursor = gateway.events(state['first'])
         sent = cli('coordinator', 'send', word('DIRECT-MAC'))
         require(sent.get('delivery') == 'sent', f'The message was not given at the open prompt: {sent}')
-        reply('DIRECT-MAC', after=before[-1])
-        wait_for('the prompt to open again', prompt_open, timeout=120)
+        if agent.answers_other_senders_in_the_chat:
+            reply('DIRECT-MAC', after=before[-1])
+            wait_for('the prompt to open again', prompt_open, timeout=120)
+        else:
+            find(lambda e: e['kind'] == 'user_message' and 'DIRECT-MAC' in e['payload'].get('text', ''),
+                 "the Mac's message in the conversation", after=before[-1])
+            settle()
         missed, _ = gateway.events(state['first'], after=cursor)
         kinds = [e['kind'] for e in missed]
         require('user_message' in kinds and 'assistant_message' in kinds,
                 f'A phone that returns did not get the turn it missed: {kinds}')
         step('a message from the Mac ran a turn, and a returning phone read it from its cursor',
-             sent=sent, missedKinds=kinds)
+             sent=sent, missedKinds=kinds, allowedRequests=list(state['allowed']))
 
     # 4. A wake at the open prompt: Toastty's timer digest starts a turn.
     def idle_wake():
@@ -690,7 +714,9 @@ def run(check, agent_type, frames):
                  and e['kind'] == 'user_message']
         require(not early, f'A message entered the busy turn: {early}')
         reply('QUEUED-OK', after=queued_receipt)
-        mac_reply = reply('MAC-QUEUED-OK', after=done)
+        mac_reply = (reply('MAC-QUEUED-OK', after=done) if agent.answers_other_senders_in_the_chat else
+                     find(lambda e: e['kind'] == 'user_message' and 'MAC-QUEUED-OK' in e['payload'].get('text', ''),
+                          "the Mac's queued message in the conversation", timeout=240, after=done))
         second_wake = find(lambda e: e['kind'] == 'user_message' and e['payload'].get('text', '').startswith(WAKE),
                            'the timer digest after the busy turn', timeout=240, after=done)
         settle()
@@ -924,7 +950,8 @@ def run(check, agent_type, frames):
         require(not stream_processes(app_pid()) and not log_records('Started an agent process for a direct session'),
                 'A direct session started with the setting off')
         sent = cli('coordinator', 'send', word('TERMINAL-OK'))
-        wait_for('the reply in the terminal', lambda: agent.replied('TERMINAL-OK'), timeout=240, interval=2)
+        wait_for('the message to be taken in the terminal', lambda: agent.took_in_the_terminal('TERMINAL-OK'),
+                 timeout=240, interval=2)
         require(agent.conversations() == state.get('files'),
                 f'The terminal started another conversation: {agent.conversations()}')
         capture('the-same-conversation-in-the-terminal')
@@ -933,8 +960,9 @@ def run(check, agent_type, frames):
     failures = []
 
     def brief(listed):
-        return [dict(sequence=e['sequence'], kind=e['kind'],
-                     **{key: (str(value)[:160] if key == 'text' else value) for key, value in e['payload'].items()
+        return [dict(sequence=e.get('sequence'), kind=e.get('kind'),
+                     **{('requestKind' if key == 'kind' else key): (str(value)[:160] if key == 'text' else value)
+                        for key, value in (e.get('payload') or {}).items()
                         if key in ('text', 'clientRequestID', 'deliveryMode', 'toolName', 'id', 'interactionID', 'kind',
                                    'state', 'status')}) for e in listed]
 
@@ -964,6 +992,7 @@ def run(check, agent_type, frames):
             failures.append(name)
             facts = dict(error=repr(error)[:2000], trace=traceback.format_exc()[-2500:])
             for key, read in (('status', status), ('conversation', conversation), ('lastEvents', lambda: brief(events()[-30:])),
+                              ('terminal', lambda: screen()[-1500:]),
                               ('processes', lambda: stream_processes(app_pid())), ('recovery', recover)):
                 try:
                     facts[key] = read()
