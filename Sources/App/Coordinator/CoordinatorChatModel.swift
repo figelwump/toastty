@@ -54,6 +54,13 @@ final class CoordinatorChatModel: ObservableObject {
         /// The agent asked a question or for a permission. The chat cannot
         /// answer it.
         case awaitingAnswerInTerminal
+        /// The agent of a direct session starts. Its start passes Toastty's
+        /// checks or fails with a reason; nothing of it waits in a terminal.
+        case directAgentStarting
+        /// The agent of a direct session asks for something that the chat
+        /// has no form for, such as a permission. The terminal cannot
+        /// answer it either: a paired iPhone can, and Stop withdraws it.
+        case awaitingAnswerOutsideChat
         /// Text typed in the terminal may be in the agent's prompt. Messages
         /// and Toastty's digests wait for it. Keys that answered a question
         /// of the agent's start, before the agent reported its session, look
@@ -76,6 +83,9 @@ final class CoordinatorChatModel: ObservableObject {
     /// The conversation's summary, or `nil` while Toastty reads none.
     @Published private(set) var summary: RemoteConversationSummary?
     @Published private(set) var interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
+    /// The waiting requests that the chat has no form for: a permission
+    /// request, or a question that the answer form cannot show.
+    @Published private(set) var pendingRequestsWithoutForm: Set<RemotePendingInteraction.ID> = []
     /// The composer's text. It is kept here so that it survives a switch to
     /// the terminal and back.
     @Published var draft = ""
@@ -374,9 +384,17 @@ final class CoordinatorChatModel: ObservableObject {
 
     private func reconcileQuestionAnswers(_ pending: [RemotePendingInteraction]) {
         var updated: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
-        for interaction in pending where interaction.kind == .question && interaction.state == .pending {
-            guard let responseID = interaction.responseID, !responseID.isEmpty,
-                  let questions = interaction.questions, RemoteQuestionAnswerValidation.supports(questions) else { continue }
+        var withoutForm: Set<RemotePendingInteraction.ID> = []
+        defer {
+            if withoutForm != pendingRequestsWithoutForm { pendingRequestsWithoutForm = withoutForm }
+        }
+        for interaction in pending where interaction.state == .pending {
+            guard interaction.kind == .question,
+                  let responseID = interaction.responseID, !responseID.isEmpty,
+                  let questions = interaction.questions, RemoteQuestionAnswerValidation.supports(questions) else {
+                withoutForm.insert(interaction.id)
+                continue
+            }
             let key = ToasttyInteractionAnswerKey(
                 interactionID: interaction.id, responseID: responseID, inputEpoch: interaction.inputEpoch
             )
@@ -707,9 +725,14 @@ final class CoordinatorChatModel: ObservableObject {
         case .notRunning:
             return .agentNotRunning(reason: status.startFailure)
         case .starting:
-            return .agentStarting
+            return status.agentIsDirectSession ? .directAgentStarting : .agentStarting
         case .running:
             break
+        }
+        // The terminal of a direct session is a plain shell. Each notice
+        // that sends the user there is wrong for it.
+        if status.agentIsDirectSession {
+            return directSessionNotice(controller: controller)
         }
         if status.hold == .terminalDialog { return .awaitingAnswerInTerminal }
         if status.session?.status?.kind == .needsApproval {
@@ -737,6 +760,21 @@ final class CoordinatorChatModel: ObservableObject {
             if controller.hasInterruptedEntry { return .typingInterrupted }
             return controller.mayReadPartOfItsInstructions ? .instructionsMayBeCut : nil
         }
+    }
+
+    /// What the chat says while the agent is a direct session and runs.
+    /// The session's process says what waits, so the notice reads only the
+    /// conversation: a request with a form in the chat needs no notice.
+    private func directSessionNotice(controller: CoordinatorController) -> Notice? {
+        guard let summary else { return .directAgentStarting }
+        if summary.state == .starting, ProviderTranscriptSupport.isManagedProvider(summary.provider) {
+            return .directAgentStarting
+        }
+        if case .pendingInteraction(let ids) = summary.inputAvailability {
+            return ids.contains(where: pendingRequestsWithoutForm.contains) ? .awaitingAnswerOutsideChat : nil
+        }
+        if controller.hasInterruptedEntry { return .typingInterrupted }
+        return nil
     }
 
     private var needsTerminalForPendingAnswer: Bool {

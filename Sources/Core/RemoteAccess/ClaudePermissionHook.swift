@@ -1,48 +1,56 @@
-import CoreState
 import CryptoKit
 import Foundation
 import RemoteProtocol
 
-/// Turns one Claude PermissionRequest hook payload into what a phone can show
-/// and answer, and maps the phone's choice back to Claude's hook decision.
-/// Claude's raw permission suggestions stay in this hook process; the host and
-/// the phone see only labels and opaque option IDs.
-struct ClaudePermissionHook {
-    static let maximumPreviewBytes = 16 * 1024
+/// Turns one Claude permission request into what a client can show and
+/// answer, and maps the client's choice back to Claude's decision. The
+/// request comes from a PermissionRequest hook payload, or from the
+/// `can_use_tool` request of a Claude process that Toastty runs itself
+/// (`ClaudeStreamSession`). Claude's raw permission suggestions stay with
+/// this value; a client sees only labels and opaque option IDs.
+public struct ClaudePermissionHook: Equatable, Sendable {
+    public static let maximumPreviewBytes = 16 * 1024
     static let maximumAlwaysOptions = 2
     static let maximumRuleLabelLength = 240
-    static let denyMessage = "The user denied this request from Toastty on iPhone."
+    public static let denyMessage = "The user denied this request from Toastty on iPhone."
+    /// The deny message of a request that Toastty answers for a Claude
+    /// process it runs itself, where the Mac or a paired device answers.
+    public static let directDenyMessage = "The user denied this request in Toastty."
     /// Built-in tools whose permission prompt a plain hook allow or deny
     /// settles. Claude ignores a hook allow without updated input for tools
     /// that require user interaction (questions, plan approval, and some MCP
     /// tools), so every other tool stays answerable only on the desktop.
-    static let supportedToolNames: Set<String> = [
+    public static let supportedToolNames: Set<String> = [
         "Bash", "Edit", "MultiEdit", "Write", "NotebookEdit", "Read", "Glob", "Grep", "WebFetch", "WebSearch",
     ]
 
-    var presentation: ClaudePermissionHookPresentation
+    public var presentation: ClaudePermissionHookPresentation
     var suggestionsByIndex: [Int: AutomationJSONValue]
 
-    static func supportsTool(_ toolName: String) -> Bool {
+    public static func supportsTool(_ toolName: String) -> Bool {
         supportedToolNames.contains(toolName)
     }
 
     /// The same tool call produces the same digest in PreToolUse and in
     /// PermissionRequest, without sending the input to the host.
-    static func inputDigest(_ toolInput: [String: AutomationJSONValue]) -> String? {
+    public static func inputDigest(_ toolInput: [String: AutomationJSONValue]) -> String? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(toolInput) else { return nil }
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    init?(
+    /// `anyTool` lifts the limit to `supportedToolNames`. Only a caller
+    /// whose answer settles every tool's request sets it: the hook's answer
+    /// does not, the answer to a `can_use_tool` request does.
+    public init?(
         toolName: String,
         toolInput: [String: AutomationJSONValue],
         suggestions: AutomationJSONValue?,
-        summary: String
+        summary: String,
+        anyTool: Bool = false
     ) {
-        guard Self.supportsTool(toolName),
+        guard anyTool || Self.supportsTool(toolName),
               summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return nil }
         var options = [RemotePendingInteraction.Option(id: ClaudePermissionDecision.allowOnce.optionID, label: "Allow once")]
         var suggestionsByIndex: [Int: AutomationJSONValue] = [:]
@@ -81,19 +89,27 @@ struct ClaudePermissionHook {
         self.suggestionsByIndex = suggestionsByIndex
     }
 
-    func providerResponse(answers: [RemoteInteractionAnswer]) -> String? {
+    /// Claude's decision object for the client's choice, or `nil` when the
+    /// answers name no offered option.
+    public func decision(
+        answers: [RemoteInteractionAnswer],
+        denyMessage: String = ClaudePermissionHook.denyMessage
+    ) -> [String: AutomationJSONValue]? {
         guard let choice = ClaudePermissionDecision.decision(from: answers, for: presentation.decision) else { return nil }
-        let decision: [String: AutomationJSONValue]
         switch choice {
         case .allowOnce:
-            decision = ["behavior": .string("allow")]
+            return ["behavior": .string("allow")]
         case .alwaysAllow(let index):
             guard let suggestion = suggestionsByIndex[index] else { return nil }
-            decision = ["behavior": .string("allow"), "updatedPermissions": .array([suggestion])]
+            return ["behavior": .string("allow"), "updatedPermissions": .array([suggestion])]
         case .deny:
             // Match the desktop "No": Claude stops and waits for the user.
-            decision = ["behavior": .string("deny"), "message": .string(Self.denyMessage), "interrupt": .bool(true)]
+            return ["behavior": .string("deny"), "message": .string(denyMessage), "interrupt": .bool(true)]
         }
+    }
+
+    public func providerResponse(answers: [RemoteInteractionAnswer]) -> String? {
+        guard let decision = decision(answers: answers) else { return nil }
         let response: [String: AutomationJSONValue] = [
             "hookSpecificOutput": .object([
                 "hookEventName": .string("PermissionRequest"),

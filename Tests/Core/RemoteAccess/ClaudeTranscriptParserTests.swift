@@ -25,6 +25,21 @@ struct ClaudeTranscriptParserTests {
         #expect(ClaudeTranscriptParser.parseContents(contents).observations == result.observations)
     }
 
+    @Test func aMessageThatAHostWroteIntoARunningTurnIsUserInput() throws {
+        // Claude Code 2.1.332 in stream-json mode records such a message
+        // with no origin. The record names the process as a host's.
+        let contents = #"""
+        {"type":"user","promptId":"running-turn","uuid":"initial-user","timestamp":"2026-11-27T08:21:50.000Z","entrypoint":"sdk-cli","promptSource":"sdk","message":{"content":"Original task"}}
+        {"type":"attachment","uuid":"attachment-1","timestamp":"2026-11-27T08:21:54.652Z","entrypoint":"sdk-cli","attachment":{"type":"queued_command","prompt":"Also this","source_uuid":"sent-1","delivery_id":"delivery-1","commandMode":"prompt","rowSource":"local","hostsOwnTurn":true}}
+        """#
+        let result = ClaudeTranscriptParser.parseContents(contents)
+        #expect(result.observations.map(Self.describe) == ["user:Original task", "user:Also this"])
+        let steer = try #require(result.observations.last)
+        // The ID that the host gave the message, as its receipt has it.
+        #expect(steer.fingerprint == "user:sent-1")
+        #expect(steer.isMidTurnInput)
+    }
+
     @Test(arguments: [
         #"{"commandMode":"prompt","origin":{"kind":"peer"},"humanTurn":true}"#,
         #"{"commandMode":"task-notification","origin":{"kind":"human"},"humanTurn":true}"#,

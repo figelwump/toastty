@@ -16,10 +16,26 @@ struct CoordinatorWorkspaceRecord: Codable, Equatable {
     var workspaceID: UUID
     /// `nil` while the coordinator's terminal is closed.
     var panelID: UUID?
+    /// Set while the coordinator's agent is a direct session
+    /// (`ClaudeDirectSession`): Claude's own ID of the conversation and its
+    /// transcript file. After a relaunch Toastty resumes that conversation
+    /// as a direct session again, and the terminal starts no agent. A
+    /// Toastty without direct sessions does not read this, and resumes the
+    /// conversation in the terminal.
+    var directSession: DirectSession?
 
-    init(workspaceID: UUID, panelID: UUID?) {
+    struct DirectSession: Codable, Equatable {
+        var nativeSessionID: String
+        var transcriptPath: String
+        /// The workspaces that the session was limited to, as its resume
+        /// record has them. `nil` for no limit.
+        var scopedWorkspaceIDs: Set<UUID>?
+    }
+
+    init(workspaceID: UUID, panelID: UUID?, directSession: DirectSession? = nil) {
         self.workspaceID = workspaceID
         self.panelID = panelID
+        self.directSession = directSession
     }
 
     /// `nil` when there is no file, or when it cannot be read.

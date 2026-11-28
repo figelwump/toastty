@@ -508,6 +508,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         // A create_hook or git command must not outlive the app: a retry
         // after relaunch would run beside it in the same worktree.
         TaskLiveCommandRunner.stopAllRunningCommands()
+        ClaudeDirectSession.stopAllForAppTermination()
         #if TOASTTY_HAS_GHOSTTY_KIT
         GhosttyClipboardBridge.releaseSelectionPasteboardIfNeeded()
         #endif
@@ -1476,8 +1477,19 @@ struct ToasttyApp: App {
             revealDocumentLine: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
                 webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
             },
-            defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            defaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
+            directSessionEnabled: {
+                CoordinatorDirectSessionSetting.isOn(defaults: persistUserSettings ? ToasttyAppDefaults.current : nil)
+            },
+            terminalEnvironment: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.baseLaunchEnvironment(panelID: panelID) ?? [:]
+            }
         )
+        // A coordinator that ran as a direct session comes back as one, so
+        // its terminal starts no agent of its own after a relaunch.
+        terminalRuntimeRegistry.managedAgentRestoreVeto = { [weak taskCoordinator] panelID in
+            taskCoordinator?.coordinatorController?.resumesAsDirectSession(panelID: panelID) ?? false
+        }
         // Task changes and the coordinator's timer wake it from here on.
         if let coordinatorController = taskCoordinator.coordinatorController {
             taskWebhooks.attach(coordinator: coordinatorController)
@@ -1577,6 +1589,7 @@ struct ToasttyApp: App {
         // a paired phone uses, so one prompt check covers every sender.
         if let coordinatorController = taskCoordinator.coordinatorController {
             coordinatorController.conversationAccess = remoteAccessService
+            coordinatorController.directSessionHost = remoteAccessService
             coordinatorController.chat = CoordinatorChatModel(
                 controller: coordinatorController,
                 access: remoteAccessService,

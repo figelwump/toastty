@@ -367,6 +367,66 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         return try completeLaunch(preparation, plan: plan)
     }
 
+    /// Plans a managed launch of the profile in the panel as `launchAsync`
+    /// does, and types nothing: the caller runs the planned command itself,
+    /// as a process of Toastty's own (`DirectConversationSession`). The
+    /// session exists when this returns. A caller that does not run the
+    /// command discards the plan with `discardManagedLaunch`.
+    ///
+    /// With `resumeNativeSessionID`, the plan is the one of a restored
+    /// launch that goes on with that conversation: the panel keeps its
+    /// conversation, and the session gets `scopedWorkspaceIDs` as its
+    /// workspace scope, as the saved conversation had it.
+    func planLaunchWithoutTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil
+    ) async throws -> ManagedAgentLaunchPlan {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            initialPrompt: nil,
+            initialCommands: [],
+            forkFromSessionID: nil,
+            additionalDirectories: [],
+            parentSessionID: nil,
+            focusPolicy: .preserveFirstResponder,
+            validatePromptState: false
+        )
+        guard let resumeNativeSessionID else {
+            return try await managedLaunchPlanner.prepareManagedLaunchAsync(
+                preparation.request,
+                inheritedScopedWorkspaceIDs: nil
+            )
+        }
+        var argv = preparation.request.argv
+        argv.insert(
+            contentsOf: ["--resume", resumeNativeSessionID],
+            at: min(argv.count, ManagedAgentCommandResolver.launchInsertionIndex(for: preparation.agent, argv: argv) + 1)
+        )
+        return try managedLaunchPlanner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: preparation.request.agent,
+                panelID: preparation.request.panelID,
+                argv: argv,
+                cwd: preparation.request.cwd,
+                environment: preparation.request.environment
+            ),
+            inheritedScopedWorkspaceIDs: scopedWorkspaceIDs
+        )
+    }
+
     /// Prepare the new CLI before retiring the old process. Recheck the
     /// caller's turn and input facts after the last suspension. No input
     /// goes to the Claude process that is being replaced.

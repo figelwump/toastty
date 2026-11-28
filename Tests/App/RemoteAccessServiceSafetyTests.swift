@@ -5288,3 +5288,240 @@ extension RemoteAccessServiceSafetyTests {
         #expect(Set(droppedIDs) == ["q-3", "q-4", "q-5"])
     }
 }
+
+// MARK: - Direct sessions
+
+/// A direct session whose agent is the test. It keeps each line that Toastty
+/// writes for the agent, and the test gives the lines that Claude Code would
+/// write. The real `ClaudeStreamSession` reads and makes the lines.
+@MainActor
+final class DirectSessionStandIn: DirectConversationSession {
+    let panelID: UUID
+    let sessionID: String
+    private weak var service: RemoteAccessService?
+    private var model = ClaudeStreamSession(identity: "stand-in", at: Date())
+    private(set) var written: [String] = []
+
+    init(panelID: UUID, sessionID: String, service: RemoteAccessService) {
+        self.panelID = panelID
+        self.sessionID = sessionID
+        self.service = service
+        _ = model.startRequestLine()
+        agentWrites(#"{"type":"control_response","response":{"subtype":"success","request_id":"toastty-start-stand-in","response":{"account":{"subscriptionType":"Claude Max"}}}}"#)
+    }
+
+    var acceptsInput: Bool { model.phase == .ready }
+
+    func agentWrites(_ line: String) {
+        for output in model.receive(line: line, at: Date()) {
+            if case .observations(let observations) = output {
+                service?.ingestDirectSessionObservations(observations, from: self)
+            }
+        }
+    }
+
+    /// Claude's ID of the last message that Toastty wrote.
+    func lastMessageID() throws -> String {
+        let line = try #require(written.last { $0.contains(#""type":"user""#) })
+        let object = try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        return try #require(object["uuid"] as? String)
+    }
+
+    func send(text: String, clientRequestID: String, deliveryMode: RemoteMessageDeliveryMode) -> TerminalInputDeliveryResult {
+        guard let line = model.userMessageLine(text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode) else {
+            return .unavailable
+        }
+        written.append(line)
+        return .delivered
+    }
+
+    func interrupt() -> TerminalInputDeliveryResult {
+        guard let line = model.interruptLine() else { return .unavailable }
+        written.append(line)
+        return .delivered
+    }
+
+    func answer(responseID: String, answers: [RemoteInteractionAnswer]) -> RemoteQuestionAnswerResult {
+        switch model.answer(responseID: responseID, answers: answers, at: Date()) {
+        case .notPending:
+            return .rejected(reason: .notPending)
+        case .invalid:
+            return .rejected(reason: .invalidAnswers)
+        case .submitted(let line, let observations):
+            written.append(line)
+            service?.ingestDirectSessionObservations(observations, from: self)
+            return .submitted
+        }
+    }
+
+    func currentStateObservations() -> [ProviderTranscriptObservation] {
+        model.currentStateObservations(at: Date())
+    }
+}
+
+extension RemoteAccessServiceSafetyTests {
+    private static let directSessionInit = #"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#
+
+    private static func directSessionResult(_ subtype: String = "success", answering messageID: String) -> String {
+        #"{"type":"result","subtype":"\#(subtype)","is_error":\#(subtype != "success"),"stop_reason":"end_turn","user_message_uuids":["\#(messageID)"]}"#
+    }
+
+    private static func directSessionPermissionRequest(_ requestID: String, callID: String) -> String {
+        #"{"type":"control_request","request_id":"\#(requestID)","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"\#(callID)","input":{"command":"git push"}}}"#
+    }
+
+    @MainActor
+    @Test func aDirectSessionGetsTheMessageAsDataAndItsReceiptConfirmsIt() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
+        // No start report through the hooks confirmed this launch, so
+        // nothing has opened the prompt yet.
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
+        fixture.service.attachDirectSession(session)
+        // The session says that its agent takes a message.
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected the direct session to open the prompt, got \(fixture.summary.inputAvailability)")
+            return
+        }
+        // A key in the panel's terminal does not reach the agent: no draft.
+        #expect(fixture.service.noteLocalInput(panelID: fixture.panelID) == false)
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
+        // The shell's prompt in that terminal is not the agent's end.
+        #expect(fixture.sessionRuntimeStore.stopSessionForPanelIfOlderThan(
+            panelID: fixture.panelID, minimumRuntime: 0, reason: .idleAtPrompt, at: .now
+        ) == false)
+
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID,
+            clientRequestID: "phone-1",
+            expectedInputEpoch: epoch,
+            text: "Check the build"
+        )
+        #expect(fixture.service.performRemoteSend(request, device: device) == .accepted(epoch: epoch))
+        #expect(typed.isEmpty)
+        #expect(session.written.count == 1)
+        // The same request a second time is not written a second time.
+        #expect(fixture.service.performRemoteSend(request, device: device) == .duplicate)
+        #expect(session.written.count == 1)
+
+        let messageID = try session.lastMessageID()
+        session.agentWrites(Self.directSessionInit)
+        #expect(fixture.summary.state == .working)
+        session.agentWrites(#"{"type":"user","uuid":"\#(messageID)","isReplay":true,"message":{"role":"user","content":"Check the build"}}"#)
+        session.agentWrites(#"{"type":"assistant","uuid":"a1","message":{"id":"api-1","model":"claude-haiku","stop_reason":null,"content":[{"type":"text","text":"It is green."}]}}"#)
+        session.agentWrites(Self.directSessionResult(answering: messageID))
+        try await Self.waitForReceipt("phone-1", mode: nil, in: fixture)
+        #expect(Self.userMessageTexts(in: fixture) == ["Check the build"])
+        // The turn's end opens the next prompt at once, under a new epoch.
+        guard case .openPrompt(let nextEpoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected an open prompt after the turn, got \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(nextEpoch != epoch)
+    }
+
+    @MainActor
+    @Test func aDirectSessionsRequestTakesTheFirstAnswerFromThePhoneOrTheMac() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
+        fixture.service.attachDirectSession(session)
+        // The hook of a direct session's process must not hold the request
+        // back to wait for an answer of its own.
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(
+            .init(phase: .begin, sessionID: fixture.sessionID, panelID: fixture.panelID, responseID: "hook-response"),
+            at: .now
+        ).status == .unavailable)
+
+        session.agentWrites(Self.directSessionInit)
+        session.agentWrites(Self.directSessionPermissionRequest("req-1", callID: "toolu_1"))
+        let snapshot = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: .now))
+        let interaction = try #require(snapshot.pendingInteractions.first)
+        #expect(interaction.kind == .permission)
+        #expect(interaction.permission?.preview == "git push")
+        func answer(_ option: String, to interaction: RemotePendingInteraction, id: String) throws -> RemoteQuestionAnswerRequest {
+            RemoteQuestionAnswerRequest(
+                conversationID: fixture.conversationID,
+                interactionID: interaction.id,
+                responseID: try #require(interaction.responseID),
+                expectedInputEpoch: interaction.inputEpoch,
+                clientRequestID: id,
+                answers: [.init(questionID: ClaudePermissionDecision.questionID, selectedOptionIDs: [option])]
+            )
+        }
+
+        // A phone that may not approve requests cannot answer. A newly
+        // paired phone may, until the user turns that off.
+        let deviceID = try #require(fixture.service.devices.first { $0.authKind == .native }?.id)
+        fixture.service.setDevicePermissionApproval(false, for: deviceID)
+        var device = try #require(fixture.service.devices.first { $0.id == deviceID })
+        let refused = fixture.service.performQuestionAnswer(try answer("allow", to: interaction, id: "phone"), device: device)
+        #expect(refused == .rejected(reason: .approvalsDisabled))
+        #expect(session.written.contains { $0.contains(#""type":"control_response""#) } == false)
+        fixture.service.setDevicePermissionApproval(true, for: deviceID)
+        device = try #require(fixture.service.devices.first { $0.id == deviceID })
+
+        // The phone allows. The Mac's deny comes second and changes nothing.
+        let allowed = fixture.service.performQuestionAnswer(try answer("allow", to: interaction, id: "phone"), device: device)
+        #expect(allowed == .submitted)
+        let mac = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { mac.cancel() }
+        #expect(mac.answerQuestion(try answer("deny", to: interaction, id: "mac")) == .rejected(reason: .notPending))
+        let responses = session.written.filter { $0.contains(#""type":"control_response""#) }
+        #expect(responses.count == 1)
+        #expect(responses.first?.contains(#""behavior":"allow""#) == true)
+        let afterAnswer = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: .now))
+        #expect(afterAnswer.pendingInteractions.isEmpty)
+
+        // The Mac can answer a direct session's permission request: there
+        // is no prompt in a terminal that would take the answer.
+        session.agentWrites(Self.directSessionPermissionRequest("req-2", callID: "toolu_2"))
+        let next = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: .now)?
+            .pendingInteractions.first)
+        #expect(mac.answerQuestion(try answer("deny", to: next, id: "mac-2")) == .submitted)
+        #expect(session.written.last?.contains(#""behavior":"deny""#) == true)
+    }
+
+    @MainActor
+    @Test func aDirectSessionsTranscriptFileGivesTheHistoryOnly() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
+        fixture.service.attachDirectSession(session)
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected the direct session to open the prompt")
+            return
+        }
+
+        // A message from before the session began to report: an earlier
+        // process of this conversation wrote it. It is shown, and it does
+        // not close the prompt as a new message of a terminal's agent does.
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.seekToEnd()
+        try transcript.write(contentsOf: Self.claudeUserLine("Earlier", id: "old-1", at: Date().addingTimeInterval(-600)))
+        await SessionRuntimeStoreTestSupport.waitUntil { Self.userMessageTexts(in: fixture) == ["Earlier"] }
+        #expect(Self.userMessageTexts(in: fixture) == ["Earlier"])
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
+
+        // A record from after that moment is the session's to give, with
+        // its receipt. The file's copy is not a second message.
+        try transcript.write(contentsOf: Self.claudeUserLine("Later", id: "new-1", at: Date().addingTimeInterval(60)))
+        try transcript.write(contentsOf: Self.claudeUserLine("Earlier still", id: "old-0", at: Date().addingTimeInterval(-900)))
+        await SessionRuntimeStoreTestSupport.waitUntil { Self.userMessageTexts(in: fixture).contains("Earlier still") }
+        #expect(Self.userMessageTexts(in: fixture) == ["Earlier", "Earlier still"])
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
+    }
+}

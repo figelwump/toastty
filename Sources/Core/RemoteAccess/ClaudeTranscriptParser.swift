@@ -14,7 +14,8 @@ import CryptoKit
 ///   tool completions, not user turns. Missing or malformed `origin` values
 ///   preserve the normal user-record behavior.
 /// - Mid-turn user input comes from `attachment` records whose attachment is
-///   a `queued_command` with `commandMode: prompt` and `origin.kind: human`.
+///   a `queued_command` with `commandMode: prompt` and `origin.kind: human`,
+///   or with no origin in a process that a host drives (`isUserInput`).
 ///   Queue bookkeeping, peer replies, and task notifications are not input.
 /// - Assistant turns come from `assistant` records' `text` blocks; `tool_use`
 ///   blocks become tool starts, `thinking` blocks are dropped.
@@ -42,10 +43,57 @@ public struct ClaudeTranscriptParser: Sendable {
         guard trimmed.isEmpty == false else { return [] }
         guard let data = trimmed.data(using: .utf8),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let recordType = object["type"] as? String else {
+              object["type"] is String else {
             malformedLineCount += 1
             return []
         }
+        return parseRecord(object)
+    }
+
+    /// Parses one `user` or `assistant` message that a Claude process wrote
+    /// to its standard output in stream-json mode. Such a message carries
+    /// the `uuid`, `timestamp` and `message` of the transcript file's record
+    /// for it, so its observations have the same fingerprints as the
+    /// file's, and a projection that reads both keeps one copy.
+    ///
+    /// The stream names some facts differently from the file. A message of
+    /// a subagent has `parent_tool_use_id` in place of `isSidechain`. A
+    /// message that Claude made itself, such as a compaction summary, has
+    /// `isSynthetic`. A message that the host sent comes back with
+    /// `isReplay` and without the file's `promptSource`.
+    public mutating func parseStreamMessage(
+        _ message: [String: Any],
+        receivedAt: Date
+    ) -> [ProviderTranscriptObservation] {
+        guard let recordType = message["type"] as? String,
+              recordType == "user" || recordType == "assistant" else { return [] }
+        var record = message
+        if record["timestamp"] == nil {
+            record["timestamp"] = receivedAt.formatted(Self.fractionalSecondsStyle)
+        }
+        if record["sessionId"] == nil, let sessionID = message["session_id"] {
+            record["sessionId"] = sessionID
+        }
+        if Self.nonEmptyString(message["parent_tool_use_id"]) != nil {
+            record["isSidechain"] = true
+        }
+        if message["isSynthetic"] as? Bool == true {
+            record["isCompactSummary"] = true
+        }
+        if message["isReplay"] as? Bool == true, record["promptSource"] == nil {
+            record["promptSource"] = "sdk"
+        }
+        return parseRecord(record)
+    }
+
+    /// The time of a stream message's `timestamp` value, or `nil` when it
+    /// has none.
+    static func streamTimestamp(_ value: Any?) -> Date? {
+        parseTimestamp(value)
+    }
+
+    private mutating func parseRecord(_ object: [String: Any]) -> [ProviderTranscriptObservation] {
+        guard let recordType = object["type"] as? String else { return [] }
 
         // Records without a timestamp (mode markers, titles, bridge-session)
         // are structural and never carry transcript content we ingest.
@@ -106,8 +154,7 @@ private extension ClaudeTranscriptParser {
         guard let attachment = object["attachment"] as? [String: Any],
               attachment["type"] as? String == "queued_command",
               attachment["commandMode"] as? String == "prompt",
-              let origin = attachment["origin"] as? [String: Any],
-              origin["kind"] as? String == "human",
+              Self.isUserInput(queuedCommand: attachment, record: object),
               let text = Self.nonEmptyString(attachment["prompt"]) else { return [] }
         // Claude logs an absorbed command here instead of as a user record.
         // Its source identity survives transcript replay; attachment UUIDs
@@ -118,6 +165,16 @@ private extension ClaudeTranscriptParser {
         var observation = userMessageObservation(text: text, recordUUID: commandID, timestamp: timestamp)
         observation.isMidTurnInput = true
         return [observation]
+    }
+
+    /// A person's message has `origin.kind: human`. A message that a host
+    /// wrote to a Claude process in stream-json mode has no origin; its
+    /// record says that the process is such a one (`entrypoint: sdk-cli`).
+    static func isUserInput(queuedCommand attachment: [String: Any], record: [String: Any]) -> Bool {
+        if let origin = attachment["origin"] as? [String: Any] {
+            return origin["kind"] as? String == "human"
+        }
+        return attachment["origin"] == nil && record["entrypoint"] as? String == "sdk-cli"
     }
 
     mutating func sessionIdentityObservation(_ object: [String: Any], timestamp: Date) -> [ProviderTranscriptObservation] {

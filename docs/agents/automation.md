@@ -456,6 +456,73 @@ Both write `remote-coordinator-wake-check-<provider>.json` and the app log
 under the run's artifacts directory. The fake run also saves the agent's
 event log and the final `task-webhook-outbox.json`.
 
+### Coordinator direct session
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-direct-session-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers the prototype in
+[A direct session for a Claude coordinator](../tasks.md#a-direct-session-for-a-claude-coordinator-prototype):
+the instance runs with `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1`, so the
+coordinator's Claude Code agent is a process of Toastty's own.
+
+The run uses the real, authenticated Claude CLI and subscription usage, and
+fails if its environment holds an API key. After the build, the check itself
+takes about 5 minutes. The profile gives Claude the Bash tool and the
+question tool, and allows only commands that start with `sleep` without a
+request. Three seeded devices
+stand in for paired iPhones on the loopback gateway; two may approve
+permission requests. The run marks only its temporary coordinator folder
+trusted in `~/.claude.json`, and removes that entry and the folder's Claude
+project directory afterward. `--gui-session` reruns the check through
+Terminal in the GUI session, where the Claude login is readable. Nothing
+moves focus.
+
+It checks, in this order:
+
+- The start: the app's log names a Claude plan before any message is taken,
+  one Claude Code process of the app runs in stream-json mode, and the
+  coordinator's terminal shows no Claude Code.
+- A message from a phone gets a receipt under its own request ID, a reply,
+  and the open prompt. A message from `toastty coordinator send` runs a turn,
+  and a phone that reads from an earlier cursor gets that turn.
+- A timer wake (`coordinator wake`) starts a turn at the open prompt.
+- During a busy turn, a queued phone message, a `coordinator send` message
+  and a timer wake all wait. Each runs as a turn of its own after the turn's
+  end, and none enters the turn.
+- A steer enters the running turn and has a receipt of its own.
+- Stop ends the turn, and the next message runs.
+- A permission request: a phone without approvals is refused. Two phones
+  then answer at the same moment, one with Allow and one with Deny. One
+  answer is taken, the command runs or not as that answer says, and a late
+  answer is refused.
+- A question: a phone and the Mac (`coordinator.answer-question`) answer at
+  the same moment with different choices, and one is taken.
+- For both, the session's status is `needs_approval` while the request
+  waits, and is not from the moment of the answer.
+- `/model` as a message: Claude Code's answer shows as the coordinator's
+  message, and the prompt opens again.
+- `/compact` at the open prompt, then one message: one receipt, one reply.
+- Closing the coordinator's workspace ends the Claude Code process.
+- A second coordinator starts in the same app. After a kill of the app at
+  the open prompt, the relaunched app resumes the same conversation with the
+  same conversation ID, shows its history, and Claude remembers its first
+  answer.
+- After a kill of the app during a turn, the Claude Code process ends
+  within 15 seconds, the relaunched app sends nothing again, the cut-off
+  turn does not finish, and the next message runs.
+- With the setting off, the next launch resumes the same conversation in
+  the terminal, and it takes a message there.
+
+A wake's turn may ask for a command that the profile does not allow; the
+check denies such a request, as a user would. It writes
+`remote-coordinator-direct-session-check.json`, the app logs and Claude's
+transcripts under the run's artifacts directory.
+
 ### Prompt reopen
 
 ```bash

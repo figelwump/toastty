@@ -1077,6 +1077,16 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("summary is required")
             }
             let detail = normalizedOptionalText(event.payload.string("detail"))
+            // A direct session's process reports each request and its
+            // answer. The hook reports only the request, so its status
+            // would stay after the answer.
+            if kind == .needsApproval,
+               sessionRuntimeStore.takesWaitingRequestsFromItsProcess(sessionID: sessionID) {
+                return [
+                    "eventType": .string(event.eventType),
+                    "stateVersion": .int(stateVersion),
+                ]
+            }
             var quota: ClaudeFableQuota?
             if kind == .error, activeSession.agent == .claude,
                ClaudeFableQuota.isRejection(detail),
@@ -2650,6 +2660,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     ) -> Bool {
         var scopedResumeRecord = resumeRecord
         scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        sessionRuntimeStore.noteStartReportFromHook(sessionID: sessionID)
         _ = sessionRuntimeStore.confirmNativeSessionBinding(
             managedSessionID: sessionID,
             panelID: activeSession.panelID,
