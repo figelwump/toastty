@@ -25,7 +25,6 @@ import json
 import os
 import re
 from pathlib import Path
-import shlex
 import shutil
 import signal
 import subprocess
@@ -34,6 +33,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+from terminal_gui_session import gui_session
 
 TIMEOUT = 30
 IDENTITY = 'remote-queue-steer-check@example.com'
@@ -102,24 +103,10 @@ def set_directory_trust(directory, trusted):
 
 def run_in_gui_session(name, script, arguments=(), timeout=1500):
     """Reruns a check from Terminal in the logged-in GUI session."""
-    artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
-    artifacts.mkdir(parents=True, exist_ok=True)
-    done = artifacts / f'{name}-gui.exit'
-    output = artifacts / f'{name}-gui.log'
-    done.unlink(missing_ok=True)
-    command = ' '.join([
-        'cd', shlex.quote(os.getcwd()), '&&',
-        f"TOASTTY_APP_BUNDLE={shlex.quote(os.environ['TOASTTY_APP_BUNDLE'])}",
-        f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
-        'python3', shlex.quote(str(Path(script).resolve())), *map(shlex.quote, arguments),
-        '>', shlex.quote(str(output)), '2>&1;',
-        'echo $? >', shlex.quote(str(done)), '; exit',
-    ])
-    script = f'tell application "Terminal" to do script {json.dumps(command)}'
-    subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=30)
-    wait_for('the GUI-session check', done.exists, timeout=timeout, interval=2)
-    print(output.read_text())
-    raise SystemExit(int(done.read_text().strip() or 1))
+    with gui_session(name, script, arguments) as (done, output):
+        wait_for('the GUI-session check', done.exists, timeout=timeout, interval=2)
+        print(output.read_text())
+        raise SystemExit(int(done.read_text().strip() or 1))
 
 
 def require(condition, message):

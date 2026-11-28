@@ -56,7 +56,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -64,6 +63,8 @@ import threading
 import time
 import traceback
 import uuid
+
+from terminal_gui_session import gui_session
 
 HERE = Path(__file__).resolve().parent
 NAME = 'remote-coordinator-quick-entry-check'
@@ -235,42 +236,31 @@ def run_in_gui_session(arguments, name=NAME, script=__file__):
     shutil.rmtree(broker, ignore_errors=True)
     broker.mkdir()
     compile_tools(broker)
-    done, output = artifacts / f'{name}-gui.exit', artifacts / f'{name}-gui.log'
-    done.unlink(missing_ok=True)
-    command = ' '.join([
-        'cd', shlex.quote(os.getcwd()), '&&',
-        f"TOASTTY_APP_BUNDLE={shlex.quote(os.environ['TOASTTY_APP_BUNDLE'])}",
-        f'TOASTTY_ARTIFACTS_DIR={shlex.quote(str(artifacts))}',
-        f'TOASTTY_UI_BROKER={shlex.quote(str(broker))}',
-        'python3', shlex.quote(str(Path(script).resolve())), *map(shlex.quote, arguments),
-        '>', shlex.quote(str(output)), '2>&1;',
-        'echo $? >', shlex.quote(str(done)), '; exit',
-    ])
-    do_script = f'tell application "Terminal" to do script {json.dumps(command)}'
-    subprocess.run(['osascript', '-e', do_script], check=True, capture_output=True, timeout=30)
-    deadline = time.time() + 2 * 3600
-    printed = 0
-    while not done.exists():
-        require(time.time() < deadline, 'The GUI-session check did not finish')
-        for request in sorted(broker.glob('*.request')):
-            arguments = json.loads(request.read_text())
-            completed = subprocess.run([str(broker / arguments[0]), *arguments[1:]], capture_output=True, text=True, timeout=90)
-            temporary = request.with_suffix('.answering')
-            temporary.write_text(json.dumps(dict(code=completed.returncode, output=completed.stdout + completed.stderr)))
-            request.unlink()
-            os.replace(temporary, request.with_suffix('.answer'))
-        # Show the run's progress while it runs.
-        if output.exists():
-            text = output.read_text(errors='replace')
-            if len(text) > printed:
-                sys.stdout.write(text[printed:])
-                sys.stdout.flush()
-                printed = len(text)
-        time.sleep(0.03)
-    text = output.read_text(errors='replace')
-    sys.stdout.write(text[printed:])
-    shutil.rmtree(broker, ignore_errors=True)
-    raise SystemExit(int(done.read_text().strip() or 1))
+    environment = {'TOASTTY_UI_BROKER': broker}
+    with gui_session(name, script, arguments, environment) as (done, output):
+        deadline = time.time() + 2 * 3600
+        printed = 0
+        while not done.exists():
+            require(time.time() < deadline, 'The GUI-session check did not finish')
+            for request in sorted(broker.glob('*.request')):
+                arguments = json.loads(request.read_text())
+                completed = subprocess.run([str(broker / arguments[0]), *arguments[1:]], capture_output=True, text=True, timeout=90)
+                temporary = request.with_suffix('.answering')
+                temporary.write_text(json.dumps(dict(code=completed.returncode, output=completed.stdout + completed.stderr)))
+                request.unlink()
+                os.replace(temporary, request.with_suffix('.answer'))
+            # Show the run's progress while it runs.
+            if output.exists():
+                text = output.read_text(errors='replace')
+                if len(text) > printed:
+                    sys.stdout.write(text[printed:])
+                    sys.stdout.flush()
+                    printed = len(text)
+            time.sleep(0.03)
+        text = output.read_text(errors='replace')
+        sys.stdout.write(text[printed:])
+        shutil.rmtree(broker, ignore_errors=True)
+        raise SystemExit(int(done.read_text().strip() or 1))
 
 
 # MARK: - The run
