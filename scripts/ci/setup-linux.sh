@@ -12,11 +12,22 @@ test "$(uname -m)" = x86_64
 
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  build-essential pkg-config python3 dbus-daemon jq netcat-openbsd uuid-runtime \
+  build-essential pkg-config python3 bubblewrap dbus-daemon jq netcat-openbsd uuid-runtime \
   desktop-file-utils fakeroot fonts-dejavu-core libgtk-4-dev libgtk-4-bin libadwaita-1-dev \
   libwebkitgtk-6.0-dev libegl-dev libgl1-mesa-dri libegl-mesa0 \
   libcurl4-openssl-dev libedit-dev libicu-dev libsqlite3-dev libxml2-dev \
   libncurses-dev libzstd-dev zlib1g-dev
+
+# Ubuntu 24.04's opt-in AppArmor profile lets WebKit's bubblewrap sandbox
+# start on the hosted image without relaxing the system-wide restriction.
+probe_bwrap() {
+  bwrap --unshare-user --unshare-pid --ro-bind / / /usr/bin/true
+}
+if [[ "$VERSION_ID" == 24.04 && "${GITHUB_ACTIONS:-}" == true ]] && ! probe_bwrap; then
+  sudo apt-get install -y --no-install-recommends apparmor-profiles
+  sudo apparmor_parser -r -W /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+  probe_bwrap
+fi
 
 swift_dir="${RUNNER_TEMP:?}/swift-$swift_version"
 swift_dist="swift-$swift_version-RELEASE-ubuntu$VERSION_ID"

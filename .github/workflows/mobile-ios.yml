@@ -131,8 +131,27 @@ jobs:
       - name: Test Mac release and device scripts
         run: node --test ios/Tests/ReleaseScriptTests/ios-testflight.test.mjs ios/Tests/ScriptTests/validate-device-build.test.mjs
 
+      - name: Restore pinned GhosttyKit
+        id: mac-ghostty-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            Dependencies/GhosttyKit.Debug.xcframework
+            Dependencies/GhosttyKit.Debug.metadata.env
+          key: macos-26-arm64-ghostty-${{ hashFiles('docs/ghostty-integration.md', 'scripts/ci/build-macos-ghostty.sh', 'scripts/ghostty/install-local-xcframework.sh', '.github/ios-xcode-version') }}
+
       - name: Build pinned GhosttyKit
+        if: steps.mac-ghostty-cache.outputs.cache-hit != 'true'
         run: bash scripts/ci/build-macos-ghostty.sh
+
+      - name: Cache built GhosttyKit
+        if: steps.mac-ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Dependencies/GhosttyKit.Debug.xcframework
+            Dependencies/GhosttyKit.Debug.metadata.env
+          key: ${{ steps.mac-ghostty-cache.outputs.cache-primary-key }}
 
       - name: Generate macOS project
         run: |
@@ -225,8 +244,27 @@ jobs:
       - name: Install Swift and Linux build dependencies
         run: bash scripts/ci/setup-linux.sh
 
+      - name: Restore pinned Linux Ghostty
+        id: linux-ghostty-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: linux/.deps/ghostty
+          key: ${{ matrix.runner }}-x64-ghostty-${{ hashFiles('linux/ghostty/**') }}
+
       - name: Build pinned Linux Ghostty
+        if: steps.linux-ghostty-cache.outputs.cache-hit != 'true'
         run: linux/ghostty/build-libghostty.sh
+
+      - name: Cache built Linux Ghostty
+        if: steps.linux-ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: linux/.deps/ghostty
+          key: ${{ steps.linux-ghostty-cache.outputs.cache-primary-key }}
+
+      - name: Point restored Ghostty pkg-config file at this checkout
+        if: steps.linux-ghostty-cache.outputs.cache-hit == 'true'
+        run: sed -i "s|^prefix=.*|prefix=$PWD/linux/.deps/ghostty|" linux/.deps/ghostty/lib/pkgconfig/toastty-ghostty.pc
 
       - name: Build, test, smoke and package Toastty on Broadway
         env:
@@ -235,8 +273,9 @@ jobs:
           DEBEMAIL: ci@toastty.invalid
           LIBGL_ALWAYS_SOFTWARE: 1
         run: |
-          mkdir -p "$HOME/.cache"
-          export XDG_RUNTIME_DIR="$(mktemp -d "$HOME/.cache/ttci.XXXXXX")"
+          # The nested Swift GUI fixtures allocate AF_UNIX sockets inside
+          # this directory. Keep the runner-specific base path short.
+          export XDG_RUNTIME_DIR="$(mktemp -d /tmp/tt.XXXXXX)"
           trap 'rm -rf -- "$XDG_RUNTIME_DIR"' EXIT
           umask 022
           dbus-run-session -- scripts/linux/check.sh
