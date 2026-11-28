@@ -5494,6 +5494,23 @@ extension RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
+    @Test func aConversationThatLeavesItsDirectSessionIsATerminalConversationAgain() throws {
+        // Continue in Terminal ends the direct session, and the same
+        // conversation goes on in the panel's terminal.
+        let fixture = try RemoteBootstrapFixture(agent: .claude, pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
+        let session = DirectSessionStandIn(panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service)
+        fixture.service.attachDirectSession(session)
+        #expect(fixture.service.hostReadsTurnState(inPanel: fixture.panelID))
+
+        fixture.service.detachDirectSession(session)
+
+        // A turn end of the terminal's agent is a report that can come
+        // early: the prompt opens after its time to settle, not at once.
+        #expect(fixture.service.hostReadsTurnState(inPanel: fixture.panelID) == false)
+    }
+
     @Test func aDirectSessionsTranscriptFileGivesTheHistoryOnly() async throws {
         let fixture = try RemoteBootstrapFixture(agent: .claude, pairNativeDevice: true)
         defer { fixture.removeRuntimeFiles() }

@@ -3767,8 +3767,19 @@ final class RemoteAccessService: ObservableObject {
         directSessionsByPanelID.removeValue(forKey: session.panelID)
         if let conversationID = conversationIDByPanelID[session.panelID] {
             directSessionSyncByConversationID.removeValue(forKey: conversationID)
+            // The conversation can go on in the panel's terminal, as after
+            // Continue in Terminal. A terminal agent's turn end is a report
+            // again, and its prompt needs the time to settle.
+            projectionStore.setHostReadsTurnState(false, for: conversationID)
         }
         syncConversations()
+    }
+
+    /// Whether the panel's conversation takes each turn's start and end
+    /// from a direct session's process; see
+    /// `ConversationProjector.hostReadsTurnState`.
+    func hostReadsTurnState(inPanel panelID: UUID) -> Bool {
+        conversationIDByPanelID[panelID].flatMap { projectionStore.projectorState(for: $0) }?.hostReadsTurnState == true
     }
 
     /// The panel's direct session, while the managed session that it runs

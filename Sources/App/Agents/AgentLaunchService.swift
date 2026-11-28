@@ -388,7 +388,98 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         resumeNativeSessionID: String? = nil,
         scopedWorkspaceIDs: Set<UUID>? = nil
     ) async throws -> ManagedAgentLaunchPlan {
-        let preparation = try makeLaunchPreparation(
+        try await prepareLaunchWithoutPrompt(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            resumeNativeSessionID: resumeNativeSessionID,
+            scopedWorkspaceIDs: scopedWorkspaceIDs
+        ).plan
+    }
+
+    /// Goes on with a conversation in the panel's terminal: plans the
+    /// restored launch that `planLaunchWithoutTerminal` plans for
+    /// `resumeNativeSessionID`, and types it into the panel's shell, as
+    /// `launchAsync` types its plan. The conversation moves from a process
+    /// of Toastty's own to the terminal this way. The caller ended that
+    /// process first: two processes must not write one transcript.
+    func resumeInTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) async throws -> AgentLaunchResult {
+        guard let terminalCommandRouter else {
+            throw AgentLaunchError.serviceUnavailable
+        }
+        try await ensurePanelBecomesInteractive(panelID: panelID, terminalCommandRouter: terminalCommandRouter)
+        let prepared = try await prepareLaunchWithoutPrompt(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            resumeNativeSessionID: resumeNativeSessionID,
+            scopedWorkspaceIDs: scopedWorkspaceIDs
+        )
+        return try completeLaunch(prepared.preparation, plan: prepared.plan)
+    }
+
+    /// Types the sign-in command of the profile's Claude Code into the
+    /// panel's shell: the profile's command, with any wrapper before it,
+    /// and `auth login`. It is no agent launch, so it gets no managed
+    /// session: Toastty's launcher for agent commands passes it on.
+    func typeClaudeSignInCommand(profileID: String, panelID: UUID) throws {
+        guard let terminalCommandRouter else {
+            throw AgentLaunchError.serviceUnavailable
+        }
+        guard let launchProfile = resolvedLaunchProfile(profileID: profileID),
+              AgentKind(rawValue: launchProfile.id) == .claude, launchProfile.argv.isEmpty == false else {
+            throw AgentLaunchError.profileNotFound(profileID: profileID, availableProfileIDs: availableProfileIDs())
+        }
+        try ensurePanelAppearsInteractive(panelID: panelID, terminalCommandRouter: terminalCommandRouter)
+        let commandIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .claude, argv: launchProfile.argv)
+        let commandLine = ShellCommandRenderer.render(
+            argv: Array(launchProfile.argv.prefix(commandIndex + 1)) + Self.claudeSignInArguments,
+            environment: [ToasttyLaunchContextEnvironment.managedAgentShimBypassKey: "1"]
+        )
+        switch terminalCommandRouter.sendManagedAgentCommandResult(commandLine, panelID: panelID, focusPolicy: .focusTarget) {
+        case .delivered:
+            break
+        case .unavailable:
+            throw AgentLaunchError.terminalUnavailable(panelID: panelID)
+        case .uncertain:
+            throw AgentLaunchError.commandDeliveryUncertain(panelID: panelID)
+        }
+    }
+
+    /// What Claude Code 2.1.332 offers for a sign-in outside a session:
+    /// `claude auth login`, which uses the Claude plan by default.
+    static let claudeSignInArguments = ["auth", "login"]
+
+    private func prepareLaunchWithoutPrompt(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) async throws -> (preparation: AgentLaunchPreparation, plan: ManagedAgentLaunchPlan) {
+        var preparation = try makeLaunchPreparation(
             profileID: profileID,
             workspaceID: workspaceID,
             panelID: panelID,
@@ -405,26 +496,29 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             validatePromptState: false
         )
         guard let resumeNativeSessionID else {
-            return try await managedLaunchPlanner.prepareManagedLaunchAsync(
+            let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
                 preparation.request,
                 inheritedScopedWorkspaceIDs: nil
             )
+            return (preparation, plan)
         }
         var argv = preparation.request.argv
         argv.insert(
             contentsOf: ["--resume", resumeNativeSessionID],
             at: min(argv.count, ManagedAgentCommandResolver.launchInsertionIndex(for: preparation.agent, argv: argv) + 1)
         )
-        return try managedLaunchPlanner.prepareRestoredManagedLaunch(
-            ManagedAgentLaunchRequest(
-                agent: preparation.request.agent,
-                panelID: preparation.request.panelID,
-                argv: argv,
-                cwd: preparation.request.cwd,
-                environment: preparation.request.environment
-            ),
+        preparation.request = ManagedAgentLaunchRequest(
+            agent: preparation.request.agent,
+            panelID: preparation.request.panelID,
+            argv: argv,
+            cwd: preparation.request.cwd,
+            environment: preparation.request.environment
+        )
+        let plan = try managedLaunchPlanner.prepareRestoredManagedLaunch(
+            preparation.request,
             inheritedScopedWorkspaceIDs: scopedWorkspaceIDs
         )
+        return (preparation, plan)
     }
 
     /// Prepare the new CLI before retiring the old process. Recheck the

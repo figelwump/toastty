@@ -106,6 +106,18 @@ final class ClaudeDirectSession: DirectConversationSession {
 
     var phase: ClaudeStreamSession.Phase { model.phase }
     var account: ClaudeStreamSession.Account? { model.account }
+    /// The session failed because Claude Code has no Claude plan sign-in.
+    var failedForMissingSignIn: Bool { model.failedForMissingSignIn }
+
+    /// The agent is at its open prompt as far as its process told: no turn
+    /// runs, no request waits and it does not compact.
+    var isAtOpenPrompt: Bool {
+        acceptsInput && model.isTurnRunning == false && model.isCompacting == false
+            && model.pendingResponseIDs.isEmpty
+    }
+
+    /// The process still runs, also after `stop`: it ends a moment later.
+    var processIsRunning: Bool { process?.processIdentifier != nil }
 
     var acceptsInput: Bool {
         isAdmitted && isStopped == false && didEnd == false && model.phase == .ready

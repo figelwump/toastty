@@ -10,8 +10,15 @@ TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1: the coordinator's Claude Code
 agent is then a process of Toastty's own, with no terminal between them. It
 uses the real, authenticated Claude CLI and subscription usage, and never an
 API key. Three seeded devices stand in for paired iPhones on the loopback
-gateway: two may approve permission requests, one may not. Nothing moves
-focus, and the installed production app is not touched.
+gateway: two may approve permission requests, one may not. The installed
+production app is not touched.
+
+Two parts use the app's real window, through ax-drive: Continue in Terminal
+in the "…" menu of the coordinator's panel, and Sign In on the notice of a
+start that failed for no sign-in. They bring the check's app to the front
+and need the remote Mac's screen unlocked. The sign-in part runs the real
+Claude Code with an empty config folder, so it has no sign-in, and a
+stand-in for `claude auth login`, which needs a person at a browser.
 
 The profile gives Claude the Bash tool and the question tool only, and allows
 only commands that start with `sleep` without a request. The run marks only
@@ -51,6 +58,7 @@ def load(name, file):
 
 coordinator_check = load('coordinator_check', 'remote-coordinator-check.py')
 steer = load('queue_steer_check', 'remote-queue-steer-check.py')
+chat_check = load('chat_check', 'remote-coordinator-chat-check.py')
 require, wait_for, Instance = coordinator_check.require, coordinator_check.wait_for, coordinator_check.Instance
 
 SETTING = 'TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION'
@@ -74,7 +82,8 @@ def main():
                         help='rerun through Terminal in the GUI session, where the Claude login is readable')
     options = parser.parse_args()
     if options.gui_session:
-        steer.run_in_gui_session('remote-coordinator-direct-session-check', __file__, timeout=3600)
+        # This process serves the clicks of the two parts that use the real window.
+        chat_check.run_in_gui_session([], name='remote-coordinator-direct-session-check', script=__file__)
     check = coordinator_check.Check('claude')
     check.prefix = 'remote-coordinator-direct-session-check'
     check.evidence['startedAt'] = datetime.now(timezone.utc).isoformat()
@@ -378,6 +387,40 @@ def run(check):
         wait_for('the open prompt', prompt_open, timeout=120)
         return dict(log=ready, process=children[0], status=current, terminal=text[-300:])
 
+    ui = chat_check.UI(check.artifacts, 0)
+
+    def capture(name):
+        """A screenshot of the app's window, kept with the run's evidence."""
+        response = state['instance'].request('automation.capture_screenshot', dict(step=name))
+        path = (response.get('result') or {}).get('path')
+        if response.get('ok') and path:
+            frames = check.artifacts / f'{check.prefix}-frames'
+            frames.mkdir(exist_ok=True)
+            shutil.copyfile(path, frames / f'{name}.png')
+            path = str(frames / f'{name}.png')
+        check.evidence['captures'].append(dict(step=name, ok=response.get('ok'), path=path,
+                                               error=None if response.get('ok') else response.get('error')))
+
+    def show_coordinator():
+        """Brings the check's app to the front with the coordinator's workspace, for a click in its window."""
+        ui.pid = app_pid()
+        _, trust = ui.run('status')
+        require('trusted=true' in trust and 'locked=false' in trust, f'The real window cannot be used: {trust}')
+        state['instance'].request('app_control.run_action', dict(
+            id='workspace.select', args=dict(workspaceID=status()['workspaceID'])))
+        ui.run('activate')
+        wait_for("the coordinator's panel", lambda: ui.exists('coordinator.panel.actions'), timeout=30)
+
+    def choose_continue_in_terminal():
+        """Opens the "…" menu of the coordinator's panel and clicks Continue in Terminal."""
+        show_coordinator()
+        ui.run('click', 'coordinator.panel.actions')
+        frame = wait_for('Continue in Terminal in the menu',
+                         lambda: (found := ui.run('label-frame', 'Continue in Terminal', check=False))[0] == 0
+                         and found[1], timeout=15)
+        x, y, width, height = (int(number) for number in frame.split()[:4])
+        ui.run('click-at', str(x + width // 2), str(y + height // 2))
+
     def kill_app(child_deadline):
         """Kills the app as a crash does. Returns the seconds until its Claude Code process was gone too."""
         children = stream_processes(app_pid())
@@ -593,6 +636,88 @@ def run(check):
                 f'{len(received)} messages in the transcript')
         step('a message after a compaction at the open prompt ran one turn', compactRequest=compact_id)
 
+    # The handoff: Continue in Terminal is refused during a turn. At the open prompt it ends the direct
+    # session's process and resumes the same conversation in a Claude Code in the coordinator's terminal.
+    def continue_in_terminal():
+        child = stream_processes(app_pid())[0]['pid']
+        files = sorted(p.name for p in project.glob('*.jsonl'))
+        conversation_id = conversation()['conversationID']
+        show_coordinator()
+        capture('handoff-01-chat-of-the-direct-session')
+
+        busy_id = phone_send(sleeps(3, 'HANDOFF-BUSY-DONE'), 'handoff-busy')
+        busy_receipt = receipt(busy_id)
+        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == 'Bash', 'the first sleep',
+             after=busy_receipt)
+        mark = len(log_records('The coordinator refused a command for its terminal'))
+        choose_continue_in_terminal()
+        refused = wait_for('the refusal', lambda: log_records(
+            'The coordinator refused a command for its terminal')[mark:], timeout=30)[-1]
+        require(refused.get('command') == 'continue_in_terminal' and 'Stop the turn' in refused.get('reason', ''),
+                f'Unexpected refusal: {refused}')
+        capture('handoff-02-refused-during-a-turn')
+        ui.run('click-label', 'OK')
+        require(alive(child) and stream_processes(app_pid()), 'The refused handoff ended the direct session')
+        reply('HANDOFF-BUSY-DONE', after=busy_receipt)
+        settle()
+        step('Continue in Terminal was refused while a turn ran, and the turn finished', refusal=refused)
+
+        mark_log()
+        choose_continue_in_terminal()
+        wait_for('the direct session\'s process to end', lambda: not alive(child), timeout=30)
+        # A message that the user sends now, before Claude Code is up in the terminal, waits in the queue
+        # for the terminal's prompt.
+        queued = cli('coordinator', 'send', word('QUEUED-FOR-TERMINAL'))
+        moved = wait_for('the launch in the terminal', lambda: log_records(
+            "Moved the coordinator's direct session to its terminal"), timeout=60)[-1]
+
+        def composer():
+            text = screen()
+            return text if '❯' in text and ('for shortcuts' in text or 'shift+tab to cycle' in text) else None
+
+        wait_for("Claude Code's composer in the terminal", composer, timeout=180)
+        require(not stream_processes(app_pid()), f'A stream-json process stayed: {stream_processes(app_pid())}')
+        current = wait_for('the coordinator to run in the terminal',
+                           lambda: (s := status()).get('agentState') == 'running' and s, timeout=120)
+        require(current.get('sessionID') == moved.get('session_id'), f'Another session runs: {current} {moved}')
+        wait_for('the reply to the queued message in the terminal', lambda: any(
+            r.get('type') == 'assistant' and 'QUEUED-FOR-TERMINAL' in json.dumps((r.get('message') or {}).get('content'))
+            for r in transcript_records()), timeout=240, interval=2)
+        require(sorted(p.name for p in project.glob('*.jsonl')) == files,
+                f'The terminal started another conversation: {sorted(p.name for p in project.glob("*.jsonl"))}')
+        require(conversation()['conversationID'] == conversation_id, 'The chat got another conversation')
+        # The chat reads the terminal's turn: the reply is in the conversation, and the prompt opens again.
+        reply('QUEUED-FOR-TERMINAL')
+        wait_for('the open prompt in the terminal', prompt_open, timeout=120)
+        capture('handoff-03-claude-code-in-the-terminal')
+        require(ui.run('click', 'coordinator.panel.actions', check=False)[0] == 0, 'The "…" button is gone')
+        time.sleep(1)
+        offered = ui.run('label-frame', 'Restart Coordinator', check=False)[0] == 0
+        still_offered = ui.run('label-frame', 'Continue in Terminal', check=False)[0] == 0
+        ui.run('key', 'escape')
+        require(offered and not still_offered,
+                f'The menu of a terminal coordinator: Restart {offered}, Continue in Terminal {still_offered}')
+        step('Continue in Terminal moved the same conversation to the terminal, and the waiting message ran there',
+             moved=moved, queued=queued, screen=screen()[-400:])
+
+    # The way back: the setting is still on, so the next launch goes on with the conversation as a
+    # direct session, and it has what was said in the terminal.
+    def back_to_a_direct_session():
+        conversation_id = conversation()['conversationID']
+        files = sorted(p.name for p in project.glob('*.jsonl'))
+        coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
+        state['instance'].kill()
+        time.sleep(3)
+        mark_log()
+        launch(direct)
+        resumed = started_direct(resumes=True)
+        require(conversation()['conversationID'] == conversation_id, 'The relaunch gave the conversation a new ID')
+        ask('Use no tools. A message in this conversation asked you for one word that starts with QUEUED. Reply '
+            'with exactly that word and nothing else.', 'QUEUED-FOR-TERMINAL', 'memory-of-the-terminal')
+        require(sorted(p.name for p in project.glob('*.jsonl')) == files,
+                f'The relaunch started another conversation: {sorted(p.name for p in project.glob("*.jsonl"))}')
+        step('the next launch went on with the conversation as a direct session', resumed=resumed['process']['command'][-200:])
+
     # 11. The conversation's place is gone: closing the coordinator's workspace ends the process.
     def closed_workspace():
         child = stream_processes(app_pid())[0]['pid']
@@ -689,6 +814,96 @@ def run(check):
                 f'The terminal started another conversation: {sorted(p.name for p in project.glob("*.jsonl"))}')
         step('with the setting off the same conversation went on in the terminal', sent=sent, screen=screen()[-600:])
 
+    # Sign In. Claude Code has no sign-in at this launch: the profile's command is a script that runs the
+    # real Claude Code with an empty config folder until the check "signs in". Its `auth login` is a
+    # stand-in for the real one, which needs a person at a browser: it waits for the check and then
+    # leaves Claude Code signed in or not.
+    def sign_in():
+        conversation_id = conversation()['conversationID']
+        coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
+        state['instance'].kill()
+        time.sleep(3)
+        account = check.root / 'sign-in'
+        (account / 'bin').mkdir(parents=True)
+        # The config folder has no sign-in, and it has the user's conversations, as after a sign-out.
+        config = account / 'config-without-a-sign-in'
+        config.mkdir()
+        (config / 'projects').symlink_to(project.parent, target_is_directory=True)
+        stand_in = account / 'bin/claude'
+        stand_in.write_text(f"""#!/bin/sh
+# The check's stand-in for a Claude Code that has no sign-in until the check signs in.
+state={json.dumps(str(account))}
+if [ "$1" = auth ] && [ "$2" = login ]; then
+  echo "Stand-in for claude auth login: the check finishes this sign-in."
+  while [ ! -e "$state/login-ends" ]; do sleep 0.2; done
+  rm -f "$state/login-ends"
+  if [ -e "$state/login-succeeds" ]; then touch "$state/signed-in"; echo "Login successful."; else echo "Login cancelled."; fi
+  exit 0
+fi
+if [ -e "$state/signed-in" ]; then exec {json.dumps(claude)} "$@"; fi
+CLAUDE_CONFIG_DIR="$state/config-without-a-sign-in" exec {json.dumps(claude)} "$@"
+""")
+        stand_in.chmod(0o755)
+        (user_home / '.toastty/agents.toml').write_text(
+            f'[claude]\ndisplayName = "Claude Code"\nargv = {json.dumps([str(stand_in), *argv[1:]])}\n')
+        mark_log()
+        launch(direct)
+
+        # The launch goes on with the saved conversation as a direct session. Its start fails for no sign-in.
+        failure = wait_for('the start that fails for no sign-in', lambda: status().get('startFailure'), timeout=180)
+        require('without a Claude plan sign-in' in failure, f'Unexpected start failure: {failure}')
+        wait_for('the failed process to end', lambda: not stream_processes(app_pid()), timeout=30)
+        show_coordinator()
+        wait_for('Sign In on the notice', lambda: ui.exists('coordinator.chat.notice.sign-in'), timeout=30)
+        notice = ui.texts('coordinator.chat.notice')
+        require('no Claude plan sign-in' in notice and 'Restart Coordinator' in notice, f'Unexpected notice: {notice}')
+        capture('sign-in-01-notice-with-sign-in')
+
+        def press_sign_in():
+            show_coordinator()
+            # The terminal shows after a first Sign In. The notice is in the chat.
+            if not ui.exists('coordinator.chat.notice.sign-in'):
+                ui.run('click', 'coordinator.panel.mode-toggle')
+            wait_for('Sign In on the notice', lambda: ui.exists('coordinator.chat.notice.sign-in'), timeout=30)
+            ui.run('click', 'coordinator.chat.notice.sign-in')
+            wait_for('the sign-in command in the terminal', lambda: 'Stand-in for claude auth login' in screen(),
+                     timeout=60)
+
+        # The user gives the sign-in up: the start fails again, and the notice offers Sign In again.
+        press_sign_in()
+        typed = screen()
+        require('auth login' in typed and not status().get('sessionID'),
+                f'The sign-in command started an agent session, or was not typed:\n{typed[-600:]}')
+        capture('sign-in-02-the-command-in-the-terminal')
+        ui.run('click', 'coordinator.panel.mode-toggle')
+        wait_for('the notice of the running sign-in', lambda: 'The sign-in runs' in ui.texts('coordinator.chat.notice'),
+                 timeout=30)
+        capture('sign-in-03-notice-while-the-sign-in-runs')
+        mark_log()
+        (account / 'login-ends').write_text('')
+        wait_for('the start after the cancelled sign-in', lambda: log_records(
+            'The sign-in command ended; starting the coordinator\'s agent'), timeout=60)
+        failure = wait_for('the second failed start', lambda: log_records("The coordinator's agent did not start"),
+                           timeout=180)[-1]
+        require('without a Claude plan sign-in' in failure.get('reason', ''), f'Unexpected failure: {failure}')
+        wait_for('Sign In on the notice again', lambda: ui.exists('coordinator.chat.notice.sign-in'), timeout=30)
+        step('a sign-in that the user gave up left the notice with Sign In', failure=failure)
+
+        # The user signs in: the coordinator starts by itself, goes on with the saved conversation, and
+        # the chat shows again.
+        (account / 'login-succeeds').write_text('')
+        press_sign_in()
+        mark_log()
+        (account / 'login-ends').write_text('')
+        resumed = started_direct(resumes=True)
+        require(conversation()['conversationID'] == conversation_id, 'The start after the sign-in has another conversation')
+        wait_for('the chat to show again', lambda: ui.exists('coordinator.chat.composer'), timeout=30)
+        require(not ui.exists('coordinator.chat.notice.sign-in'), 'The notice with Sign In stayed')
+        ask(word('AFTER-SIGN-IN-OK'), 'AFTER-SIGN-IN-OK', 'after-sign-in')
+        capture('sign-in-04-the-coordinator-runs-after-the-sign-in')
+        step('after the sign-in the coordinator started by itself and went on with its conversation',
+             resumed=resumed['process']['command'][-200:], plan=resumed['log'].get('plan'))
+
     failures = []
 
     def brief(listed):
@@ -734,7 +949,8 @@ def run(check):
         # Without a start there is nothing to check.
         start()
         for body in (phone_message, mac_message, idle_wake, busy_turn, steered_turn, stopped_turn, permission_request,
-                     question, text_command, compaction, closed_workspace, crash_at_the_prompt, crash_during_a_turn, terminal_again):
+                     question, text_command, compaction, continue_in_terminal, back_to_a_direct_session,
+                     closed_workspace, crash_at_the_prompt, crash_during_a_turn, terminal_again, sign_in):
             part(body)
         require(not failures, f'Parts that failed: {failures}')
     finally:

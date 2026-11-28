@@ -37,7 +37,10 @@ struct CoordinatorPanelModeToggle: View {
         .buttonStyle(.plain)
         .help(showsTerminal
             ? "Show the coordinator's conversation as a chat"
-            : "Show the coordinator's terminal, for a login, a folder-trust or a permission prompt")
+            : controller.status?.agentIsDirectSession == true
+                // The agent of a direct session does not run there.
+                ? "Show the coordinator's terminal, a plain shell. To run the coordinator there, choose Continue in Terminal from the … menu"
+                : "Show the coordinator's terminal, for a login, a folder-trust or a permission prompt")
         .accessibilityLabel(showsTerminal ? "Show Chat" : "Show Terminal")
         .accessibilityIdentifier("coordinator.panel.mode-toggle")
     }
@@ -45,8 +48,10 @@ struct CoordinatorPanelModeToggle: View {
 
 /// "…" in the header of the coordinator's panel: a menu that shows the
 /// coordinator's policy, ledger or friction notes in the right panel, or
-/// restarts the coordinator. The chip matches Dock and Terminal; the menu
-/// is an `NSMenu`, as on the Scratchpad's and the browser's "…" buttons.
+/// restarts the coordinator. For a coordinator that is a direct session it
+/// also has Continue in Terminal. The chip matches Dock and Terminal; the
+/// menu is an `NSMenu`, as on the Scratchpad's and the browser's "…"
+/// buttons.
 struct CoordinatorPanelActionsButton: View {
     let controller: CoordinatorController
 
@@ -59,7 +64,9 @@ struct CoordinatorPanelActionsButton: View {
                     TaskActions.presentFailure(document.openFailureTitle, error.localizedDescription)
                 }
             },
-            restart: { controller.perform(.restart) }
+            restart: { controller.perform(.restart) },
+            offersContinueInTerminal: { controller.offersContinueInTerminal },
+            continueInTerminal: { controller.perform(.continueInTerminal) }
         )
         .frame(width: 22, height: 16)
         .background(
@@ -75,6 +82,11 @@ struct CoordinatorPanelActionsButton: View {
 struct CoordinatorActionsMenuButton: NSViewRepresentable {
     let openDocument: (CoordinatorDocument) -> Void
     let restart: () -> Void
+    /// Asked each time the menu opens: whether the coordinator's agent is
+    /// a direct session that runs. Only then the menu has Continue in
+    /// Terminal.
+    var offersContinueInTerminal: () -> Bool = { false }
+    var continueInTerminal: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -102,12 +114,18 @@ struct CoordinatorActionsMenuButton: NSViewRepresentable {
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.openDocument = openDocument
         context.coordinator.restart = restart
+        context.coordinator.offersContinueInTerminal = offersContinueInTerminal
+        context.coordinator.continueInTerminal = continueInTerminal
     }
 
     @MainActor
     final class Coordinator: NSObject {
         var openDocument: ((CoordinatorDocument) -> Void)?
         var restart: (() -> Void)?
+        var offersContinueInTerminal: (() -> Bool)?
+        var continueInTerminal: (() -> Void)?
+
+        static let continueInTerminalTitle = "Continue in Terminal"
 
         @objc func showMenu(_ sender: NSButton) {
             menu().popUp(
@@ -117,8 +135,8 @@ struct CoordinatorActionsMenuButton: NSViewRepresentable {
             )
         }
 
-        /// One item for each of the coordinator's files, then Restart
-        /// Coordinator.
+        /// One item for each of the coordinator's files, then Continue in
+        /// Terminal for a direct session, then Restart Coordinator.
         func menu() -> NSMenu {
             let menu = NSMenu()
             for document in CoordinatorDocument.allCases {
@@ -132,6 +150,16 @@ struct CoordinatorActionsMenuButton: NSViewRepresentable {
                 menu.addItem(item)
             }
             menu.addItem(.separator())
+            if offersContinueInTerminal?() == true {
+                let item = NSMenuItem(
+                    title: Self.continueInTerminalTitle,
+                    action: #selector(continueCoordinatorInTerminal(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.toolTip = "End the coordinator's direct session and go on with the same conversation in a Claude Code in its terminal"
+                menu.addItem(item)
+            }
             let restart = NSMenuItem(title: "Restart Coordinator", action: #selector(restartCoordinator(_:)), keyEquivalent: "")
             restart.target = self
             menu.addItem(restart)
@@ -145,6 +173,10 @@ struct CoordinatorActionsMenuButton: NSViewRepresentable {
 
         @objc private func restartCoordinator(_ sender: NSMenuItem) {
             restart?()
+        }
+
+        @objc private func continueCoordinatorInTerminal(_ sender: NSMenuItem) {
+            continueInTerminal?()
         }
     }
 }
