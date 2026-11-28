@@ -508,7 +508,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         // A create_hook or git command must not outlive the app: a retry
         // after relaunch would run beside it in the same worktree.
         TaskLiveCommandRunner.stopAllRunningCommands()
-        ClaudeDirectSession.stopAllForAppTermination()
+        AgentDirectSession.stopAllForAppTermination()
         #if TOASTTY_HAS_GHOSTTY_KIT
         GhosttyClipboardBridge.releaseSelectionPasteboardIfNeeded()
         #endif
@@ -1478,8 +1478,8 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
             },
             defaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
-            directSessionEnabled: {
-                CoordinatorDirectSessionSetting.isOn(defaults: persistUserSettings ? ToasttyAppDefaults.current : nil)
+            directSessionEnabled: { agent in
+                CoordinatorDirectSessionSetting.isOn(for: agent, defaults: persistUserSettings ? ToasttyAppDefaults.current : nil)
             },
             terminalEnvironment: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.baseLaunchEnvironment(panelID: panelID) ?? [:]

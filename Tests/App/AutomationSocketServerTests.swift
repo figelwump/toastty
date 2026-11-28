@@ -243,7 +243,7 @@ struct AutomationSocketServerSessionLifecycleTests: AutomationSocketServerTestSu
         await MainActor.run {
             server.sessionRuntimeStore.noteDirectSessionWaitingRequest(
                 sessionID: sessionID,
-                waiting: SessionRuntimeStore.directSessionWaitingStatus(permissionSummary: nil),
+                waiting: SessionRuntimeStore.directSessionWaitingStatus(permissionSummary: nil, agentName: "Claude Code"),
                 at: Date()
             )
         }
@@ -267,6 +267,98 @@ struct AutomationSocketServerSessionLifecycleTests: AutomationSocketServerTestSu
         }
         let afterTurn = await statusKind()
         #expect(afterTurn == atTurnEnd)
+    }
+
+    /// Codex's notify command and its rollout file report a turn's end
+    /// some time after the turn. For a direct session that report could
+    /// land in the turn that follows, so the session's process is the one
+    /// source of its status.
+    @Test
+    func aCodexDirectSessionTakesItsTurnsFromItsProcessOnly() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        let sessionID = "sess-codex-direct"
+        let started = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: ["agent": .string(AgentKind.codex.rawValue)]
+            ),
+            socketPath: socketPath
+        )
+        #expect(started.ok)
+        @MainActor func status() -> SessionStatus? {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        }
+        let completion = CodexNotifyCompletion(
+            notificationType: "agent-turn-complete",
+            threadID: "thread-1",
+            turnID: "turn-1",
+            lastInputMessageFingerprint: nil,
+            inputMessageCount: 1,
+            detail: "from notify"
+        )
+
+        await MainActor.run {
+            server.sessionRuntimeStore.markDirectSession(sessionID: sessionID)
+            server.sessionRuntimeStore.noteDirectSessionTurnStarted(sessionID: sessionID, at: Date())
+        }
+        let working = await status()
+        #expect(working?.kind == .working)
+        #expect(working?.detail == "Working inside Codex")
+
+        // The late reports of the turn before this one change nothing.
+        let fromOthers = await MainActor.run {
+            let notified = server.sessionRuntimeStore.handleCodexNotifyCompletion(
+                sessionID: sessionID, completion: completion, at: Date()
+            )
+            let fromRollout = server.sessionRuntimeStore.handleCodexRolloutTurnCompletion(
+                sessionID: sessionID, turnID: "turn-1", latestRolloutTurnID: "turn-1", completedAt: Date(),
+                detail: "from the rollout", turnError: nil, at: Date()
+            )
+            return [notified, fromRollout]
+        }
+        #expect(fromOthers == [false, false])
+        let stillWorking = await status()
+        #expect(stillWorking?.kind == .working)
+
+        await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionTurnEnded(
+                sessionID: sessionID, failed: false, detail: "done", at: Date()
+            )
+        }
+        // Ready, or idle when the user already looks at the panel.
+        let ended = await status()
+        #expect(ended?.kind == .ready || ended?.kind == .idle)
+
+        await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionTurnStarted(sessionID: sessionID, at: Date())
+            server.sessionRuntimeStore.noteDirectSessionTurnEnded(
+                sessionID: sessionID, failed: true, detail: "You've hit your usage limit.", at: Date()
+            )
+        }
+        let failed = await status()
+        #expect(failed?.kind == .error)
+        #expect(failed?.detail == "You've hit your usage limit.")
+
+        // A stop that Codex confirmed ends the turn's status too. Codex's
+        // rules for a terminal do not take a key as that end.
+        let stopped = await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionTurnStarted(sessionID: sessionID, at: Date())
+            return server.sessionRuntimeStore.noteDirectSessionTurnInterrupted(sessionID: sessionID, at: Date())
+        }
+        #expect(stopped)
+        let afterStop = await status()
+        #expect(afterStop?.kind == .idle)
     }
 
     @Test

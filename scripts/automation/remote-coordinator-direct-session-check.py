@@ -1,27 +1,44 @@
 #!/usr/bin/env python3
-"""Check the coordinator's Claude Code agent as a direct session, with the real CLI.
+"""Check the coordinator's agent as a direct session, with the real CLI.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
-'python3 scripts/automation/remote-coordinator-direct-session-check.py --gui-session'.
+'python3 scripts/automation/remote-coordinator-direct-session-check.py --gui-session'
+for Claude Code, or with '--agent codex' in place of '--gui-session' for Codex.
 
 The check starts its own disposable Toastty instance from the wrapper's
-build, with a throwaway runtime home and user home, and with
-TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1: the coordinator's Claude Code
-agent is then a process of Toastty's own, with no terminal between them. It
-uses the real, authenticated Claude CLI and subscription usage, and never an
-API key. Three seeded devices stand in for paired iPhones on the loopback
-gateway: two may approve permission requests, one may not. Nothing moves
-focus, and the installed production app is not touched.
+build, with a throwaway runtime home and user home, and with the agent's
+setting on (TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1 or
+TOASTTY_COORDINATOR_CODEX_DIRECT_SESSION=1): the coordinator's agent is then a
+process of Toastty's own, with no terminal between them. It uses the real,
+authenticated CLI and subscription usage, and never an API key. Three seeded
+devices stand in for paired iPhones on the loopback gateway: two may approve
+permission requests, one may not. Nothing moves focus, and the installed
+production app is not touched.
 
-The profile gives Claude the Bash tool and the question tool only, and allows
-only commands that start with `sleep` without a request. The run marks only
-its temporary coordinator folder trusted in ~/.claude.json, and removes that
-entry and the folder's Claude project directory afterward. Add --gui-session
-on a host driven over SSH: the Claude login lives in the GUI session's
-keychain.
+Claude: the profile gives Claude the Bash tool and the question tool only,
+and allows only commands that start with `sleep` without a request. The run
+marks only its temporary coordinator folder trusted in ~/.claude.json, and
+removes that entry and the folder's Claude project directory afterward. Add
+--gui-session on a host driven over SSH: the Claude login lives in the GUI
+session's keychain.
 
-Evidence goes to remote-coordinator-direct-session-check.json, with the app
-logs and Claude's transcripts, under the wrapper's artifacts directory.
+Codex: the profile runs commands in Codex's workspace sandbox and asks the
+user for anything more. It trusts the temporary coordinator folder for its
+own processes only, with a configuration value, and writes nothing to
+Codex's configuration file. Codex's sign-in is a file, so the check runs
+over SSH as it is. Toastty delivers its skills into the host's Codex home, as
+it does for every Codex session that it starts. The conversations stay in
+Codex's sessions folder; the check copies their rollout files to the
+evidence.
+
+Evidence goes to remote-coordinator-direct-session-check[-codex].json, with
+the app logs and the agent's transcripts, under the wrapper's artifacts
+directory. With --frames the check shows the coordinator's chat in its own
+window and asks the app for a picture at each part. A build that lets
+`automation.capture_screenshot` write to TOASTTY_EVIDENCE_DIR outside
+automation mode leaves the frames in
+remote-coordinator-direct-session-check[-codex]-frames; other builds record
+that a capture failed, and the check goes on.
 """
 
 import argparse
@@ -53,7 +70,6 @@ coordinator_check = load('coordinator_check', 'remote-coordinator-check.py')
 steer = load('queue_steer_check', 'remote-queue-steer-check.py')
 require, wait_for, Instance = coordinator_check.require, coordinator_check.wait_for, coordinator_check.Instance
 
-SETTING = 'TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION'
 SECOND_TOKEN = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('=')
 NO_APPROVAL_TOKEN = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('=')
 WAKE = '[Toastty] Wake'
@@ -63,53 +79,280 @@ def word(marker):
     return f'Use no tools. Reply with exactly this one word and nothing else: {marker}'
 
 
-def sleeps(count, marker):
-    return (f'Use the Bash tool to run `sleep 4` {count} separate times, one tool call per sleep. Do not combine '
-            f'the sleeps and do not stop early. When all are done, reply with exactly: {marker}')
+class Claude:
+    """What the check needs to know about Claude Code as the coordinator's agent."""
+    name = 'claude'
+    display = 'Claude Code'
+    setting = 'TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION'
+    process_marker = '--input-format stream-json'
+    shell_tool = 'Bash'
+    api_keys = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
+    has_text_commands = True
+    # This profile has no tool for Toastty's CLI, so Claude answers every sender in the chat.
+    answers_other_senders_in_the_chat = True
+    permission_prompt = ('Use the Bash tool to run exactly this command and nothing else: `touch direct-allowed.txt`. '
+                         'If it succeeds, reply with exactly: TOUCH-RAN. If it is refused, reply with exactly: '
+                         'TOUCH-REFUSED')
+    question_prompt = ('Use the AskUserQuestion tool to ask me exactly one question, "Which color?", with exactly two '
+                       'options labelled Red and Blue. After my answer, reply with exactly COLOR- followed by my '
+                       'answer in capital letters, and nothing else.')
+
+    def __init__(self, host):
+        self.cli = shutil.which('claude') or str(Path.home() / '.local/bin/claude')
+        require(Path(self.cli).is_file(), 'Claude CLI is not installed; install and authenticate it on the remote host')
+        self.version = subprocess.check_output([self.cli, '--version'], text=True, timeout=30, env=host).strip()
+        auth = subprocess.run([self.cli, '--safe-mode', '--setting-sources', '', 'auth', 'status', '--json'],
+                              capture_output=True, text=True, timeout=30, env=host)
+        require(auth.returncode == 0 and json.loads(auth.stdout).get('loggedIn'),
+                'Claude CLI needs an interactive login on the remote host; add --gui-session over SSH')
+        self.auth = json.loads(auth.stdout).get('authMethod')
+        self.project = None
+
+    def sleeps(self, count, marker):
+        return (f'Use the Bash tool to run `sleep 4` {count} separate times, one tool call per sleep. Do not combine '
+                f'the sleeps and do not stop early. When all are done, reply with exactly: {marker}')
+
+    def argv(self, folder):
+        # Only this disposable app sees the profile. Any Bash command but `sleep` asks first.
+        return [self.cli, '--setting-sources=', '--permission-mode', 'default', '--allowedTools', 'Bash(sleep:*)',
+                '--tools', 'Bash,AskUserQuestion', '--strict-mcp-config']
+
+    def prepare(self, folder):
+        steer.set_directory_trust(folder, True)
+        self.project = steer.claude_project_directory(folder)
+
+    def note_start(self, record):
+        pass
+
+    def transcripts(self):
+        return sorted(self.project.glob('*.jsonl')) if self.project.is_dir() else []
+
+    def conversations(self):
+        """What names the agent's conversations: a second one shows as a second entry."""
+        return sorted(path.name for path in self.transcripts())
+
+    def records(self):
+        records = []
+        for path in self.transcripts():
+            for line in path.read_text().splitlines():
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return records
+
+    def user_texts(self):
+        """Each message that Claude received as the user's, in the order of the transcript, once per record."""
+        texts, seen = [], set()
+        for record in self.records():
+            if record.get('type') != 'user' or record.get('isMeta') or record.get('uuid') in seen:
+                continue
+            seen.add(record.get('uuid'))
+            content = (record.get('message') or {}).get('content')
+            parts = [dict(type='text', text=content)] if isinstance(content, str) else [p for p in content or []
+                                                                                       if isinstance(p, dict)]
+            if any(p.get('type') == 'tool_result' for p in parts):
+                continue
+            text = '\n'.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
+            if text:
+                texts.append(text)
+        return texts
+
+    def compacted(self):
+        return any(r.get('type') == 'system' and r.get('subtype') == 'compact_boundary' for r in self.records())
+
+    def sleep_calls(self):
+        return sum(1 for r in self.records() if r.get('type') == 'assistant'
+                   for block in (r.get('message') or {}).get('content') or []
+                   if isinstance(block, dict) and block.get('type') == 'tool_use'
+                   and 'sleep 4' in json.dumps(block.get('input')))
+
+    def took_in_the_terminal(self, marker):
+        return any(r.get('type') == 'assistant' and marker in json.dumps((r.get('message') or {}).get('content'))
+                   for r in self.records())
+
+    def allows(self, preview):
+        return False
+
+    def terminal_composer(self, text):
+        return '❯' in text and ('for shortcuts' in text or 'shift+tab to cycle' in text)
+
+    def shows_in_terminal(self, text):
+        return 'for shortcuts' in text or 'shift+tab to cycle' in text
+
+    def resumed_process(self, command):
+        return '--resume' in command
+
+    def finish(self, check, folder):
+        steer.set_directory_trust(folder, False)
+        if self.project.is_dir():
+            capture = check.artifacts / f'{check.prefix}-transcripts'
+            capture.mkdir(exist_ok=True)
+            for path in self.project.glob('*.jsonl'):
+                shutil.copyfile(path, capture / path.name)
+            # Only the project for this run's unique temporary folder.
+            shutil.rmtree(self.project, ignore_errors=True)
+
+
+class Codex:
+    """What the check needs to know about Codex as the coordinator's agent."""
+    name = 'codex'
+    display = 'Codex'
+    setting = 'TOASTTY_COORDINATOR_CODEX_DIRECT_SESSION'
+    process_marker = ' app-server'
+    shell_tool = 'exec_command'
+    api_keys = ('OPENAI_API_KEY', 'CODEX_API_KEY')
+    # Codex's commands, such as /model, belong to its terminal program.
+    has_text_commands = False
+    # Codex works by the coordinator's instructions: it answers a sender that is not the user through
+    # `toastty coordinator reply`, and writes no reply for that sender in the chat.
+    answers_other_senders_in_the_chat = False
+    # A command in the workspace needs no approval, so the request is asked for in words.
+    permission_prompt = ('Use the shell to run exactly this command and nothing else: `touch direct-allowed.txt`. Ask '
+                         'for my approval for it: request escalated permissions for this one command '
+                         '(sandbox_permissions "require_escalated"), although the sandbox would allow it. If it '
+                         'succeeds, reply with exactly: TOUCH-RAN. If it is refused, reply with exactly: TOUCH-REFUSED')
+    question_prompt = ('Use the request_user_input tool to ask me exactly one question, "Which color?", with exactly '
+                       'two options labelled Red and Blue. After my answer, reply with exactly COLOR- followed by my '
+                       'answer in capital letters, and nothing else.')
+
+    def __init__(self, host):
+        self.cli = shutil.which('codex') or '/opt/homebrew/bin/codex'
+        require(Path(self.cli).is_file(), 'Codex CLI is not installed; install and authenticate it on the remote host')
+        self.version = subprocess.check_output([self.cli, '--version'], text=True, timeout=30, env=host).strip()
+        login = subprocess.run([self.cli, 'login', 'status'], capture_output=True, text=True, timeout=30, env=host)
+        self.auth = (login.stdout + login.stderr).strip()
+        require(login.returncode == 0 and 'ChatGPT' in self.auth,
+                f'Codex needs a ChatGPT plan sign-in on the remote host: {self.auth}')
+        self.home = Path(host.get('CODEX_HOME') or Path.home() / '.codex')
+        self.threads = []
+
+    def sleeps(self, count, marker):
+        return (f'Use the shell to run `sleep 4` {count} separate times, one shell command per sleep. Do not combine '
+                f'the sleeps and do not stop early. When all are done, reply with exactly: {marker}')
+
+    def argv(self, folder):
+        # Only this disposable app sees the profile. Codex asks the user, and no reviewer agent, for a
+        # command outside its sandbox. The folder is trusted for these processes only.
+        return [self.cli, '--enable', 'default_mode_request_user_input', '--ask-for-approval', 'on-request',
+                '--sandbox', 'workspace-write', '-c', 'approvals_reviewer="user"',
+                '-c', 'check_for_update_on_startup=false',
+                '-c', 'projects={' + json.dumps(str(folder)) + '={trust_level="trusted"}}']
+
+    def prepare(self, folder):
+        pass
+
+    def note_start(self, record):
+        thread = record.get('native_session_id')
+        if thread and thread not in self.threads:
+            self.threads.append(thread)
+
+    def transcripts(self):
+        return [path for thread in self.threads
+                for path in sorted((self.home / 'sessions').glob(f'**/rollout-*-{thread}.jsonl'))]
+
+    def conversations(self):
+        return list(self.threads)
+
+    def records(self):
+        records = []
+        for path in self.transcripts():
+            for line in path.read_text().splitlines():
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return records
+
+    def items(self, kind):
+        return [r['payload']['item'] for r in self.records()
+                if r.get('type') == 'event_msg' and (r.get('payload') or {}).get('type') == 'item_completed'
+                and (r['payload'].get('item') or {}).get('type') == kind]
+
+    def user_texts(self):
+        return ['\n'.join(part.get('text', '') for part in item.get('content') or []).strip()
+                for item in self.items('UserMessage')]
+
+    def compacted(self):
+        return any(r.get('type') == 'compacted' for r in self.records())
+
+    def sleep_calls(self):
+        return sum(1 for item in self.items('CommandExecution') if 'sleep 4' in json.dumps(item.get('command')))
+
+    def took_in_the_terminal(self, marker):
+        # The message is in the same conversation's rollout file. Codex answers its sender through
+        # Toastty's CLI, which needs an approval in the terminal that the check does not give.
+        return any(marker in text for text in self.user_texts())
+
+    def allows(self, preview):
+        # Toastty's own CLI, which the coordinator's work needs and Codex's sandbox does not reach. It
+        # acts on the check's disposable instance only.
+        return 'toastty ' in (preview or '')
+
+    def terminal_composer(self, text):
+        # The check answers no dialog of Codex's terminal program.
+        require('Update available' not in text and 'Do you trust' not in text,
+                f"Codex's terminal program shows a dialog:\n{text[-600:]}")
+        return '›' in text
+
+    def shows_in_terminal(self, text):
+        return 'OpenAI Codex' in text or '/model to change' in text
+
+    def resumed_process(self, command):
+        # The conversation is named in the request, not in the command.
+        return True
+
+    def finish(self, check, folder):
+        capture = check.artifacts / f'{check.prefix}-transcripts'
+        capture.mkdir(exist_ok=True)
+        for path in self.transcripts():
+            shutil.copyfile(path, capture / path.name)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--agent', choices=('claude', 'codex'), default='claude')
     parser.add_argument('--gui-session', action='store_true',
                         help='rerun through Terminal in the GUI session, where the Claude login is readable')
+    parser.add_argument('--frames', action='store_true',
+                        help="show the coordinator's chat in the check's window and ask the app for pictures")
     options = parser.parse_args()
+    suffix = '' if options.agent == 'claude' else f'-{options.agent}'
     if options.gui_session:
-        steer.run_in_gui_session('remote-coordinator-direct-session-check', __file__, timeout=3600)
-    check = coordinator_check.Check('claude')
-    check.prefix = 'remote-coordinator-direct-session-check'
+        steer.run_in_gui_session(f'remote-coordinator-direct-session-check{suffix}', __file__,
+                                 ('--agent', options.agent, *(['--frames'] if options.frames else [])), timeout=3600)
+    check = coordinator_check.Check(options.agent)
+    check.prefix = f'remote-coordinator-direct-session-check{suffix}'
     check.evidence['startedAt'] = datetime.now(timezone.utc).isoformat()
     try:
-        run(check)
+        run(check, Claude if options.agent == 'claude' else Codex, options.frames)
         check.evidence['status'] = 'passed'
     except Exception as error:  # noqa: BLE001 - always keep the evidence
         check.evidence['failure'] = repr(error)
         raise
     finally:
         check.finish()
-    print('[coordinator-check] passed (direct session)', flush=True)
+    print(f'[coordinator-check] passed (direct session, {options.agent})', flush=True)
 
 
-def run(check):
+def run(check, agent_type, frames):
     host = {key: value for key, value in os.environ.items()
             if not key.startswith('TOASTTY_')
             and key not in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT')}
-    claude = shutil.which('claude') or str(Path.home() / '.local/bin/claude')
-    require(Path(claude).is_file(), 'Claude CLI is not installed; install and authenticate it on the remote host')
-    version = subprocess.check_output([claude, '--version'], text=True, timeout=30, env=host).strip()
-    auth = subprocess.run([claude, '--safe-mode', '--setting-sources', '', 'auth', 'status', '--json'],
-                          capture_output=True, text=True, timeout=30, env=host)
-    require(auth.returncode == 0 and json.loads(auth.stdout).get('loggedIn'),
-            'Claude CLI needs an interactive login on the remote host; add --gui-session over SSH')
-    require(not any(host.get(key) for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')),
-            'The check must run without an API key in its environment')
-    check.evidence.update(cliVersion=version, authMethod=json.loads(auth.stdout).get('authMethod'))
+    agent = agent_type(host)
+    version = agent.version
+    require(not any(host.get(key) for key in agent.api_keys), 'The check must run without an API key in its environment')
+    check.evidence.update(cliVersion=version, authMethod=agent.auth)
+    sleeps = agent.sleeps
 
-    # Only this disposable app sees the profile. Any Bash command but `sleep` asks first.
-    argv = [claude, '--setting-sources=', '--permission-mode', 'default', '--allowedTools', 'Bash(sleep:*)',
-            '--tools', 'Bash,AskUserQuestion', '--strict-mcp-config']
-    runtime_home, user_home = check.home('direct', argv)
+    runtime_home, user_home = check.home('direct', [agent.cli])
+    folder = runtime_home / 'coordinator'
+    (user_home / '.toastty/agents.toml').write_text(
+        f'[{agent.name}]\ndisplayName = "{agent.display}"\nargv = {json.dumps(agent.argv(folder))}\n')
     # The real model list is the user's; the check names none.
-    (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "claude"\n')
+    (user_home / '.toastty/tasks.toml').write_text(
+        f'[defaults]\nagent = "{agent.name}"\n'
+        + ('' if agent.name == 'claude' else f'\n[coordinator]\nagent = "{agent.name}"\n'))
     (runtime_home / 'remote-access').mkdir(parents=True)
     devices, credentials = [], []
     for name, token, approve in (('First phone', steer.TOKEN, True), ('Second phone', SECOND_TOKEN, True),
@@ -127,20 +370,23 @@ def run(check):
     port = steer.free_port()
     gateway = steer.Gateway(port)
     # A Debug build takes the check's own answer to a question card as the user's, as the chat's card gives it.
+    frame_directory = check.artifacts / f'{check.prefix}-frames'
+    if frames:
+        shutil.rmtree(frame_directory, ignore_errors=True)
+        frame_directory.mkdir()
     direct = check.environment('direct', runtime_home, user_home, real_home=True,
-                               TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER='1', **{SETTING: '1'})
-    terminal = {key: value for key, value in direct.items() if key != SETTING}
+                               TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER='1', **{agent.setting: '1'},
+                               **(dict(TOASTTY_EVIDENCE_DIR=str(frame_directory)) if frames else {}))
+    terminal = {key: value for key, value in direct.items() if key != agent.setting}
     _, cli = check.cli_runner(direct)
-    folder = runtime_home / 'coordinator'
     folder.mkdir(parents=True)
-    steer.set_directory_trust(folder, True)
-    project = steer.claude_project_directory(folder)
+    agent.prepare(folder)
     app_log = check.artifacts / f'{check.prefix}-app.log'
     arguments = ('-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port),
                  *coordinator_check.base.START_OFFER_ANSWERED)
     step = check.step
     # `deny` is on while a turn that the check did not write may ask for a command, as a wake's turn can.
-    state = dict(instance=None, counter=0, log_offset=0, pids=set(), deny=False, denied=[])
+    state = dict(instance=None, counter=0, log_offset=0, pids=set(), deny=False, denied=[], allowed=[])
 
     def launch(environment):
         state['instance'] = Instance(check.binary, environment, environment['TOASTTY_SOCKET_PATH'], runtime_home,
@@ -158,19 +404,44 @@ def run(check):
     def status():
         return cli('coordinator', 'status')
 
+    def capture(name):
+        """The window as the app draws it, with --frames. Only an evidence build writes it."""
+        if not frames:
+            return
+        state['frame'] = state.get('frame', 0) + 1
+        label = f"{state['frame']:02d}-{name}"
+        time.sleep(1.5)
+        try:
+            response = state['instance'].request('automation.capture_screenshot', dict(step=label))
+        except Exception as error:  # noqa: BLE001 - evidence only
+            response = dict(ok=False, error=repr(error))
+        check.evidence['captures'].append(dict(step=label, ok=response.get('ok'),
+                                               error=None if response.get('ok') else response.get('error')))
+
+    def open_coordinator():
+        return cli('coordinator', 'open') if frames else cli('coordinator', 'open', '--no-select')
+
     def app_pid():
         return state['instance'].process.pid
 
     def stream_processes(parent=None):
-        """Claude Code processes in stream-json mode: all of this user's, or the children of `parent`."""
-        rows = []
+        """The agent's processes that talk to a host: all of this user's, or the children of `parent`. With a
+        parent, the processes below each child are remembered too: the command can be a launcher of the real
+        program."""
+        rows, children = [], {}
         for line in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True).splitlines():
             parts = line.split(None, 2)
-            if len(parts) == 3 and '--input-format stream-json' in parts[2]:
-                rows.append(dict(pid=int(parts[0]), ppid=int(parts[1]), command=parts[2]))
+            if len(parts) == 3:
+                children.setdefault(int(parts[1]), []).append(int(parts[0]))
+                if agent.process_marker in parts[2]:
+                    rows.append(dict(pid=int(parts[0]), ppid=int(parts[1]), command=parts[2]))
         rows = [row for row in rows if parent is None or row['ppid'] == parent]
         if parent is not None:
-            state['pids'].update(row['pid'] for row in rows)
+            below = [row['pid'] for row in rows]
+            while below:
+                pid = below.pop()
+                state['pids'].add(pid)
+                below.extend(children.get(pid, []))
         return rows
 
     def alive(pid):
@@ -209,7 +480,7 @@ def run(check):
             return None
         _, body = gateway.call('GET', '/api/sessions')
         return next((c for c in (body or {}).get('snapshot', {}).get('conversations', [])
-                     if c['provider'] == 'claude' and c['placement'].get('panelID') == panel), None)
+                     if c['provider'] == agent.name and c['placement'].get('panelID') == panel), None)
 
     def events():
         current = conversation()
@@ -219,8 +490,7 @@ def run(check):
         """The first event that matches, among those after the event `after`."""
         def probe():
             listed = events()
-            if state['deny']:
-                deny_requests(listed)
+            answer_requests(listed)
             return next((e for e in listed if predicate(e) and (after is None or e['sequence'] > after['sequence'])),
                         None)
         try:
@@ -278,32 +548,7 @@ def run(check):
         wait_for('the prompt to open again', prompt_open, timeout=120)
         return request_id, got, answer
 
-    def transcript_records():
-        records = []
-        for path in sorted(project.glob('*.jsonl')) if project.is_dir() else []:
-            for line in path.read_text().splitlines():
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-        return records
-
-    def user_texts():
-        """Each message that Claude received as the user's, in the order of the transcript, once per record."""
-        texts, seen = [], set()
-        for record in transcript_records():
-            if record.get('type') != 'user' or record.get('isMeta') or record.get('uuid') in seen:
-                continue
-            seen.add(record.get('uuid'))
-            content = (record.get('message') or {}).get('content')
-            parts = [dict(type='text', text=content)] if isinstance(content, str) else [p for p in content or []
-                                                                                       if isinstance(p, dict)]
-            if any(p.get('type') == 'tool_result' for p in parts):
-                continue
-            text = '\n'.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
-            if text:
-                texts.append(text)
-        return texts
+    transcript_records, user_texts = agent.records, agent.user_texts
 
     def next_interaction(kind, description):
         event = find(lambda e: e['kind'] == 'interaction_presented' and e['payload'].get('kind') == kind
@@ -338,21 +583,26 @@ def run(check):
             thread.join(timeout=60)
         return results
 
-    def deny_requests(listed):
-        """Denies each open permission request, as a user would who is asked for a command that the check
-        does not allow."""
+    def answer_requests(listed):
+        """Answers each open permission request as a user would: yes to a command that the agent's profile
+        of this check allows (`agent.allows`), and no to any other one while `deny` is on."""
         for event in listed:
             pending = event['payload'] if event['kind'] == 'interaction_presented' else {}
-            if pending.get('kind') == 'permission' and pending.get('responseID') and pending['id'] not in seen:
+            if pending.get('kind') != 'permission' or not pending.get('responseID') or pending['id'] in seen:
+                continue
+            preview = (pending.get('permission') or {}).get('preview')
+            if agent.allows(preview):
                 seen.add(pending['id'])
-                state['denied'].append(dict(preview=(pending.get('permission') or {}).get('preview'),
-                                            result=phone_answer(pending, 'decision', 'deny')))
+                state['allowed'].append(dict(preview=preview, result=phone_answer(pending, 'decision', 'allow')))
+            elif state['deny']:
+                seen.add(pending['id'])
+                state['denied'].append(dict(preview=preview, result=phone_answer(pending, 'decision', 'deny')))
 
     def settle(timeout=240):
-        """Waits for the open prompt, and denies each permission request on the way."""
+        """Waits for the open prompt, and answers each permission request on the way."""
         deadline, since = time.time() + timeout, None
         while time.time() < deadline:
-            deny_requests(events())
+            answer_requests(events())
             # A turn that just started can still show the prompt of the turn before it.
             since = (since or time.time()) if prompt_open() else None
             if since and time.time() - since >= 5:
@@ -364,43 +614,49 @@ def run(check):
         """The facts of a direct session's start, from the app's log and the process list."""
         ready = wait_for('the direct session to take messages',
                          lambda: log_records('A direct session takes messages'), timeout=180, interval=1)[-1]
-        started = log_records('Started a Claude Code process for a direct session')[-1]
-        require(ready.get('plan') not in (None, '', 'none'), f'The session started without a Claude plan: {ready}')
-        require(started.get('resumes') == ('true' if resumes else 'false'), f'Unexpected resume state: {started}')
+        started = log_records('Started an agent process for a direct session')[-1]
+        require(ready.get('plan') not in (None, '', 'none'), f'The session started without a plan sign-in: {ready}')
+        adopted = wait_for('the coordinator to take the session',
+                           lambda: log_records("Started the coordinator's agent as a direct session"),
+                           timeout=120, interval=1)[-1]
+        require(adopted.get('resumed') == ('true' if resumes else 'false'), f'Unexpected resume state: {adopted}')
+        agent.note_start(adopted)
         current = wait_for('the coordinator to run', lambda: (s := status()).get('agentState') == 'running' and s,
                            timeout=120)
         children = stream_processes(app_pid())
         require(len(children) == 1 and str(children[0]['pid']) == started.get('pid'),
-                f'Expected one Claude Code process of the app in stream-json mode: {children} {started}')
+                f'Expected one {agent.display} process of the app that talks to it: {children} {started}')
         text = screen()
-        require('for shortcuts' not in text and 'shift+tab to cycle' not in text,
-                f'The terminal shows Claude Code, but the session is direct:\n{text[-800:]}')
+        require(not agent.shows_in_terminal(text),
+                f'The terminal shows {agent.display}, but the session is direct:\n{text[-800:]}')
         wait_for('the open prompt', prompt_open, timeout=120)
-        return dict(log=ready, process=children[0], status=current, terminal=text[-300:])
+        return dict(log=ready, adopted=adopted, process=children[0], status=current, terminal=text[-300:])
 
     def kill_app(child_deadline):
-        """Kills the app as a crash does. Returns the seconds until its Claude Code process was gone too."""
+        """Kills the app as a crash does. Returns the seconds until its agent process was gone too."""
         children = stream_processes(app_pid())
         coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
         state['instance'].kill()
         began = time.time()
         for child in children:
-            wait_for(f"the Claude Code process {child['pid']} to end after the app's death",
+            wait_for(f"the agent process {child['pid']} to end after the app's death",
                      lambda pid=child['pid']: not alive(pid), timeout=child_deadline, interval=0.5)
         return dict(children=[c['pid'] for c in children], seconds=round(time.time() - began, 1))
 
     # 1. Start. The plan is known, and the checks of the start passed, before any message is taken.
     def start():
         launch(direct)
-        opened = cli('coordinator', 'open', '--no-select')
+        opened = open_coordinator()
         require(opened.get('exists'), f'Open made no coordinator: {opened}')
         first_start = started_direct(resumes=False)
+        capture('started')
         state['first'] = conversation()['conversationID']
-        step('a direct session started with a Claude plan and no terminal agent', version=version, **first_start)
+        step('a direct session started with a plan sign-in and no terminal agent', version=version, **first_start)
 
     # 2. A message from the phone: a receipt under its own ID, a reply, and the prompt opens.
     def phone_message():
         _, _, answer = ask(word('DIRECT-ONE'), 'DIRECT-ONE')
+        capture('a-message-and-its-reply')
         step('a phone message got its receipt and its reply', reply=answer['payload'].get('text'))
 
     # 3. A message from the Mac's side, through the coordinator's queue. A phone that was away reads
@@ -409,14 +665,19 @@ def run(check):
         before, cursor = gateway.events(state['first'])
         sent = cli('coordinator', 'send', word('DIRECT-MAC'))
         require(sent.get('delivery') == 'sent', f'The message was not given at the open prompt: {sent}')
-        reply('DIRECT-MAC', after=before[-1])
-        wait_for('the prompt to open again', prompt_open, timeout=120)
+        if agent.answers_other_senders_in_the_chat:
+            reply('DIRECT-MAC', after=before[-1])
+            wait_for('the prompt to open again', prompt_open, timeout=120)
+        else:
+            find(lambda e: e['kind'] == 'user_message' and 'DIRECT-MAC' in e['payload'].get('text', ''),
+                 "the Mac's message in the conversation", after=before[-1])
+            settle()
         missed, _ = gateway.events(state['first'], after=cursor)
         kinds = [e['kind'] for e in missed]
         require('user_message' in kinds and 'assistant_message' in kinds,
                 f'A phone that returns did not get the turn it missed: {kinds}')
         step('a message from the Mac ran a turn, and a returning phone read it from its cursor',
-             sent=sent, missedKinds=kinds)
+             sent=sent, missedKinds=kinds, allowedRequests=list(state['allowed']))
 
     # 4. A wake at the open prompt: Toastty's timer digest starts a turn.
     def idle_wake():
@@ -439,12 +700,13 @@ def run(check):
         time.sleep(30)
         busy_id = phone_send(sleeps(10, 'ALL-TEN-DONE'), 'busy')
         busy_receipt = receipt(busy_id)
-        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == 'Bash',
+        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == agent.shell_tool,
              'the first sleep', after=busy_receipt)
         turn_epoch = wait_for('the turn to run', working, timeout=60)['inputControl']['turnEpoch']
         queued_id = phone_send(word('QUEUED-OK'), 'queued', mode='queue', epoch=turn_epoch)
         mac_queued = cli('coordinator', 'send', word('MAC-QUEUED-OK'))
         require(mac_queued.get('delivery') == 'queued', f'A message during a turn was not queued: {mac_queued}')
+        capture('a-busy-turn-with-waiting-messages')
         done = reply('ALL-TEN-DONE', after=busy_receipt, timeout=300)
         queued_receipt = receipt(queued_id, 'queue')
         require(queued_receipt['sequence'] > done['sequence'], 'The queued message ran inside the busy turn')
@@ -452,7 +714,9 @@ def run(check):
                  and e['kind'] == 'user_message']
         require(not early, f'A message entered the busy turn: {early}')
         reply('QUEUED-OK', after=queued_receipt)
-        mac_reply = reply('MAC-QUEUED-OK', after=done)
+        mac_reply = (reply('MAC-QUEUED-OK', after=done) if agent.answers_other_senders_in_the_chat else
+                     find(lambda e: e['kind'] == 'user_message' and 'MAC-QUEUED-OK' in e['payload'].get('text', ''),
+                          "the Mac's queued message in the conversation", timeout=240, after=done))
         second_wake = find(lambda e: e['kind'] == 'user_message' and e['payload'].get('text', '').startswith(WAKE),
                            'the timer digest after the busy turn', timeout=240, after=done)
         settle()
@@ -468,7 +732,7 @@ def run(check):
     def steered_turn():
         busy_id = phone_send(sleeps(10, 'SHOULD-NOT-FINISH'), 'busy')
         busy_receipt = receipt(busy_id)
-        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == 'Bash',
+        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == agent.shell_tool,
              'the first sleep', after=busy_receipt)
         turn_epoch = wait_for('the turn to run', working, timeout=60)['inputControl']['turnEpoch']
         steer_id = phone_send('Change of plan: stop after the current sleep and reply with exactly: STEERED-OK',
@@ -476,35 +740,40 @@ def run(check):
         steer_receipt = receipt(steer_id, 'steer')
         reply('STEERED-OK', after=steer_receipt)
         wait_for('the prompt to open again', prompt_open, timeout=120)
+        capture('a-steered-turn')
         step('a steer entered the running turn', receiptSequence=steer_receipt['sequence'])
 
     # 7. Stop. The request is taken; the prompt opens when Claude Code reports the turn's end.
     def stopped_turn():
         busy_id = phone_send(sleeps(30, 'SHOULD-NOT-FINISH-EITHER'), 'stopped')
         busy_receipt = receipt(busy_id)
-        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == 'Bash',
+        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == agent.shell_tool,
              'the first sleep', after=busy_receipt)
         turn_epoch = wait_for('the turn to run', working, timeout=60)['inputControl']['turnEpoch']
         code, stopped = gateway.call('POST', '/api/conversation.interrupt', dict(
             protocolVersion='1.0', conversationID=state['first'], expectedTurnEpoch=turn_epoch))
         require(code == 200 and stopped.get('result') == dict(status='accepted'), f'Stop was not taken: {stopped}')
         after_stop = wait_for('the prompt to open after the stop', prompt_open, timeout=90)
+        # The coordinator's row follows the stop too, and not only the chat.
+        stopped_status = wait_for('the status to leave "working" after the stop',
+                                  lambda: (s := status()).get('status') not in ('working', 'needs_approval') and s,
+                                  timeout=20, interval=1).get('status')
         require(not any(e['kind'] == 'assistant_message' and 'SHOULD-NOT-FINISH-EITHER' in e['payload'].get('text', '')
                         for e in events()), 'The stopped turn ran to its end')
         ask(word('AFTER-STOP-OK'), 'AFTER-STOP-OK')
-        step('a stop ended the turn and the next message ran', state=after_stop.get('state'))
+        step('a stop ended the turn and the next message ran', state=after_stop.get('state'),
+             macStatusAfterStop=stopped_status)
 
     # 8. A permission request. A phone without approvals is refused. Then two phones answer at the
     #    same moment with different answers: one answer is taken, and the turn follows it.
     def permission_request():
-        request_id = phone_send('Use the Bash tool to run exactly this command and nothing else: '
-                                '`touch direct-allowed.txt`. If it succeeds, reply with exactly: TOUCH-RAN. '
-                                'If it is refused, reply with exactly: TOUCH-REFUSED', 'permission')
+        request_id = phone_send(agent.permission_prompt, 'permission')
         asked = receipt(request_id)
         permission = next_interaction('permission', 'the permission request')
         require('touch direct-allowed.txt' in (permission.get('permission') or {}).get('preview', ''),
                 f'The request does not show the command: {permission}')
         waiting = status()
+        capture('a-permission-request-waits')
         refused = phone_answer(permission, 'decision', 'allow', token=NO_APPROVAL_TOKEN)
         require(refused == dict(status='rejected', reason='approvals_disabled'), f'Not refused: {refused}')
         allow, deny = race(lambda: phone_answer(permission, 'decision', 'allow'),
@@ -525,6 +794,7 @@ def run(check):
             reply('TOUCH-RAN', after=asked)
         # A refusal may end the turn with no more words.
         wait_for('the prompt to open again', prompt_open, timeout=180)
+        capture('the-permission-request-answered')
         require((folder / 'direct-allowed.txt').exists() == allowed, 'The command did not follow the answer taken')
         require(allowed or not any(e['kind'] == 'assistant_message' and 'TOUCH-RAN' in e['payload'].get('text', '')
                                    and e['sequence'] > asked['sequence'] for e in events()),
@@ -535,9 +805,7 @@ def run(check):
 
     # 9. A question. The phone and the Mac answer at the same moment with different choices.
     def question():
-        request_id = phone_send('Use the AskUserQuestion tool to ask me exactly one question, "Which color?", with '
-                                'exactly two options labelled Red and Blue. After my answer, reply with exactly '
-                                'COLOR- followed by my answer in capital letters, and nothing else.', 'question')
+        request_id = phone_send(agent.question_prompt, 'question')
         asked = receipt(request_id)
         question = next_interaction('question', 'the question')
         options = {o['label']: o['id'] for o in question['questions'][0]['options']}
@@ -551,6 +819,7 @@ def run(check):
             return dict(status='submitted') if response.get('ok') else dict(status='rejected', reason=str(response)[:300])
 
         waiting = status()
+        capture('a-question-waits')
         phone, mac = race(lambda: phone_answer(question, question['questions'][0]['id'], options['Red']), mac_answer)
         require(sorted(r.get('status') for r in (phone, mac)) == ['rejected', 'submitted'],
                 f'Expected exactly one answer to be taken: phone {phone}, Mac {mac}')
@@ -561,12 +830,16 @@ def run(check):
         winner = 'COLOR-RED' if phone.get('status') == 'submitted' else 'COLOR-BLUE'
         reply(winner, after=asked)
         wait_for('the prompt to open again', prompt_open, timeout=120)
+        capture('the-question-answered')
         step('one of the phone\'s and the Mac\'s answers to a question was taken', phone=phone, mac=mac, reply=winner,
              macStatus=waiting.get('status'), macStatusAfterAnswer=answered.get('status'))
 
     # A Claude Code command that answers with text, sent as a message: the answer shows as the
     # coordinator's message, and the prompt opens again.
     def text_command():
+        if not agent.has_text_commands:
+            step(f'skipped: {agent.display} has no command that answers with text outside its terminal program')
+            return
         request_id = phone_send('/model', 'model')
         answer = find(lambda e: e['kind'] == 'assistant_message' and 'Current model' in e['payload'].get('text', ''),
                       'the answer of /model', timeout=60)
@@ -577,9 +850,7 @@ def run(check):
     # 10. Compaction at the open prompt, then one message: one turn.
     def compaction():
         compact_id = phone_send('/compact', 'compact')
-        wait_for('the compaction to start and end', lambda: any(
-            r.get('type') == 'system' and r.get('subtype') == 'compact_boundary' for r in transcript_records()),
-            timeout=300, interval=2)
+        wait_for('the compaction to start and end', agent.compacted, timeout=300, interval=2)
         wait_for('the prompt to open after the compaction', prompt_open, timeout=180)
         after_id, got, _ = ask(word('AFTER-COMPACT-OK'), 'AFTER-COMPACT-OK', 'after-compact')
         time.sleep(8)
@@ -599,9 +870,9 @@ def run(check):
         workspace_id = status()['workspaceID']
         state['instance'].request('app_control.run_action', dict(id='workspace.close', args=dict(workspaceID=workspace_id)))
         wait_for('the coordinator to be gone', lambda: not status().get('exists'), timeout=30)
-        wait_for('the Claude Code process to end with its workspace', lambda: not alive(child), timeout=30)
-        require(not stream_processes(app_pid()), f'A Claude Code process stayed: {stream_processes(app_pid())}')
-        step('closing the workspace ended the Claude Code process', pid=child)
+        wait_for('the agent process to end with its workspace', lambda: not alive(child), timeout=30)
+        require(not stream_processes(app_pid()), f'An agent process stayed: {stream_processes(app_pid())}')
+        step('closing the workspace ended the agent process', pid=child)
 
     # 12. A second start in the same app, then a crash at the open prompt. The relaunched app goes on
     #     with the same conversation, which remembers its first answer.
@@ -611,27 +882,28 @@ def run(check):
             second_start = dict(log='the first coordinator, which is still open')
         else:
             mark_log()
-            opened = cli('coordinator', 'open', '--no-select')
+            opened = open_coordinator()
             require(opened.get('exists'), f'Open made no second coordinator: {opened}')
             second_start = started_direct(resumes=False)
             require(conversation()['conversationID'] != state.get('first'),
                     'The second coordinator has the conversation of the first')
         state['second'] = conversation()['conversationID']
         ask(word('SECOND-ONE'), 'SECOND-ONE')
-        state['files'] = sorted(p.name for p in project.glob('*.jsonl'))
+        state['files'] = agent.conversations()
         death = kill_app(child_deadline=30)
         mark_log()
         launch(direct)
         resumed = started_direct(resumes=True)
-        require('--resume' in resumed['process']['command'], f"Not resumed: {resumed['process']}")
+        require(agent.resumed_process(resumed['process']['command']), f"Not resumed: {resumed['process']}")
         require(conversation()['conversationID'] == state['second'], 'The relaunch gave the conversation a new ID')
         history = events()
         require(any(e['kind'] == 'assistant_message' and 'SECOND-ONE' in e['payload'].get('text', '') for e in history),
                 'The relaunched app does not show the conversation\'s history')
         _, got, _ = ask('Use no tools. What was the one word of your first answer in this conversation? Reply with '
                         'exactly that word and nothing else.', 'SECOND-ONE', 'memory')
-        require(sorted(p.name for p in project.glob('*.jsonl')) == state['files'],
-                f'The relaunch started another conversation: {sorted(p.name for p in project.glob("*.jsonl"))}')
+        require(agent.conversations() == state['files'],
+                f'The relaunch started another conversation: {agent.conversations()}')
+        capture('resumed-after-a-crash')
         step('after a crash at the open prompt the same conversation went on', secondStart=second_start['log'],
              childEnded=death, resumed=resumed['process']['command'][-200:])
 
@@ -641,7 +913,7 @@ def run(check):
         crash_text = sleeps(30, 'SHOULD-NOT-FINISH-AFTER-CRASH')
         crash_id = phone_send(crash_text, 'crash')
         crash_receipt = receipt(crash_id)
-        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == 'Bash',
+        find(lambda e: e['kind'] == 'tool_started' and e['payload'].get('toolName') == agent.shell_tool,
              'the first sleep', after=crash_receipt)
         # A process that went on with the turn would write to the same transcript as the resumed one.
         death = kill_app(child_deadline=15)
@@ -660,40 +932,37 @@ def run(check):
         step('after a crash during a turn nothing was sent again and the next message ran', childEnded=death,
              toolCallsOfTheCutOffTurn=tool_calls)
 
-    def crashed_turn_tool_calls():
-        return sum(1 for r in transcript_records() if r.get('type') == 'assistant'
-                   for block in (r.get('message') or {}).get('content') or []
-                   if isinstance(block, dict) and block.get('type') == 'tool_use'
-                   and 'sleep 4' in json.dumps(block.get('input')))
+    crashed_turn_tool_calls = agent.sleep_calls
 
     # 14. The way back: with the setting off, the same conversation goes on in the terminal.
     def terminal_again():
         kill_app(child_deadline=30)
         mark_log()
         launch(terminal)
-        wait_for('Claude Code to be resumed in the terminal',
+        wait_for(f'{agent.display} to be resumed in the terminal',
                  lambda: (s := status()).get('agentState') == 'running' and s.get('sessionID') and s, timeout=180)
 
         def composer():
             text = screen()
-            return text if '❯' in text and ('for shortcuts' in text or 'shift+tab to cycle' in text) else None
+            return text if agent.terminal_composer(text) else None
 
-        wait_for("Claude Code's composer in the terminal", composer, timeout=180)
-        require(not stream_processes(app_pid()) and not log_records('Started a Claude Code process for a direct session'),
+        wait_for(f"{agent.display}'s composer in the terminal", composer, timeout=180)
+        require(not stream_processes(app_pid()) and not log_records('Started an agent process for a direct session'),
                 'A direct session started with the setting off')
         sent = cli('coordinator', 'send', word('TERMINAL-OK'))
-        wait_for('the reply in the terminal', lambda: any(
-            r.get('type') == 'assistant' and 'TERMINAL-OK' in json.dumps((r.get('message') or {}).get('content'))
-            for r in transcript_records()), timeout=240, interval=2)
-        require(sorted(p.name for p in project.glob('*.jsonl')) == state.get('files'),
-                f'The terminal started another conversation: {sorted(p.name for p in project.glob("*.jsonl"))}')
+        wait_for('the message to be taken in the terminal', lambda: agent.took_in_the_terminal('TERMINAL-OK'),
+                 timeout=240, interval=2)
+        require(agent.conversations() == state.get('files'),
+                f'The terminal started another conversation: {agent.conversations()}')
+        capture('the-same-conversation-in-the-terminal')
         step('with the setting off the same conversation went on in the terminal', sent=sent, screen=screen()[-600:])
 
     failures = []
 
     def brief(listed):
-        return [dict(sequence=e['sequence'], kind=e['kind'],
-                     **{key: (str(value)[:160] if key == 'text' else value) for key, value in e['payload'].items()
+        return [dict(sequence=e.get('sequence'), kind=e.get('kind'),
+                     **{('requestKind' if key == 'kind' else key): (str(value)[:160] if key == 'text' else value)
+                        for key, value in (e.get('payload') or {}).items()
                         if key in ('text', 'clientRequestID', 'deliveryMode', 'toolName', 'id', 'interactionID', 'kind',
                                    'state', 'status')}) for e in listed]
 
@@ -723,6 +992,7 @@ def run(check):
             failures.append(name)
             facts = dict(error=repr(error)[:2000], trace=traceback.format_exc()[-2500:])
             for key, read in (('status', status), ('conversation', conversation), ('lastEvents', lambda: brief(events()[-30:])),
+                              ('terminal', lambda: screen()[-1500:]),
                               ('processes', lambda: stream_processes(app_pid())), ('recovery', recover)):
                 try:
                     facts[key] = read()
@@ -746,21 +1016,14 @@ def run(check):
         time.sleep(5)
         # Only the processes that this run's app started. A stopped check must not leave one running.
         left = [pid for pid in sorted(state['pids']) if alive(pid)]
-        check.evidence['claudeProcessesLeftAtTheEnd'] = left
+        check.evidence['agentProcessesLeftAtTheEnd'] = left
         for pid in left:
             try:
                 os.kill(pid, 15)
             except OSError:
                 pass
         check.copy_instance_log(runtime_home, 'direct')
-        steer.set_directory_trust(folder, False)
-        if project.is_dir():
-            capture = check.artifacts / f'{check.prefix}-transcripts'
-            capture.mkdir(exist_ok=True)
-            for path in project.glob('*.jsonl'):
-                shutil.copyfile(path, capture / path.name)
-            # Only the project for this run's unique temporary folder.
-            shutil.rmtree(project, ignore_errors=True)
+        agent.finish(check, folder)
 
 
 if __name__ == '__main__':

@@ -3803,7 +3803,14 @@ final class RemoteAccessService: ObservableObject {
             directSessionSyncByConversationID[conversationID] = (projector.bindingID, Date())
             projectionStore.setHostReadsTurnState(true, for: conversationID)
         }
+        // Codex starts a turn some time before it writes the turn's user
+        // message. A send's deadline waits for a turn that runs, as it does
+        // for a Codex session in a terminal.
+        let tracksCodexTurns = projector.provider == .codex
         let stamped = observations.map { observation -> ProviderTranscriptObservation in
+            defer {
+                if tracksCodexTurns { trackCodexTurn(observation, for: conversationID) }
+            }
             guard case .transcript(.userMessage(let payload)) = observation.payload,
                   let clientRequestID = payload.clientRequestID else { return observation }
             let stamped = pendingSendCorrelator.stampReceipt(observation, for: conversationID)

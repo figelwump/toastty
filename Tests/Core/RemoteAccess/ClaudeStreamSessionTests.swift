@@ -23,7 +23,7 @@ struct ClaudeStreamSessionTests {
             return
         }
         #expect(reason.contains("without a Claude plan sign-in"))
-        let refused = session.userMessageLine(text: "hello", clientRequestID: "m1")
+        let refused = session.messageLine(text: "hello", clientRequestID: "m1")
         #expect(refused == nil)
         let ignored = session.receive(line: Self.systemInit(), at: Self.start)
         #expect(ignored.isEmpty)
@@ -51,7 +51,7 @@ struct ClaudeStreamSessionTests {
             line: Self.startAnswer(withSkill, commands: ["deep-research", "toastty:toastty-coordinator"]),
             at: Self.start
         )
-        #expect(started.first == .ready(Self.account))
+        #expect(started.first == .ready(details: Self.account.details))
     }
 
     @Test func aTurnThatWouldBillAnAPIKeyStopsTheSession() {
@@ -489,7 +489,7 @@ struct ClaudeStreamSessionTests {
         var session = ClaudeStreamSession(identity: "test", at: start)
         _ = session.startRequestLine()
         let outputs = session.receive(line: startAnswer(session), at: start)
-        precondition(outputs.first == .ready(account))
+        precondition(outputs.first == .ready(details: account.details))
         return session
     }
 
@@ -537,7 +537,7 @@ struct ClaudeStreamSessionTests {
 
     /// The line of one message of the host.
     static func send(_ text: String, id: String, to session: inout ClaudeStreamSession) throws -> String {
-        let line = session.userMessageLine(text: text, clientRequestID: id)
+        let line = session.messageLine(text: text, clientRequestID: id)
         return try #require(line)
     }
 
@@ -707,7 +707,7 @@ struct ClaudeStreamLaunchTests {
     }
 }
 
-struct ClaudeStreamProcessTests {
+struct AgentLineProcessTests {
     /// A stand-in for Claude Code: it answers each line with one line, so
     /// the test sees both directions, a line split over two writes, the
     /// error output and the exit.
@@ -719,8 +719,8 @@ struct ClaudeStreamProcessTests {
         exit 3
         """
         let events = Events()
-        let process = ClaudeStreamProcess(
-            launch: ClaudeStreamLaunch(
+        let process = AgentLineProcess(
+            launch: AgentProcessLaunch(
                 executablePath: "/bin/sh",
                 arguments: ["-c", script],
                 environment: ["PATH": "/usr/bin:/bin"],
@@ -792,15 +792,15 @@ struct ClaudeStreamProcessTests {
 
     final class Events: @unchecked Sendable {
         private let lock = NSLock()
-        private var events: [ClaudeStreamProcess.Event] = []
+        private var events: [AgentLineProcess.Event] = []
 
-        var all: [ClaudeStreamProcess.Event] { lock.withLock { events } }
+        var all: [AgentLineProcess.Event] { lock.withLock { events } }
 
-        func append(_ event: ClaudeStreamProcess.Event) {
+        func append(_ event: AgentLineProcess.Event) {
             lock.withLock { events.append(event) }
         }
 
-        func wait(_ condition: ([ClaudeStreamProcess.Event]) -> Bool) async throws {
+        func wait(_ condition: ([AgentLineProcess.Event]) -> Bool) async throws {
             let deadline = ContinuousClock.now.advanced(by: .seconds(10))
             while condition(all) == false {
                 guard ContinuousClock.now < deadline else {
@@ -813,7 +813,7 @@ struct ClaudeStreamProcessTests {
     }
 }
 
-private extension ClaudeStreamProcess.Event {
+private extension AgentLineProcess.Event {
     var isExit: Bool {
         if case .exited = self { return true }
         return false
