@@ -208,6 +208,8 @@ final class CoordinatorChatView {
             button("Restart", "restart") { [weak self] in self?.restart() }
         case .agentStarting, .startWaitsInTerminal, .awaitingAnswerInTerminal, .typingInterrupted:
             button("Show Terminal", "show-terminal") { [weak self] in self?.showTerminal() }
+        case .directAgentStarting, .awaitingAnswerOutsideChat:
+            break
         case .terminalDraft:
             button("Show Terminal", "show-terminal") { [weak self] in self?.showTerminal() }
             button("Send Anyway", "send-anyway") { [weak self] in self?.model?.sendPastTerminalDraft() }

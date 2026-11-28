@@ -76,6 +76,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case sessionExitAfterTurn = "session.exit-after-turn"
     case taskCreate = "task.create"
     case taskRetry = "task.retry"
+    case taskRecoverFable = "task.recover-fable"
     case taskDelete = "task.delete"
     case taskSetWorkspace = "task.set-workspace"
     case taskSetRelease = "task.set-release"
@@ -89,6 +90,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCleanUp = "task.clean-up"
     case taskReadyForReview = "task.ready-for-review"
     case taskNeedsReply = "task.needs-reply"
+    case taskAnswer = "task.answer"
     case taskWaiting = "task.waiting"
     case taskMarkDone = "task.mark-done"
     case taskArchive = "task.archive"
@@ -99,6 +101,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorRestart = "coordinator.restart"
     case coordinatorSend = "coordinator.send"
     case coordinatorReply = "coordinator.reply"
+    case coordinatorAnswerQuestion = "coordinator.answer-question"
     case coordinatorWake = "coordinator.wake"
     case coordinatorWatch = "coordinator.watch"
     case webhookAdd = "webhook.add"
@@ -278,7 +281,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set or update a structured annotation chip under a workspace name.",
+                summary: "Set or update a structured annotation chip under a workspace name. The github-pr key requires workspaceID. A release task's own managed session can set its preparation PR.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .annotationKey(required: true),
@@ -292,7 +295,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Remove a workspace annotation chip by key.",
+                summary: "Remove a workspace annotation chip by key. The github-pr key requires workspaceID.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.annotationKey(required: true)]
             )
@@ -594,6 +597,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskSlug(required: false),
                     .taskWorkspace(required: false),
                     .init(name: "rootDirectory", summary: "A project directory, instead of workspace: the open top-level workspace on it, or a new one that Toastty opens once the other checks pass. Absolute or starting with ~.", valueType: .string, required: false),
+                    .init(name: "newProject", summary: "true makes rootDirectory a new project first: Toastty makes the folder in a parent folder that exists, an empty git repository and a first empty commit. The folder must be missing or empty; Toastty never writes into a folder with files.", valueType: .boolean, required: false),
                     .init(name: "externalRef", summary: "The issue or report the task came from, such as github:owner/repo#123: printable ASCII with no spaces, at most 128 characters. task.get and task.list return it.", valueType: .string, required: false),
                     .init(name: "externalURL", summary: "The http or https page of externalRef.", valueType: .string, required: false),
                     .taskAgent(required: false),
@@ -626,6 +630,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished. A task that still needs a workspace or an agent fills them again: from triage when [triage] has a command, otherwise from [defaults], and without a workspace it waits for one.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
+            )
+        case .taskRecoverFable:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "The coordinator requests one recovery of a stopped Fable task on Opus 5.5 at high effort.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .init(name: "expectedSessionID", summary: "The failed managed session ID from task.get.", valueType: .string, required: true),
+                ]
             )
         case .taskDelete:
             return .init(
@@ -663,9 +678,12 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. Without steer, Toastty types whatever the agent does: a busy agent queues the message as typed input, and the Return key can answer a permission prompt that is on screen. With steer=true, Toastty checks the agent first and types nothing into a permission prompt or a question, and the result's message says in a sentence what it did: an agent at its open prompt gets the message (delivery sent); a Claude Code or Codex agent in a turn gets it in that turn (steered); in every other case Toastty holds the message and types it at the agent's next open prompt (queued, with queuePosition, and delivered false). Toastty holds at most 5 messages for an agent, loses them when it quits or the agent restarts, and reports neither. A steer send fails, with nothing typed, when Toastty cannot tell what the agent does (an agent whose conversation it does not follow, or one that starts, ended or failed), when text that someone typed in the terminal can still be in the agent's prompt, and when 5 messages already wait. Fails when the task has no running agent. Toastty types the text after a first line that names the sender, as coordinator.send does. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
+                summary: "Give a message to a task's agent. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. Toastty checks the agent first and types nothing into a permission prompt, a question, a dialog of Claude Code's own, or text that can still be in the agent's prompt. The result's delivery says what it did, and message says it in a sentence: an agent at its open prompt gets the message there (sent); a Claude Code or Codex agent in a turn gets it in that turn (steered); in every other case Toastty saves the message on the task, with a messageID, and types it at the agent's next open prompt (queued, with queuePosition, and delivered false). That is the result for an agent that cannot read during a turn, for a turn or a prompt that someone typed in, while a permission prompt, a question or a dialog is on screen, and when Toastty cannot tell within 5 seconds what the agent does, as for an agent whose conversation it does not follow; the prompt of such an agent can be open, and then the saved message is typed at once (sent, or sentUnconfirmed when the terminal did not confirm the Return key). A saved message goes before Toastty's other messages, one for each open prompt, oldest first, and a later send waits behind it. It waits only for an open prompt, also that of an agent that stopped with an error, and not for the task's question, a turn that a quit cut off, or a task that merged or is Done. Toastty drops it only when the task is archived. Fails, with nothing typed, when the task has no running agent, when the terminal does not take text that Toastty types now (a saved message stays queued then, and Toastty tries it again), and when the message must wait but 10 messages already wait or the task was archived; and says so when the text was typed but the terminal did not confirm the Return key. With queue=true, Toastty never types into a running turn: it saves the message on the task, with a messageID, and types it at the agent's next open prompt. That is at once when the agent is at its prompt and no earlier message waits (delivery sent, or sentUnconfirmed when the terminal did not confirm the Return key); otherwise when the agent's turn ends (queued, with queuePosition, and delivered false). One message is typed for each open prompt, in order, after Toastty's own watch, wake and merge lines and after the messages that a send without queue saved. A queued message waits while the agent works, waits for an approval or an answer (a permission prompt, a question or a dialog of Claude Code's own on screen), stopped with an error, or has text at its prompt that a typed message would join; while the task's question waits for the user (task.needs-reply); and while a quit cut off the agent's turn (agentState.interruptedAtQuit), until that turn goes on. It survives an agent restart and an app relaunch, and goes to the agent that works on the task then, as every saved message does. task.get lists the task's messages under queuedMessages, with steer true for one that a send without queue saved, and state queued, sent, sentUnconfirmed (typed once, never again) or dropped (for queue: the task merged, shipped, was marked Done or was archived first), and keeps each for 24 hours after it leaves the queue. A task.watch until idle fires only once no saved message waits, so a sender that watches after a send is told after the turn that read its message. Up to 10 messages wait for one task. A send with queue fails when the task has finished or has no running agent. Toastty types the text after a first line that names the sender, as coordinator.send does. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
                 selectors: [],
-                parameters: [.taskID(required: true), .taskMessage(required: true), .taskSteer(required: false), .senderName(required: false)]
+                parameters: [
+                    .taskID(required: true), .taskMessage(required: true), .taskSteer(required: false), .taskQueue(required: false),
+                    .senderName(required: false),
+                ]
             )
         case .coordinatorOpen:
             return .init(
@@ -702,6 +720,19 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 parameters: [
                     .init(name: "messageID", summary: "The ID at the end of the message's first line.", valueType: .string, required: true),
                     .init(name: "text", summary: "The reply, for the sender. It leaves Toastty: the sender and any program on this Mac that runs toastty can read it.", valueType: .string, required: true),
+                ]
+            )
+        case .coordinatorAnswerQuestion:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Answer the question card that the coordinator's agent shows now: pick a choice by its label, or answer in your own words. card names the card you read with coordinator.get (openQuestion.card); the action fails when another card shows, so an answer never lands on a later card. Pass exactly one of option and text. The card must ask one question; a permission prompt is not answered here. The agent receives the answer as text after the first line that coordinator.send writes for the same caller: the task whose space the calling session is in, else that session, else the name in from, marked as the caller's own, else a terminal command. So the coordinator reads the answer as that sender's, not as the user's, unless its policy names that sender as one that passes on the user's decisions. The user answers in the coordinator's chat or on a paired phone, without such a line. Returns card, header, question, options, chosenOption and answer, the text that the agent received. Fails when there is no coordinator, no open card, another open card, or no choice with that label.",
+                selectors: [],
+                parameters: [
+                    .init(name: "card", summary: "The ID of the card to answer, as coordinator.get gives it in openQuestion.card.", valueType: .string, required: true),
+                    .init(name: "option", summary: "The label of the choice to pick. A label that differs only in case also matches, when only one does.", valueType: .string, required: false),
+                    .init(name: "text", summary: "An answer in your own words, in place of a choice.", valueType: .string, required: false),
+                    .senderName(required: false),
                 ]
             )
         case .coordinatorWake:
@@ -794,6 +825,23 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 parameters: [
                     .taskID(required: false),
                     .init(name: "question", summary: "The question in a few words; the task's row shows it.", valueType: .string, required: false),
+                    .init(name: "approval", summary: "Show Approve and Decline for this task's own question in Coordinator chat.", valueType: .boolean, required: false),
+                    .init(name: "fleetVersion", summary: "Website release version for the read-only fleet check. Requires fleetTargets.", valueType: .string, required: false),
+                    .init(name: "fleetTargets", summary: "Comma-separated fleet target IDs. Requires fleetVersion.", valueType: .string, required: false),
+                ]
+            )
+        case .taskAnswer:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Send a signed Approve or Decline for the exact open question. The user must first grant the approved HMAC webhook permission for this task, release version and fleet.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .init(name: "questionID", summary: "The open approval question's UUID from task.get.", valueType: .string, required: true),
+                    .init(name: "decision", summary: "approve or decline.", valueType: .string, required: true),
+                    .init(name: "webhookID", summary: "The granted webhook's UUID.", valueType: .string, required: true),
+                    .init(name: "signature", summary: "Hex HMAC-SHA256 for this answer. Read it from stdin.", valueType: .string, required: true),
                 ]
             )
         case .taskWaiting:
@@ -1061,7 +1109,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session, when it entered that state, interruptedAtQuit when a quit or a crash cut off its turn, and lastOutputAt), stage with changedAt, lastUserInputAt, cleanup (kind, stepsDone, problem, finishedAt, and taskSpaceClosesAt while a merged task space waits for its cleanup), pullRequest (GitHub's last answer: state, isDraft, mergeStateStatus, checks and checksPendingSince), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session, when it entered that state, interruptedAtQuit when a quit or a crash cut off its turn, and lastOutputAt), stage with changedAt, lastUserInputAt, cleanup (kind, stepsDone, problem, finishedAt, and taskSpaceClosesAt while a merged task space waits for its cleanup), pullRequest (GitHub's last answer: state, isDraft, mergeStateStatus, checks and checksPendingSince), queuedMessages (the messages from task.send with queue that wait for the agent's next open prompt, and those that left the queue in the last 24 hours: messageID, from, queuedAt, state queued, sent, sentUnconfirmed or dropped, at, sessionID and reason), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
             )
@@ -1100,7 +1148,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches.",
+                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches. openQuestion, while the agent shows a question card that coordinator.answer-question can answer (one card, one question): its card ID, header, question and the labels of its options.",
                 selectors: []
             )
         case .coordinatorReplies:
@@ -1350,7 +1398,7 @@ private extension AppControlParameterDescriptor {
     }
 
     static func taskMessage(required: Bool) -> Self {
-        .init(name: "text", summary: "The message, typed into the agent and submitted.", valueType: .string, required: required)
+        .init(name: "text", summary: "The message for the agent.", valueType: .string, required: required)
     }
 
     static func senderName(required: Bool) -> Self {
@@ -1365,7 +1413,16 @@ private extension AppControlParameterDescriptor {
     static func taskSteer(required: Bool) -> Self {
         .init(
             name: "steer",
-            summary: "true checks the agent first: the message goes to its open prompt or into its running turn, or waits for its next open prompt. Nothing is typed into a permission prompt or a question.",
+            summary: "Accepted for older callers. It is the default: the message goes to the agent's open prompt or into its running turn, or waits for its next open prompt. Not with queue.",
+            valueType: .boolean,
+            required: required
+        )
+    }
+
+    static func taskQueue(required: Bool) -> Self {
+        .init(
+            name: "queue",
+            summary: "true saves the message on the task and types it at the agent's next open prompt, never into a running turn. Not with steer.",
             valueType: .boolean,
             required: required
         )

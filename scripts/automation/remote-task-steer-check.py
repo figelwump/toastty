@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send to a real task agent with `task send --steer`, whatever the agent does.
+"""Send to a real task agent with `task send`, whatever the agent does.
 
 Run through scripts/remote/validate.sh --require-remote --validation-command
 'python3 scripts/automation/remote-task-steer-check.py [--provider claude|codex] [--gui-session]'.
@@ -11,10 +11,11 @@ follows the agent's conversation before the first send. Claude's login lives
 in the GUI session on a host driven over SSH, so add --gui-session for Claude.
 This script plays a coordinator outside Toastty.
 
-It checks that `task send --steer`:
+It checks that `task send`, with no flag:
 - types the message at an idle agent's open prompt (`sent`);
-- submits a message with image paths, each on a line of its own: one with
-  a plain `task send` and two with `--steer` at the open prompt, and one in
+- does the same with `--steer`, the older name for this default;
+- submits a message with image paths, each on a line of its own: one path
+  and then two at the open prompt, the second with `--steer`, and one in
   the running turn's message below. Claude Code reads such a pasted line as
   an image file and drops the Return typed meanwhile, so Toastty types the
   paths as code spans, and the screen must never show `[Image #`;
@@ -227,8 +228,13 @@ def main():
             evidence['screens'][marker] = text[-3000:]
             return text
 
-        def steer(text):
-            return cli_result('task', 'send', task_id, text, '--steer')
+        def send(text, *flags):
+            return cli_result('task', 'send', task_id, text, *flags)
+
+        def sent_at_prompt(result):
+            require(result.get('delivery') == 'sent' and result.get('delivered') is True,
+                    f'Not sent at the open prompt: {result}')
+            return result
 
         def with_images(text, count):
             return '\n'.join([text, IMAGE_NOTE, *(str(shot) for shot in shots[:count])])
@@ -241,26 +247,25 @@ def main():
         step('task started', taskID=task_id, agentState=get()['agentState'])
 
         # 1. An idle agent: typed at the open prompt.
-        sent = steer('Run no command. Reply with exactly SENT-OK.')
-        require(sent.get('delivery') == 'sent' and sent.get('delivered') is True, f'Not sent at the open prompt: {sent}')
+        sent = sent_at_prompt(send('Run no command. Reply with exactly SENT-OK.'))
         reply('SENT-OK')
         wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
         step('idle agent: sent', result=sent)
 
-        # 1b. Image paths on lines of their own: without --steer, then with it.
-        cli_result('task', 'send', task_id, with_images('Run no command. Reply with exactly IMAGE-ONE-OK.', 1))
+        # 1b. Image paths on lines of their own. The second send names the
+        # default with --steer, as older callers do.
+        sent_at_prompt(send(with_images('Run no command. Reply with exactly IMAGE-ONE-OK.', 1)))
         reply('IMAGE-ONE-OK', timeout=120)
         no_image_attachment('IMAGE-ONE-OK')
         wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
-        two = steer(with_images('Run no command. Reply with exactly IMAGE-TWO-OK.', 2))
-        require(two.get('delivery') == 'sent' and two.get('delivered') is True, f'Not sent at the open prompt: {two}')
+        two = sent_at_prompt(send(with_images('Run no command. Reply with exactly IMAGE-TWO-OK.', 2), '--steer'))
         reply('IMAGE-TWO-OK', timeout=120)
         no_image_attachment('IMAGE-TWO-OK')
         wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
         step('idle agent: image paths submitted, without and with --steer', result=two)
 
         # 2. A running turn: typed into the turn, and the agent follows it.
-        cli_result('task', 'send', task_id, HOLD_TEXT)
+        sent_at_prompt(send(HOLD_TEXT))
         wait_for('the agent in a turn', lambda: agent_state() == 'busy', interval=0.5)
         # The command runs for 40 seconds. Codex does not always show it,
         # so the check waits a fixed time for it to start.
@@ -269,7 +274,7 @@ def main():
             time.sleep(1)
             states.append(agent_state())
         if states[-1] == 'busy':
-            steered = steer(with_images(STEER_TEXT, 1))
+            steered = send(with_images(STEER_TEXT, 1))
             require(steered.get('delivery') == 'steered', f'Not steered into the running turn: {steered}')
             reply('STEERED-OK')
             no_image_attachment('STEERED-OK')
@@ -285,7 +290,7 @@ def main():
             # command. The conversation still shows the turn. The two
             # disagree, so Toastty must type nothing until the turn ends.
             require(provider == 'codex', f'The agent did not stay in its turn; its states were {states}')
-            held = steer(STEER_TEXT)
+            held = send(STEER_TEXT)
             require(held.get('delivery') == 'queued' and held.get('delivered') is False,
                     f'Not held while the hooks and the conversation disagreed: {held}')
             require(STEER_TEXT[:40] not in screen(), 'The held message was typed during the turn')
@@ -297,7 +302,7 @@ def main():
         if provider == 'claude':
             # 3. A permission prompt on screen: nothing is typed.
             marker = repository / MARKER_FILE
-            cli_result('task', 'send', task_id, TOUCH_TEXT)
+            sent_at_prompt(send(TOUCH_TEXT))
             seen = dict(dialog=None, waiting=None)
 
             def on_screen(text):
@@ -316,7 +321,7 @@ def main():
             require(not marker.exists(), 'The command ran before anyone answered its prompt')
             step('permission prompt', reportedAfterSeenOnScreenSeconds=round(seen['waiting'] - seen['dialog'], 3))
 
-            queued = steer(QUEUED_TEXT)
+            queued = send(QUEUED_TEXT)
             require(queued.get('delivery') == 'queued' and queued.get('delivered') is False
                     and queued.get('queuePosition') == 1, f'Not held while the prompt was on screen: {queued}')
             time.sleep(8)

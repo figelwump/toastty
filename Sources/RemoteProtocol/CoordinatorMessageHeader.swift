@@ -15,14 +15,16 @@ import Foundation
 ///   panel, with the choices the user made there.
 /// - `[Toastty] Reply …`: the user's message from the chat that answers
 ///   one of the coordinator's messages, with that message quoted.
+/// - `[Toastty] Answers …`: the user's answers to the coordinator's offers,
+///   from the cards of the chat (`CoordinatorOffers.swift`).
 public enum CoordinatorMessageHeader {
     /// Who ran `coordinator send`, as far as Toastty can tell.
     public enum Sender: Equatable, Sendable {
         /// A session in a task's space.
         case task(id: UUID, title: String)
         /// The coordinator's own agent session. Tasks get the coordinator's
-        /// messages, including the user's words that it passes on, so the
-        /// line names it apart from any other session.
+        /// messages, including the user's words that it passes on and its
+        /// own decisions, so the line names it apart from any other session.
         case coordinator
         /// A managed session that belongs to no task.
         case session(id: String, agent: String, workspaceTitle: String?)
@@ -47,12 +49,28 @@ public enum CoordinatorMessageHeader {
 
     // MARK: - coordinator send
 
-    public static func senderLine(_ sender: Sender) -> String {
+    /// The first line of a message that the coordinator sends to a task
+    /// with `task send`. The coordinator passes the user's decisions on to
+    /// tasks and decides for the user within the user's policy, so the line
+    /// says that its approvals and decisions count as the user's. What the
+    /// coordinator may decide is a matter of its own instructions and the
+    /// policy; a task does not check that again. An agent
+    /// program's permission check reads the line too: Toastty quotes it in
+    /// the rule that it gives Claude Code's auto mode
+    /// (`AgentLaunchInstrumentation.claudeAutoModeEnvironmentEntry`).
+    public static let coordinatorToTaskLine =
+        "\(senderPrefix)the coordinator: it acts for the user, and its approvals and decisions count as the user's."
+
+    /// `toTask` is true for a message that `task send` types into a task's
+    /// agent. Only the coordinator's line differs there: no other sender
+    /// approves or decides for the user.
+    public static func senderLine(_ sender: Sender, toTask: Bool = false) -> String {
         switch sender {
         case .task(let id, let title):
             return "\(senderPrefix)task [\(CoordinatorTaskLink.linkText(title))](toastty://task/\(id.uuidString)): not from the user."
         case .coordinator:
-            return "\(senderPrefix)the coordinator: not from the user."
+            // The coordinator's note to itself is not the user's word.
+            return toTask ? coordinatorToTaskLine : "\(senderPrefix)the coordinator: not from the user."
         case .session(let id, let agent, let workspaceTitle):
             let place = workspaceTitle.map { ", workspace \(quoted($0))" } ?? ""
             return "\(senderPrefix)agent session \(word(id)) (\(word(agent))\(place)): not from the user."
@@ -74,8 +92,8 @@ public enum CoordinatorMessageHeader {
     /// With `messageID`, the first line ends with it, after Toastty's note,
     /// so a reader that takes the sender's name from before the note's
     /// `": "` reads the same name. The coordinator replies to that ID.
-    public static func message(from sender: Sender, text: String, messageID: UUID? = nil) -> String {
-        senderLine(sender) + (messageID.map { " Message ID \($0.uuidString)." } ?? "") + "\n" + text
+    public static func message(from sender: Sender, text: String, messageID: UUID? = nil, toTask: Bool = false) -> String {
+        senderLine(sender, toTask: toTask) + (messageID.map { " Message ID \($0.uuidString)." } ?? "") + "\n" + text
     }
 
     /// Whether a message from this sender gets an ID that the coordinator
@@ -196,12 +214,13 @@ public enum CoordinatorMessageHeader {
         return RemoteAttachmentDeliveryText.text(reply, paths: attachmentPaths)
     }
 
-    /// The text starts with Toastty's line for a digest, another sender or
-    /// the quick entry panel. A reply puts its own line first, which would
-    /// change whose message it is, so such text cannot become a reply.
+    /// The text starts with Toastty's line for a digest, another sender,
+    /// the quick entry panel or answers to offers. A reply puts its own
+    /// line first, which would change whose message it is or what it says,
+    /// so such text cannot become a reply.
     public static func hasOtherHeader(_ text: String) -> Bool {
         switch kind(of: text) {
-        case .digest, .fromSender, .quickEntry: true
+        case .digest, .fromSender, .quickEntry, .answers: true
         case .reply, .plain: false
         }
     }
@@ -293,6 +312,9 @@ public enum CoordinatorMessageHeader {
         /// message that it answers; `text` is what the user wrote, without
         /// the list of attached files, whose names are in `fileNames`.
         case reply(quote: String, time: String?, text: String, fileNames: [String])
+        /// The user's answers to the coordinator's offers, from the cards
+        /// of the chat.
+        case answers([CoordinatorOfferAnswer])
         case plain
     }
 
@@ -316,13 +338,25 @@ public enum CoordinatorMessageHeader {
             let (text, fileNames) = splitAttachments(reply.body)
             return .reply(quote: reply.quote, time: reply.time, text: text, fileNames: fileNames)
         }
+        if let answers = offerAnswers(of: message) {
+            return .answers(answers)
+        }
         return .plain
+    }
+
+    /// A message that `coordinator send` brought, or an answer to a
+    /// question card in that form: the sender, short as `Kind.fromSender`
+    /// gives it, and the sender's text after Toastty's first line. `nil`
+    /// for any other text.
+    public static func senderParts(of message: String) -> (sender: String, text: String)? {
+        guard case .fromSender(let sender) = kind(of: message) else { return nil }
+        return (sender, splitFirstLine(message).rest.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// The message as a chat shows it in the user's bubble: a quick entry
     /// message without Toastty's first line, a reply without its first
-    /// line and quote, and any message without the folder of each attached
-    /// file. A message without either is shown as it is.
+    /// line and quote, answers to offers as one line for each, and any
+    /// message without the folder of each attached file. A message without either is shown as it is.
     public static func displayText(of message: String) -> String {
         switch kind(of: message) {
         case .quickEntry(let text, let detail):
@@ -330,6 +364,8 @@ public enum CoordinatorMessageHeader {
         case .reply(_, _, let text, let fileNames):
             let files = fileNames.isEmpty ? nil : fileNames.joined(separator: ", ")
             return [text, files].compactMap { $0 }.filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        case .answers(let answers):
+            return answersDisplayText(answers)
         case .plain:
             let (text, fileNames) = splitAttachments(message)
             guard fileNames.isEmpty == false else { return message }
@@ -355,6 +391,8 @@ public enum CoordinatorMessageHeader {
         case .reply(_, _, let text, _):
             let paths = replyParts(of: message).flatMap { attachedFiles(in: $0.body)?.paths } ?? []
             return (text, paths)
+        case .answers(let answers):
+            return (answersDisplayText(answers), [])
         case .plain:
             guard let (text, paths) = attachedFiles(in: message) else { return (message, []) }
             return (text, paths)

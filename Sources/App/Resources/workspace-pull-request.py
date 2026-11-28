@@ -58,8 +58,10 @@ the worktree is gone; it adds a refusal if a checkout is found by branch name.
 changing nothing, when that workspace is not the one whose terminals are in the
 worktree (or whose github-pr chip names the PR), when it has unsaved documents,
 a terminal in another worktree, or another PR's chip, or when the worktree is
-locked. They reread the workspace just before closing it, recheck the worktree
-just before removing it, and delete each branch only at the commit checked for
+locked or holds another registered worktree. With --worktree, a terminal in another worktree does not stop clean-up:
+the task record names the workspace, and the close ends that terminal too.
+They reread the workspace just before closing it, recheck the worktree just
+before removing it, and delete each branch only at the commit checked for
 removal. Closing a workspace ends its agent sessions and terminal commands.
 
 Needs `git` and an authenticated `gh`. clean-up and close also need
@@ -187,9 +189,15 @@ class Context:
     clicked_head: str | None = None
     # For a merge click: the commit the caller checked, which HEAD must be.
     expected_head: str | None = None
+    # The release's pending managed merge supplies acceptance without a Done mark.
+    release_preparation_url: str | None = None
     # The task record's path, which may already have been removed externally.
     expected_worktree_path: str | None = None
     expected_worktree_branch: str | None = None
+    # The task record's branch when the recorded worktree has since moved onto
+    # the PR's own branch: cleanup then runs as for the PR's branch and also
+    # deletes this local branch when origin has its commit.
+    recorded_task_branch: str | None = None
 
     @property
     def different_task_branch(self) -> bool:
@@ -352,6 +360,8 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
         raise Refusal("the repository allows no merge method")
 
     if pr["isDraft"]:
+        if ctx.release_preparation_url:
+            check_release_preparation(ctx)
         ok, output = succeeds(gh_pr(ctx.repo_slug, "ready", str(number)), cwd=ctx.repo)
         if not ok:
             return "failed", f"could not mark draft PR #{number} ready: {output}", accepted
@@ -367,15 +377,18 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
     # equivalent target-branch condition, so the final request still has a race.
     current = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "baseRefName"), cwd=ctx.repo))
     check_target_branch(current.get("baseRefName"), accepted_base)
+    if ctx.release_preparation_url:
+        check_release_preparation(ctx)
     if ctx.clicked_head is None:
         # A waiting merge, checked last before the merge call: the user may
         # have cancelled it by clearing the done mark since Toastty started
         # this run. Toastty keeps the mark through new agent work, so a commit
         # in the clicked checkout that is not pushed yet also ends the
         # acceptance.
-        workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
-        if workspace is None or not workspace.get("done"):
-            raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
+        if not ctx.release_preparation_url:
+            workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
+            if workspace is None or not workspace.get("done"):
+                raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
         ok, head = succeeds(["git", "rev-parse", "HEAD"], cwd=ctx.checkout)
         if not ok:
             raise Refusal(f"could not read the commit in this workspace's checkout: {head}")
@@ -389,11 +402,22 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
                            "-f", f"sha={accepted}", "-f", f"merge_method={method}"], cwd=ctx.repo)
     if not ok:
         return "failed", f"GitHub did not merge PR #{number}: {output}", accepted
-    view = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "state"), cwd=ctx.repo,
+    view_fields = "state,mergeCommit" if ctx.release_preparation_url else "state"
+    view = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", view_fields), cwd=ctx.repo,
                           check=False) or "{}")
     if view.get("state") == "MERGED":
+        pr["mergeCommit"] = view.get("mergeCommit")
         return "merged", f"merged PR #{number}", accepted
     return "failed", f"GitHub reported the merge, but PR #{number} is {view.get('state', 'unknown').lower()}", accepted
+
+
+def check_release_preparation(ctx: Context) -> None:
+    workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
+    if workspace is None or workspace.get("releaseMergePullRequestURL") != ctx.release_preparation_url:
+        raise Refusal("the release task no longer authorizes this preparation pull request merge")
+    ok, branch = succeeds(["git", "symbolic-ref", "--short", "HEAD"], cwd=ctx.checkout)
+    if not ok or branch != ctx.pr["headRefName"]:
+        raise Refusal("the release checkout is no longer on the preparation pull request branch")
 
 
 # MARK: - Clean up and close
@@ -470,8 +494,6 @@ def workspace_problem(ctx: Context, require_done: bool) -> tuple[Workspace | Non
     if found.unsaved_documents:
         return None, f"{found.label} has unsaved document changes"
     other_worktrees = ctx.other_worktrees
-    if ctx.different_task_branch and ctx.worktree is not None:
-        other_worktrees = [w.path for w in list_worktrees(ctx.repo) if w.path != ctx.worktree.path]
     if ctx.worktree is None:
         if ctx.expected_worktree_path is None and (found.session_agents or found.busy_terminals):
             return None, f"{found.label} still has agent sessions or running commands"
@@ -483,7 +505,14 @@ def workspace_problem(ctx: Context, require_done: bool) -> tuple[Workspace | Non
         if ctx.expected_worktree_path is None and any(w.branch == ctx.pr["headRefName"] for w in worktrees):
             return None, "the PR's worktree reappeared; workspace kept"
         other_worktrees = [w.path for w in worktrees]
-    if any(inside(cwd, other) for cwd in found.cwds for other in other_worktrees):
+    # A task's recorded cleanup closes the task space that the task record
+    # names. A terminal there in another checkout, such as the session the
+    # task started in the project's main checkout, is part of the task: the
+    # close ends it like any other terminal in the space and changes no
+    # files. Without a recorded worktree, such a terminal can mean that the
+    # workspace holds other work, so it stays.
+    if ctx.expected_worktree_path is None and any(
+            inside(cwd, other) for cwd in found.cwds for other in other_worktrees):
         return None, f"{found.label} also has a terminal in another worktree"
     for chip in found.chips:
         match = PR_URL.search(chip.get("url") or "")
@@ -492,10 +521,8 @@ def workspace_problem(ctx: Context, require_done: bool) -> tuple[Workspace | Non
     return found, None
 
 
-def clean_up_local_task_branch(ctx: Context, worktree: Worktree) -> str:
+def clean_up_local_task_branch(ctx: Context, branch: str, head: str) -> str:
     """Keep a task branch unless its pinned commit can be recovered from origin."""
-    branch = worktree.branch
-    head = worktree.head
     if branch in (ctx.default_branch, ctx.pr["baseRefName"]):
         return f"kept local branch {branch}: it is a base branch"
     # Only count tracking refs whose tips are still advertised by origin.
@@ -559,6 +586,12 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
                     return "the worktree is no longer registered on the recorded branch"
                 if current.locked:
                     return "the worktree is locked"
+            # Git status does not show a checkout in an ignored folder, and
+            # removing the worktree would delete it with its files.
+            nested = [w.path for w in list_worktrees(ctx.repo)
+                      if w.path != worktree.path and inside(w.path, worktree.path)]
+            if nested:
+                return f"another worktree is inside it ({nested[0]})"
             return worktree_problem(worktree, cleanup_head, head_label)
         path = ctx.expected_worktree_path
         if path is None:
@@ -639,7 +672,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     if ctx.different_task_branch:
         if worktree is None:
             return "cleaned", "; ".join(done + ["kept all branches"])
-        done.append(clean_up_local_task_branch(ctx, worktree))
+        done.append(clean_up_local_task_branch(ctx, worktree.branch, worktree.head))
         return "cleaned", "; ".join(done + ["kept both branches on GitHub"])
     # Compare-and-delete: the ref goes only if it still points at the PR head.
     # Squash merges leave it unmerged by ancestry, so `git branch -d` would refuse.
@@ -685,9 +718,20 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
             ok, output = succeeds(["git", "update-ref", "-d", f"refs/heads/{branch}", head], cwd=ctx.repo)
             complete = ok
             done.append("deleted local branch" if ok else f"local branch kept: {output}")
+
+    def finish() -> tuple[str, str]:
+        # Last: the PR's remote branch may have been the only origin branch
+        # with the recorded branch's commits.
+        if ctx.recorded_task_branch:
+            ok, task_head = succeeds(["git", "rev-parse", "--verify", "--quiet",
+                                      f"refs/heads/{ctx.recorded_task_branch}"], cwd=ctx.repo)
+            done.append(clean_up_local_task_branch(ctx, ctx.recorded_task_branch, task_head) if ok
+                        else f"local branch {ctx.recorded_task_branch} already absent")
+        return ("cleaned" if complete else "partial"), "; ".join(done)
+
     if close_pr or keep_branches:
         done.append("kept the branch on GitHub")
-        return ("cleaned" if complete else "partial"), "; ".join(done)
+        return finish()
     ok, output = succeeds(["git", "ls-remote", "--heads", "origin", branch], cwd=ctx.repo)
     remote = output.split() if ok else []
     if not ok:
@@ -701,7 +745,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     elif remote:
         complete = False
         done.append(f"remote branch kept: it now points at {remote[0][:8]}")
-    return ("cleaned" if complete else "partial"), "; ".join(done)
+    return finish()
 
 
 # MARK: - Main
@@ -754,6 +798,7 @@ def load(options: argparse.Namespace) -> Context:
             and clicked is not None and clicked.branch is None and options.worktree is None):
         raise Refusal("the detached primary checkout cannot be cleaned up")
     worktree = next((w for w in worktrees if w.branch == pr["headRefName"]), None)
+    worktree_branch, recorded_task_branch = options.worktree_branch, None
     if expected_path is not None:
         if expected_path == repo:
             raise Refusal("the primary checkout cannot be cleaned up")
@@ -765,9 +810,13 @@ def load(options: argparse.Namespace) -> Context:
                 raise Refusal("the worktree is locked")
             if not os.path.isdir(worktree.path):
                 raise Refusal("the recorded worktree directory is absent but its Git registration remains; resolve that registration before retrying")
-            if worktree.branch != options.worktree_branch and not (
-                    worktree.branch is None and options.worktree_branch == pr["headRefName"]):
-                raise Refusal("the worktree is no longer on the recorded branch")
+            if worktree.branch == pr["headRefName"] and worktree_branch != pr["headRefName"]:
+                # The task moved its worktree onto the branch of the PR it
+                # merged last: the PR's branch now names the checkout.
+                recorded_task_branch, worktree_branch = worktree_branch, pr["headRefName"]
+            elif worktree.branch != worktree_branch and not (
+                    worktree.branch is None and worktree_branch == pr["headRefName"]):
+                raise Refusal("the worktree is no longer on the recorded branch or the PR's branch")
         elif os.path.lexists(options.worktree):
             raise Refusal("the recorded worktree path exists but is not registered in this repository; it was kept")
     elif options.action == "clean-up" and pr["state"] == "MERGED":
@@ -784,8 +833,10 @@ def load(options: argparse.Namespace) -> Context:
         repo_info=repo_info, pr=pr, worktree=worktree,
         other_worktrees=[w.path for w in worktrees if worktree is None or w.path != worktree.path],
         workspace_id=options.workspace, checkout=checkout, clicked_head=clicked_head,
-        expected_head=options.expect_head, expected_worktree_path=options.worktree,
-        expected_worktree_branch=options.worktree_branch)
+        expected_head=options.expect_head,
+        release_preparation_url=options.pr_url if options.release_preparation else None,
+        expected_worktree_path=options.worktree,
+        expected_worktree_branch=worktree_branch, recorded_task_branch=recorded_task_branch)
 
 
 def main() -> None:
@@ -798,6 +849,8 @@ def main() -> None:
     parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
     parser.add_argument("--base", help="with --head: the target branch from the earlier waiting report")
     parser.add_argument("--expect-head", help="with merge and no --head: the commit the checkout must be at")
+    parser.add_argument("--release-preparation", action="store_true",
+                        help="with merge: check release acceptance in place of a workspace Done mark")
     parser.add_argument("--worktree", help="with clean-up: the worktree path from the task record")
     parser.add_argument("--worktree-branch", help="with --worktree: the branch from the task record")
     parser.add_argument("--expect-absent-worktree", action="store_true",
@@ -809,6 +862,8 @@ def main() -> None:
         parser.error("--base is only for a merge with --head")
     if options.expect_head and (options.action != "merge" or options.head):
         parser.error("--expect-head is only for a merge without --head")
+    if options.release_preparation and options.action != "merge":
+        parser.error("--release-preparation is only for merge")
     if (options.worktree is not None or options.worktree_branch is not None) and (
             options.action != "clean-up" or not options.worktree or not options.worktree_branch):
         parser.error("--worktree and --worktree-branch are only valid together with clean-up")
@@ -822,6 +877,9 @@ def main() -> None:
         if options.action == "merge":
             report["base"] = ctx.pr["baseRefName"]
             status, detail, report["head"] = merge(ctx, options.head, options.base)
+            if options.release_preparation and status == "merged":
+                report["mergeCommit"] = (ctx.pr.get("mergeCommit") or {}).get("oid")
+                report["releaseBranch"] = ctx.default_branch
         else:
             status, detail = clean_up(ctx, close_pr=options.action == "close")
     except WorkspaceListUnavailable as unavailable:

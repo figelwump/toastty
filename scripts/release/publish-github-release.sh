@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP_NAME="Toastty"
 PUBLISH_MODE="draft"
+PUBLISH_CONFIRMED=0
 DRY_RUN=0
 CREATE_TAG=0
 NOTES_FILE=""
@@ -14,6 +15,7 @@ RELEASE_METADATA_PATH=""
 RELEASE_LABEL=""
 RELEASE_DIR=""
 DMG_PATH=""
+UPLOAD_DMG_PATH=""
 RELEASE_VERSION=""
 RELEASE_BUILD_NUMBER=""
 RELEASE_SOURCE_COMMIT=""
@@ -32,6 +34,7 @@ SPARKLE_PUBLIC_ED_KEY=""
 SPARKLE_MINIMUM_SYSTEM_VERSION=""
 SPARKLE_DMG_PATH=""
 SPARKLE_DMG_FILENAME=""
+SPARKLE_DMG_SHA256=""
 SPARKLE_ENCLOSURE_LENGTH=""
 SPARKLE_ED_SIGNATURE=""
 APPCAST_CONTENT_SHA=""
@@ -44,6 +47,8 @@ usage() {
 Create a GitHub Release for an existing Toastty DMG.
 
 Default behavior is to create a draft release. Pass --publish to publish immediately.
+--publish makes the release live, so it also needs --confirm-publish, which
+says that the user answered a plain yes to "publish now?" for this release.
 
 Required environment:
   TOASTTY_VERSION
@@ -51,6 +56,8 @@ Required environment:
 
 Options:
   --publish          Publish immediately instead of creating a draft release
+  --confirm-publish  Required with --publish (except with --dry-run): the user
+                     answered a plain yes to "publish now?" for this release
   --create-tag       Create and push the release tag from recorded release metadata
   --dry-run          Print the git/gh commands without creating a tag or release
   --notes-file <path>
@@ -118,6 +125,10 @@ parse_args() {
         PUBLISH_MODE="publish"
         shift
         ;;
+      --confirm-publish)
+        PUBLISH_CONFIRMED=1
+        shift
+        ;;
       --create-tag)
         CREATE_TAG=1
         shift
@@ -155,6 +166,18 @@ parse_args() {
         ;;
     esac
   done
+}
+
+# --publish makes the GitHub release, the update feed and the website's
+# Download link point to this build. Refuse it before any check or network
+# call unless the caller says the user answered "publish now?" with a yes.
+require_publish_confirmation() {
+  if [[ "$PUBLISH_CONFIRMED" == "1" && "$PUBLISH_MODE" != "publish" ]]; then
+    fail "--confirm-publish applies only with --publish"
+  fi
+  if [[ "$PUBLISH_MODE" == "publish" && "$DRY_RUN" != "1" && "$PUBLISH_CONFIRMED" != "1" ]]; then
+    fail "--publish makes Toastty $TOASTTY_VERSION build $TOASTTY_BUILD_NUMBER live for users. Ask the user \"publish now?\" right before this step, and add --confirm-publish only after their plain yes to that question."
+  fi
 }
 
 detect_default_repo() {
@@ -251,6 +274,7 @@ load_sparkle_metadata() {
   SPARKLE_MINIMUM_SYSTEM_VERSION="${SPARKLE_MINIMUM_SYSTEM_VERSION:-}"
   SPARKLE_DMG_PATH="${SPARKLE_DMG_PATH:-}"
   SPARKLE_DMG_FILENAME="${SPARKLE_DMG_FILENAME:-}"
+  SPARKLE_DMG_SHA256="${SPARKLE_DMG_SHA256:-}"
   SPARKLE_ENCLOSURE_LENGTH="${SPARKLE_ENCLOSURE_LENGTH:-}"
   SPARKLE_ED_SIGNATURE="${SPARKLE_ED_SIGNATURE:-}"
 }
@@ -297,6 +321,7 @@ verify_inputs() {
   [[ -n "$SPARKLE_MINIMUM_SYSTEM_VERSION" ]] || fail "Sparkle metadata is missing SPARKLE_MINIMUM_SYSTEM_VERSION"
   [[ -n "$SPARKLE_DMG_PATH" ]] || fail "Sparkle metadata is missing SPARKLE_DMG_PATH"
   [[ -n "$SPARKLE_DMG_FILENAME" ]] || fail "Sparkle metadata is missing SPARKLE_DMG_FILENAME"
+  [[ "$SPARKLE_DMG_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "Sparkle metadata is missing a valid SPARKLE_DMG_SHA256"
   [[ -n "$SPARKLE_ENCLOSURE_LENGTH" ]] || fail "Sparkle metadata is missing SPARKLE_ENCLOSURE_LENGTH"
   [[ -n "$SPARKLE_ED_SIGNATURE" ]] || fail "Sparkle metadata is missing SPARKLE_ED_SIGNATURE"
   [[ "$SPARKLE_DMG_PATH" == "$DMG_PATH" ]] || fail "Sparkle metadata DMG path mismatch: expected $DMG_PATH, got $SPARKLE_DMG_PATH"
@@ -513,6 +538,21 @@ wait_for_github_tag_visibility() {
   fail "tag $TAG was pushed but did not become visible to GitHub in time"
 }
 
+prepare_verified_dmg() {
+  UPLOAD_DMG_PATH="$DMG_PATH"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    # Upload the same bytes we verify, even if a separate build replaces
+    # the release directory while GitHub processes the tag.
+    UPLOAD_DIR="$(mktemp -d)"
+    trap 'rm -rf "$UPLOAD_DIR"' EXIT
+    UPLOAD_DMG_PATH="$UPLOAD_DIR/$(basename "$DMG_PATH")"
+    cp "$DMG_PATH" "$UPLOAD_DMG_PATH"
+  fi
+  /usr/bin/python3 "$ROOT_DIR/scripts/release/candidate-check.py" verify \
+    "$UPLOAD_DMG_PATH" "$RELEASE_SOURCE_COMMIT" "$RELEASE_DIR/candidate-check/remote" \
+    "$SPARKLE_DMG_SHA256" "$SPARKLE_ENCLOSURE_LENGTH"
+}
+
 create_tag_if_requested() {
   local local_commit=""
   local remote_commit=""
@@ -549,7 +589,7 @@ create_tag_if_requested() {
 create_release() {
   local command=(
     gh release create "$TAG"
-    "$DMG_PATH"
+    "$UPLOAD_DMG_PATH"
     --repo "$REPO"
     --title "$TITLE"
     --notes-file "$NOTES_FILE"
@@ -787,12 +827,14 @@ require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
 
 parse_args "$@"
+require_publish_confirmation
 validate_build_number
 validate_version_string
 resolve_defaults
 load_release_metadata
 load_sparkle_metadata
 verify_inputs
+prepare_verified_dmg
 ensure_tag_matches_release_commit
 
 if [[ "$DRY_RUN" != "1" ]]; then

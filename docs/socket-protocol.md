@@ -259,6 +259,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.clean-up`
 - `task.ready-for-review`
 - `task.needs-reply`
+- `task.answer`
 - `task.waiting`
 - `task.mark-done`
 - `task.archive`
@@ -269,6 +270,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.restart`
 - `coordinator.send`
 - `coordinator.reply`
+- `coordinator.answer-question`
 - `coordinator.wake`
 - `coordinator.watch`
 - `webhook.add`
@@ -424,29 +426,48 @@ Notable action-specific behavior:
     agent session at delivery: the session in the worktree after a move, else
     the session setup started, else the session restored in that session's
     pane after a relaunch, else the most recently active agent in the task
-    space. It types the text and submits it, as `terminal.send-text` with
-    `submit=true` does; a busy agent queues it as typed input.
+    space. It checks the agent before it types: the text goes to the agent's
+    open prompt, or into the running turn of a Claude Code or Codex agent.
+    Toastty types nothing while the agent waits for an answer to a
+    permission prompt, a question or a dialog, while text typed in the
+    terminal since the agent's latest turn started can still be in its
+    prompt, while an earlier message without a confirmed Return can, or while
+    it cannot tell what the agent does. It then saves the message on the task
+    for the agent's next open prompt.
   - Toastty types a first line that names the sender, from the caller and
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's
-    space, and `[Toastty] From the coordinator: not from the user.` for the
-    coordinator's own agent session. Optional `args.from` names a caller in no
+    space. For the coordinator's own agent session the line is
+    `[Toastty] From the coordinator: it acts for the user, and its
+    approvals and decisions count as the user's.`: only the coordinator
+    approves or decides for the user in a task. Optional `args.from` names a caller in no
     session, also as for `coordinator.send`. The text starts on the second
     line.
-  - optional `args.steer=true` checks the agent before it types, and types
-    nothing into a permission prompt or a question. The result adds
-    `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
-    running turn of a Claude Code or Codex agent) or `queued` (held for the
-    agent's next open prompt, with `queuePosition` and `delivered` false).
+  - returns `taskID`, `sessionID`, `panelID`, `delivered`, `message`, one
+    sentence that says what Toastty did, and `delivery`: `sent` (typed at the
+    open prompt), `steered` (typed into the running turn of a Claude Code or
+    Codex agent) or `queued` (saved on the task for the agent's next open
+    prompt, also after a relaunch, with `messageID`, `queuePosition` and
+    `delivered` false; `task.get` lists it under `queuedMessages` with
+    `steer: true`). A saved message that Toastty could type at once, at the
+    prompt that the agent's hooks report, returns `sent` with its
+    `messageID`, or `sentUnconfirmed` when the terminal did not confirm the
+    Return key.
     Send it through `app_control.run_action`: it can wait up to 5 seconds for
-    the agent's state. It returns `INVALID_PAYLOAD`, with nothing typed, when
-    Toastty cannot tell what the agent does, when text that someone typed can
-    still be in the agent's prompt, and when 5 messages already wait. See
-    [Coordinate tasks](tasks.md#coordinate-tasks).
-  - returns `taskID`, `sessionID`, `panelID`, and `delivered`. A task with no
-    running agent, empty text, or a message that was typed but may not have
-    been submitted returns `INVALID_PAYLOAD`; Toastty does not retry the last
-    case, which could type the message twice.
+    the agent's state. It returns `INVALID_PAYLOAD`, with nothing typed, for
+    a task with no running agent, for empty text, when the terminal does not
+    take text that Toastty types now (a saved message stays `queued` then,
+    and Toastty tries it again), and, for a message that must wait, when 10
+    messages already wait or the task was archived. A message that was typed into the
+    agent's conversation but may not have been submitted also returns
+    `INVALID_PAYLOAD`; Toastty does not retry it, which could type the
+    message twice. See [Coordinate tasks](tasks.md#coordinate-tasks).
+  - optional `args.queue=true` never types into a running turn. Toastty
+    saves the message on the task and types it at the agent's next open
+    prompt, after its own watch, wake and merge lines. The result has the
+    `messageID` and `delivery`: `sent`, `sentUnconfirmed` or `queued`.
+  - optional `args.steer` is accepted for older callers and changes nothing:
+    it names the default. It cannot go with `args.queue`.
   - workspace scope applies to the task, not the panel: an unscoped caller
     reaches any task, and a workspace-scoped session reaches only the tasks it
     may see in `task.list`.
@@ -519,6 +540,15 @@ Notable action-specific behavior:
     archive or a release. When the recorded worktree branch differs from the
     merged pull request's branch, cleanup keeps both remote branches and
     removes the local task branch only if it can verify its commits on origin.
+- `task.answer`
+  - requires `args.taskID`, `args.questionID`, `args.webhookID`,
+    `args.decision` (`approve` or `decline`), and `args.signature`.
+    Toastty checks the task's open question and the owner's grant for that
+    webhook, version, and fleet. Only the app's question card can grant
+    access. See [the signature format](tasks.md#answering-a-task-question-from-coordinator-chat).
+  - returns the answer's ID, question ID, decision, scope, source and
+    delivery state. The same receipt is available as `lastApprovalAnswer`
+    in `task.get`.
 - `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
   - `task.ready-for-review` takes optional `taskID`, sets
     `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes
@@ -822,7 +852,10 @@ Common query IDs include:
 `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
 `queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt` (the
 time that `coordinator.wake` set, or `null`), `lastWakeAt`, `watchedTaskIDs`
-and `watchedProjectRoots`.
+and `watchedProjectRoots`. While the agent shows a question card that
+`coordinator.answer-question` can answer (one card with one question), it
+also returns `openQuestion` with the card's `card` ID, `header`, `question`
+and `options` (the choice labels).
 `coordinator.open` (optional `windowID` and
 `select`) and `coordinator.restart` (optional `windowID`) return the same
 fields with `createdWorkspace` and `startedAgent`, after the start attempt.
@@ -846,7 +879,21 @@ number of `coordinator.reply` events queued. `coordinator.replies` takes
 optional `args.messageID` and `args.since` (a cursor from an earlier answer)
 and returns `replies`, oldest first, each with `id`, `messageID`, `from`,
 `text` and `repliedAt`, then `cursor` and `truncated`; see
-[Coordinator replies](tasks.md#coordinator-replies). `coordinator.wake` takes exactly one of
+[Coordinator replies](tasks.md#coordinator-replies). `coordinator.answer-question`
+answers the question card that the coordinator's agent shows now. It
+requires `args.card`, the card's ID from `coordinator.get`, and fails when
+another card shows, so an answer never lands on a later card. It takes
+exactly one of `args.option` (a choice's label; one that differs only in
+case also matches when only one does) and `args.text` (an answer in the
+caller's own words), and optional `args.from` as `coordinator.send` does.
+The agent receives the answer as text after the first line that
+`coordinator.send` writes for the same caller, without a message ID: a
+chosen label goes as its text. So the coordinator reads the answer as that
+sender's, never as the user's; the user answers in the chat or on a phone,
+without such a line. It returns `card`, `header`, `question`, `options`,
+`chosenOption` and `answer`, the text that the agent received. The card must
+ask one question. It also fails with no open card or no choice with that
+label. `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. With `args.quiet` it also marks the wake turn that runs now as one

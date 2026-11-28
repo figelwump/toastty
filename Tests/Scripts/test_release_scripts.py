@@ -6,6 +6,7 @@ gh; never contacts GitHub.
 
 Run: python3 Tests/Scripts/test_release_scripts.py
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ sys.dont_write_bytecode = True
 REPO = Path(__file__).resolve().parents[2]
 PIN_SCRIPT = REPO / "scripts/release/check-ghostty-pin.sh"
 PUBLISH_SCRIPT = REPO / "scripts/release/publish-github-release.sh"
+CANDIDATE_SCRIPT = REPO / "scripts/release/candidate-check.py"
+STAGES = ("firstLaunch", "update", "sessions", "restart", "compact")
 HIGHLIGHTS_SCRIPT = REPO / "scripts/release/release_notes_highlights.py"
 NOTICES_SCRIPT = REPO / "scripts/release/generate-third-party-notices.mjs"
 
@@ -140,6 +143,7 @@ class PublishNotesTests(unittest.TestCase):
         script_dir = self.root / "scripts/release"
         script_dir.mkdir(parents=True)
         shutil.copy2(PUBLISH_SCRIPT, script_dir / PUBLISH_SCRIPT.name)
+        shutil.copy2(CANDIDATE_SCRIPT, script_dir / CANDIDATE_SCRIPT.name)
         shutil.copy2(HIGHLIGHTS_SCRIPT, script_dir / HIGHLIGHTS_SCRIPT.name)
 
         origin = self.tmp / "origin.git"
@@ -156,10 +160,19 @@ class PublishNotesTests(unittest.TestCase):
         label = f"{self.VERSION}-{self.BUILD}"
         self.release_dir = self.root / "artifacts/release" / label
         self.release_dir.mkdir(parents=True)
-        dmg = self.release_dir / f"Toastty-{self.VERSION}.dmg"
+        dmg = self.dmg = self.release_dir / f"Toastty-{self.VERSION}.dmg"
         dmg.write_bytes(b"dmg")
+        self.evidence = self.release_dir / "candidate-check/remote"
+        self.evidence.mkdir(parents=True)
+        self.receipt = dict(status="pass", sourceCommit=commit,
+                            dmgSHA256=hashlib.sha256(dmg.read_bytes()).hexdigest(),
+                            stages={stage: "pass" for stage in STAGES})
+        self.result = self.evidence / "result.json"
+        self.result.write_text(json.dumps(self.receipt))
+        self.admission = self.evidence / "admission.json"
+        self.admission.write_text(json.dumps(dict(state="finished", exitCode=0, resource="desktop")))
         self.notes = self.release_dir / "release-notes.md"
-        sparkle = self.release_dir / "sparkle-metadata.env"
+        sparkle = self.sparkle = self.release_dir / "sparkle-metadata.env"
         (self.release_dir / "release-metadata.env").write_text("\n".join([
             f"RELEASE_VERSION={self.VERSION}",
             f"RELEASE_BUILD_NUMBER={self.BUILD}",
@@ -179,6 +192,7 @@ class PublishNotesTests(unittest.TestCase):
             "SPARKLE_MINIMUM_SYSTEM_VERSION=14.0",
             f"SPARKLE_DMG_PATH={dmg}",
             f"SPARKLE_DMG_FILENAME={dmg.name}",
+            f"SPARKLE_DMG_SHA256={self.receipt['dmgSHA256']}",
             "SPARKLE_ENCLOSURE_LENGTH=3",
             "SPARKLE_ED_SIGNATURE=c2lnbmF0dXJl",
             "",
@@ -240,6 +254,84 @@ class PublishNotesTests(unittest.TestCase):
         result = self.publish(VALID_NOTES)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Dry run release command", result.stdout)
+
+    def publish_live(self, *extra):
+        self.notes.write_text(VALID_NOTES)
+        return run([str(self.root / "scripts/release/publish-github-release.sh"),
+                    "--create-tag", "--repo", "example/toastty", "--publish", *extra],
+                   env=self.env, cwd=self.root)
+
+    def test_live_publish_without_the_users_yes_stops_first(self):
+        result = self.publish_live()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Ask the user "publish now?"', result.stderr)
+        self.assertIn("--confirm-publish", result.stderr)
+        self.assertFalse(self.gh_log.exists(), "publication contacted GitHub")
+        tags = run(["git", "-C", str(self.root), "tag"]).stdout
+        self.assertEqual(tags, "", "publication created a tag")
+
+    def test_live_publish_with_the_users_yes_goes_on_to_github(self):
+        # The fake gh refuses every call, so the run stops at the sign-in
+        # check: past the confirmation and before any tag.
+        result = self.publish_live("--confirm-publish")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("gh is not authenticated", result.stderr)
+        self.assertNotIn("publish now?", result.stderr)
+
+    def test_confirmation_without_publish_stops(self):
+        result = self.publish(VALID_NOTES, "--confirm-publish")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--confirm-publish applies only with --publish", result.stderr)
+
+    def assert_publication_blocked(self, diagnostic):
+        result = self.publish(VALID_NOTES)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(diagnostic, result.stderr)
+        self.assertNotIn("Dry run tag command", result.stdout)
+        self.assertFalse(self.gh_log.exists(), "publication contacted GitHub")
+
+    def test_missing_candidate_evidence_blocks_publication(self):
+        self.result.unlink()
+        self.assert_publication_blocked("candidate-check/remote/result.json")
+
+    def test_unconfirmed_desktop_cleanup_blocks_publication(self):
+        self.admission.write_text(json.dumps(dict(state="blocked", exitCode=78, resource="desktop")))
+        self.assert_publication_blocked("no successful desktop candidate check")
+
+    def test_failed_candidate_check_blocks_publication(self):
+        self.receipt["status"] = "fail"
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("no successful desktop candidate check")
+
+    def test_receipt_without_every_stage_blocks_publication(self):
+        # A first-launch-only receipt, as the earlier check wrote it.
+        del self.receipt["stages"]
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("did not pass every stage: firstLaunch, update, sessions, restart, compact")
+
+    def test_failed_stage_blocks_publication(self):
+        self.receipt["stages"]["restart"] = "fail"
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("did not pass every stage: restart")
+
+    def test_changed_dmg_blocks_publication(self):
+        self.dmg.write_bytes(b"different dmg")
+        self.assert_publication_blocked("does not match the candidate DMG and source commit")
+
+    def test_evidence_from_another_commit_blocks_publication(self):
+        self.receipt["sourceCommit"] = OTHER
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("does not match the candidate DMG and source commit")
+
+    def test_rebuild_with_old_sparkle_metadata_blocks_publication(self):
+        self.dmg.write_bytes(b"new")
+        self.receipt["dmgSHA256"] = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("Sparkle metadata does not match the candidate DMG")
+
+    def test_wrong_sparkle_enclosure_length_blocks_publication(self):
+        self.sparkle.write_text(self.sparkle.read_text().replace("SPARKLE_ENCLOSURE_LENGTH=3", "SPARKLE_ENCLOSURE_LENGTH=4"))
+        self.assert_publication_blocked("Sparkle metadata does not match the candidate DMG")
 
     def test_highlights_with_subsections_pass(self):
         notes = VALID_NOTES.replace(

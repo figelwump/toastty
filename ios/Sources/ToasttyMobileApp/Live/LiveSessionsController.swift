@@ -441,6 +441,10 @@ final class LiveSessionsController {
     private var stateTransitions = MobileStateTransitionTracker()
     private var connectionPresentationTask: Task<Void, Never>?
     private var suppressesConnectionDowngrade = false
+    /// When the chat's connection signal changes; see `chatConnection`.
+    private var chatConnectionTimeline: ToasttyChatConnectionTimeline
+    private var chatConnectionTask: Task<Void, Never>?
+    private var chatConnectionWake: ContinuousClock.Instant?
     private var wasBackgrounded = false
     private var desiredConversationID: UUID?
     private var conversationRequestID = UUID()
@@ -465,7 +469,8 @@ final class LiveSessionsController {
         homeController: HomeScreenController,
         onTerminal: @escaping @MainActor (LiveConnectionTerminal) -> Void = { _ in },
         onFreshness: @escaping @MainActor (LiveProjectionFreshness) -> Void = { _ in },
-        connectionPresentationDelay: Duration = .milliseconds(750)
+        connectionPresentationDelay: Duration = .milliseconds(750),
+        chatConnectionTimeline: ToasttyChatConnectionTimeline = ToasttyChatConnectionTimeline()
     ) {
         self.runtime = runtime
         self.hostName = hostName
@@ -473,6 +478,7 @@ final class LiveSessionsController {
         self.onFreshness = onFreshness
         self.onTerminal = onTerminal
         self.connectionPresentationDelay = connectionPresentationDelay
+        self.chatConnectionTimeline = chatConnectionTimeline
         homeController.installSubspaceDone { [runtime] workspaceID, isDone in
             do {
                 let response = try await runtime.setWorkspaceDone(
@@ -639,7 +645,6 @@ final class LiveSessionsController {
         return ToasttyComposerPresentation.make(
             agentDisplayName: conversation.agent.displayName.capitalized,
             authority: controller.presentedComposerAuthority,
-            suppressesConnectionNotice: suppressesConnectionDowngrade,
             releasableLocalDraftEpoch: controller.releasableLocalDraftEpoch,
             localDraftReleaseRefusal: controller.localDraftReleaseRefusal
         )
@@ -653,6 +658,8 @@ final class LiveSessionsController {
             beginConnectionPresentationGracePeriod()
         }
         wasBackgrounded = false
+        chatConnectionTimeline.enterForeground(now: .now)
+        applyChatConnection()
         await runtime.resume(lifecycleSequence: lifecycleSequence, backgroundedAt: backgroundedAt)
         if let desiredConversationID {
             await openConversation(desiredConversationID)
@@ -666,6 +673,8 @@ final class LiveSessionsController {
         } else {
             endConnectionPresentationGracePeriod()
         }
+        chatConnectionTimeline.retry(now: .now)
+        applyChatConnection()
         await runtime.restart()
     }
 
@@ -675,6 +684,7 @@ final class LiveSessionsController {
     func background(lifecycleSequence: UInt64) async -> Duration? {
         wasBackgrounded = true
         endConnectionPresentationGracePeriod()
+        chatConnectionTimeline.enterBackground()
         // Keep the conversation controller and readable projection. The
         // coordinator chooses stream reuse or suspension and owns all cleanup.
         return await runtime.enterBackground(lifecycleSequence: lifecycleSequence)
@@ -773,6 +783,10 @@ final class LiveSessionsController {
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
+        controller.onPhaseChange = { [weak self, weak controller] in
+            guard let self, let controller, self.activeConversationController === controller else { return }
+            self.applyChatConnection()
+        }
         controller.consumeConnectionState(coordinatorState)
         controller.consumeInputControl(inputControl(for: conversationID))
         controller.consumeIsCoordinatorChat(isCoordinatorConversation(conversationID))
@@ -785,6 +799,7 @@ final class LiveSessionsController {
         controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         controller.consumeCoordinatorQueue(coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue)
         activeConversationController = controller
+        applyChatConnection()
         await controller.start()
 
         guard conversationRequestID == requestID,
@@ -912,6 +927,9 @@ final class LiveSessionsController {
 
     func stopObserving() {
         endConnectionPresentationGracePeriod()
+        chatConnectionTask?.cancel()
+        chatConnectionTask = nil
+        chatConnectionWake = nil
         coordinatorTask?.cancel()
         sessionsTask?.cancel()
         coordinatorTask = nil
@@ -1131,6 +1149,7 @@ final class LiveSessionsController {
     }
 
     private func applyPresentation(freshnessOverride: LiveProjectionFreshness? = nil) {
+        applyChatConnection()
         let freshness = freshnessOverride ?? resolvedFreshness
         if freshnessOverride == nil,
            suppressesConnectionDowngrade,
@@ -1178,6 +1197,43 @@ final class LiveSessionsController {
         case .reconnecting, .suspended, .requiresAuthentication,
              .authorizationDenied, .incompatibleProtocol, .failed:
             endConnectionPresentationGracePeriod()
+        }
+    }
+
+    /// Moves the chat's connection signal along its timeline, from the
+    /// connection's own freshness: the Home grace does not hold it.
+    private func applyChatConnection() {
+        let wake = chatConnectionTimeline.update(freshness: chatFreshness, now: .now)
+        if homeController.chatConnection != chatConnectionTimeline.connection {
+            homeController.chatConnection = chatConnectionTimeline.connection
+        }
+        guard wake != chatConnectionWake else { return }
+        chatConnectionTask?.cancel()
+        chatConnectionTask = nil
+        chatConnectionWake = wake
+        guard let wake else { return }
+        chatConnectionTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(until: wake, clock: .continuous)
+            } catch {
+                return
+            }
+            guard let self, Task.isCancelled == false, self.chatConnectionWake == wake else { return }
+            self.chatConnectionWake = nil
+            self.chatConnectionTask = nil
+            self.applyChatConnection()
+        }
+    }
+
+    /// The connection as the open chat sees it: the session list can be
+    /// live while the chat still catches up, and Send waits for the chat.
+    private var chatFreshness: LiveProjectionFreshness {
+        let freshness = resolvedFreshness
+        guard freshness == .live, let phase = activeConversationController?.phase else { return freshness }
+        return switch phase {
+        case .stale, .resynchronizing: .reconnecting
+        case .failed: .unreachable
+        case .idle, .loading, .live: .live
         }
     }
 

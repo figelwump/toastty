@@ -5,8 +5,8 @@ import RemoteProtocol
 extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskWaiting,
+        case .taskCreate, .taskRetry, .taskRecoverFable, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
+             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskAnswer, .taskWaiting,
              .taskMarkDone, .taskArchive, .taskRelease, .taskReleaseComplete, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
              .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
         default: false
@@ -33,6 +33,19 @@ extension AppControlExecutor {
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.retry(taskID: record.id) }
             return .init(didMutateState: true, result: coordinator.records.record(id: record.id).map { Self.taskSnapshot($0) })
+        case .taskRecoverFable:
+            guard messageSender() == .coordinator else {
+                throw AutomationSocketError.invalidPayload("Only the coordinator can request a Fable quota recovery.")
+            }
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            guard let sessionID = args.taskString("expectedSessionID") else {
+                throw AutomationSocketError.invalidPayload("expectedSessionID is required")
+            }
+            try perform { try coordinator.recoverFableTask(taskID: record.id, expectedSessionID: sessionID) }
+            return .init(didMutateState: true, result: [
+                "taskID": .string(record.id.uuidString),
+                "recovering": .bool(true),
+            ])
         case .taskStartWork:
             let request = TaskStartWorkRequest(
                 branchPrefix: args.taskString("branchPrefix"),
@@ -80,8 +93,43 @@ extension AppControlExecutor {
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskNeedsReply:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
-            let updated = try perform { try coordinator.needsReply(taskID: record.id, question: args.taskString("question")) }
+            let version = args.taskString("fleetVersion")
+            let targets = args.taskString("fleetTargets")
+            let approval = try args.taskBool("approval") == true || version != nil || targets != nil
+            let fleetChecks: TaskFleetChecks?
+            if version != nil || targets != nil {
+                guard let version, let targets, args["question"] == nil,
+                      let scope = TaskFleetChecks(version: version, targets: targets.components(separatedBy: ",")) else {
+                    throw AutomationSocketError.invalidPayload("Supply a website version and comma-separated fleet target IDs without a custom question.")
+                }
+                fleetChecks = scope
+            } else {
+                fleetChecks = nil
+            }
+            if approval {
+                guard let session = callerManagedSession(),
+                      coordinator.liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == session.sessionID else {
+                    throw AutomationSocketError.invalidPayload("Only the task's active agent can ask a checked approval question.")
+                }
+            }
+            let updated = try perform {
+                try coordinator.needsReply(taskID: record.id, question: args.taskString("question"), approval: approval, fleetChecks: fleetChecks)
+            }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+        case .taskAnswer:
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            guard let questionID = args.taskString("questionID").flatMap(UUID.init(uuidString:)),
+                  let webhookID = args.taskString("webhookID").flatMap(UUID.init(uuidString:)),
+                  let decision = args.taskString("decision").flatMap(TaskApprovalAnswer.Decision.init(rawValue:)),
+                  let signature = args.taskString("signature") else {
+                throw AutomationSocketError.invalidPayload("Supply questionID, decision, webhookID and signature.")
+            }
+            let answer = try perform {
+                try coordinator.answerApproval(
+                    taskID: record.id, questionID: questionID, decision: decision, bot: (webhookID, signature)
+                )
+            }
+            return .init(didMutateState: true, result: Self.approvalAnswerSnapshot(answer))
         case .taskWaiting:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             let reason = args.taskString("on")
@@ -120,18 +168,18 @@ extension AppControlExecutor {
         case .taskReleaseComplete:
             throw AutomationSocketError.invalidPayload("task.release-complete checks git before it returns; send it through app_control.run_action")
         case .taskSend:
-            guard try args.taskBool("steer") != true else {
-                throw AutomationSocketError.invalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action")
+            // Only a send with queue does not wait: `runActionAsync` takes
+            // every other one (`prepareTaskSend`).
+            guard try taskSendQueues(args: args) else {
+                throw AutomationSocketError.invalidPayload(
+                    "task.send without queue waits for the agent's state; send it through app_control.run_action"
+                )
             }
             let record = try visibleTask(args: args, coordinator: coordinator)
             let message = try taskSendMessage(args: args)
-            let session = try perform { try coordinator.send(taskID: record.id, text: message) }
-            return .init(didMutateState: false, result: [
-                "taskID": .string(record.id.uuidString),
-                "sessionID": .string(session.sessionID),
-                "panelID": .string(session.panelID.uuidString),
-                "delivered": .bool(true),
-            ])
+            let from = Self.senderName(messageSender(statedName: try statedSenderName(args: args)))
+            let (queued, position) = try perform { try coordinator.queueMessage(taskID: record.id, text: message, from: from) }
+            return .init(didMutateState: true, result: Self.queuedSendResult(queued, taskID: record.id, position: position))
         case .taskWatch:
             let target = try visibleTask(args: args, coordinator: coordinator)
             guard let rawCondition = args.taskString("until"), let condition = TaskWatchCondition(rawValue: rawCondition) else {
@@ -172,12 +220,29 @@ extension AppControlExecutor {
         }
     }
 
+    /// The request and its caller, read in this request's context.
+    func taskCreateInputs(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, TaskCreateRequest, TaskCaller) {
+        (try requiredTaskCoordinator(), try taskCreateRequest(args: args), taskCaller())
+    }
+
+    /// For `newProject`, makes the folder and its repository off the main
+    /// thread, before the other checks.
+    func makeTaskNewProject(
+        _ coordinator: TaskCoordinator,
+        _ request: TaskCreateRequest,
+        caller: TaskCaller
+    ) async throws -> (request: TaskCreateRequest, made: TaskNewProject?) {
+        do {
+            return try await coordinator.makeNewProjectIfRequested(request, caller: caller)
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
     /// The checks run now, in this request's context; the files are copied
     /// after an await, off the main thread.
-    func prepareTaskCreate(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, TaskCreatePreparation) {
-        let coordinator = try requiredTaskCoordinator()
-        let preparation = try perform { try coordinator.prepareCreate(try taskCreateRequest(args: args), caller: taskCaller()) }
-        return (coordinator, preparation)
+    func prepareTaskCreate(_ coordinator: TaskCoordinator, _ request: TaskCreateRequest, caller: TaskCaller) throws -> TaskCreatePreparation {
+        try perform { try coordinator.prepareCreate(request, caller: caller) }
     }
 
     func finishTaskCreate(_ coordinator: TaskCoordinator, _ preparation: TaskCreatePreparation) async throws -> AppControlActionOutcome {
@@ -189,13 +254,78 @@ extension AppControlExecutor {
         }
     }
 
-    /// The checks of a `task.send` with `steer`, in this request's context.
-    /// `nil` for a send without it, which does not wait.
-    func prepareTaskSteerSend(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, String)? {
-        guard try args.taskBool("steer") == true else { return nil }
+    /// What a `task.send` returns for a message that Toastty saved on the
+    /// task: one with `queue`, or one that had to wait. It says what
+    /// happened to the message now, and gives its ID, which `task.get` lists
+    /// under `queuedMessages`.
+    private static func queuedSendResult(_ message: TaskQueuedMessage, taskID: UUID, position: Int?) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "taskID": .string(taskID.uuidString),
+            "messageID": .string(message.id.uuidString),
+        ]
+        switch message.outcome?.kind {
+        case .sent?:
+            result["delivery"] = .string("sent")
+            result["delivered"] = .bool(true)
+            result["message"] = .string("The agent was at its prompt. Toastty typed the message there.")
+        case .sentUnconfirmed?:
+            result["delivery"] = .string("sentUnconfirmed")
+            result["delivered"] = .bool(true)
+            result["message"] = .string(
+                "Toastty typed the message at the agent's prompt, but the terminal did not confirm the Return key. Check the task's terminal before you send it again."
+            )
+        case .dropped?:
+            // The task finished in the same pass that saved it.
+            result["delivery"] = .string("dropped")
+            result["delivered"] = .bool(false)
+            result["message"] = .string(
+                "Toastty dropped the message and typed nothing: \(message.outcome?.reason ?? "the task finished")."
+            )
+        case nil:
+            result["delivery"] = .string("queued")
+            result["delivered"] = .bool(false)
+            result["queuePosition"] = position.map(AutomationJSONValue.int) ?? .null
+            result["message"] = .string(
+                "Toastty saved the message and types it at the agent's next open prompt, after its turn ends. Nothing is typed until then. task get lists it under queuedMessages."
+            )
+        }
+        if let sessionID = message.outcome?.sessionID {
+            result["sessionID"] = .string(sessionID)
+        }
+        return result
+    }
+
+    /// The sender as `task.get` lists it under `queuedMessages`.
+    static func senderName(_ sender: CoordinatorMessageHeader.Sender) -> String {
+        switch sender {
+        case .task(let id, let title): CoordinatorTaskLink.markdown(taskID: id, title: title)
+        case .coordinator: "the coordinator"
+        case .session(let id, let agent, _): "agent session \(id) (\(agent))"
+        case .named(let name): "\(name) (named by the caller)"
+        case .unknown: "a terminal command"
+        }
+    }
+
+    /// Whether a `task.send` asks for `queue`. `steer` is the default, and
+    /// is still accepted: it changes nothing, and cannot go with `queue`.
+    private func taskSendQueues(args: [String: AutomationJSONValue]) throws -> Bool {
+        let queue = try args.taskBool("queue") == true
+        let steer = try args.taskBool("steer") == true
+        guard queue == false || steer == false else {
+            throw AutomationSocketError.invalidPayload("pass steer or queue, not both")
+        }
+        return queue
+    }
+
+    /// The checks of a `task.send`, in this request's context, and the
+    /// sender as `task.get` lists it. `nil` for a send with `queue`, which
+    /// does not wait for the agent's state.
+    func prepareTaskSend(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, String, from: String)? {
+        guard try taskSendQueues(args: args) == false else { return nil }
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
-        return (coordinator, record.id, try taskSendMessage(args: args))
+        let from = Self.senderName(messageSender(statedName: try statedSenderName(args: args)))
+        return (coordinator, record.id, try taskSendMessage(args: args), from)
     }
 
     /// The text `task.send` types: a first line that names the sender, from
@@ -208,26 +338,31 @@ extension AppControlExecutor {
         guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw AutomationSocketError.invalidPayload("The message is empty.")
         }
-        return CoordinatorMessageHeader.message(from: messageSender(statedName: try statedSenderName(args: args)), text: text)
+        return CoordinatorMessageHeader.message(
+            from: messageSender(statedName: try statedSenderName(args: args)), text: text, toTask: true
+        )
     }
 
-    func finishTaskSteerSend(_ coordinator: TaskCoordinator, taskID: UUID, text: String) async throws -> AppControlActionOutcome {
+    func finishTaskSend(
+        _ coordinator: TaskCoordinator, taskID: UUID, text: String, from: String
+    ) async throws -> AppControlActionOutcome {
         do {
-            let (session, delivery) = try await coordinator.sendSteering(taskID: taskID, text: text)
-            var result: [String: AutomationJSONValue] = [
-                "taskID": .string(taskID.uuidString),
-                "sessionID": .string(session.sessionID),
-                "panelID": .string(session.panelID.uuidString),
-                "delivery": .string(delivery.name),
-                "message": .string(delivery.message),
-                // False for a message that waits: nothing was typed yet.
-                "delivered": .bool(true),
-            ]
-            if case .queued(let position) = delivery {
-                result["delivered"] = .bool(false)
-                result["queuePosition"] = .int(position)
+            switch try await coordinator.send(taskID: taskID, text: text, from: from) {
+            case .typed(let delivery, let session):
+                return .init(didMutateState: false, result: [
+                    "taskID": .string(taskID.uuidString),
+                    "sessionID": .string(session.sessionID),
+                    "panelID": .string(session.panelID.uuidString),
+                    "delivery": .string(delivery.name),
+                    "message": .string(delivery.message),
+                    "delivered": .bool(true),
+                ])
+            case .saved(let message, let position, let session):
+                var result = Self.queuedSendResult(message, taskID: taskID, position: position)
+                result["sessionID"] = result["sessionID"] ?? .string(session.sessionID)
+                result["panelID"] = .string(session.panelID.uuidString)
+                return .init(didMutateState: true, result: result)
             }
-            return .init(didMutateState: false, result: result)
         } catch let error as TaskError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
@@ -483,6 +618,8 @@ extension AppControlExecutor {
             "sessionID": optional(status.session?.sessionID),
             "panelID": optional(status.session?.panelID.uuidString),
             "summary": optional(status.session?.status?.summary),
+            "failure": optional(status.session?.status?.claudeFableQuota == nil ? nil : "claudeFableQuota"),
+            "recoveringModel": .bool(coordinator.recoveringFableTasks.contains(record.id)),
             "changedAt": optional(status.changedAt.map { ISO8601DateFormatter().string(from: $0) }),
             "lastTurnEndedAt": optional(status.session?.lastTurnEndedAt.map { ISO8601DateFormatter().string(from: $0) }),
             "interruptedAtQuit": .bool(coordinator.wasInterruptedAtQuit(record)),
@@ -646,6 +783,10 @@ extension AppControlExecutor {
             }
             rootDirectory = path
         }
+        let newProject = try args.taskBool("newProject") ?? false
+        if newProject, rootDirectory == nil {
+            throw AutomationSocketError.invalidPayload("newProject needs rootDirectory, the new project's folder")
+        }
         return TaskCreateRequest(
             text: args.taskString("text") ?? "",
             files: try Self.taskStrings("files", args: args),
@@ -654,6 +795,7 @@ extension AppControlExecutor {
             slug: args.taskString("slug"),
             workspaceID: workspaceID,
             rootDirectory: rootDirectory,
+            newProject: newProject,
             externalRefID: args.taskString("externalRef"),
             externalRefURL: args.taskString("externalURL"),
             agent: args.taskString("agent"),
@@ -865,6 +1007,18 @@ extension AppControlExecutor {
         return result
     }
 
+    static func approvalAnswerSnapshot(_ answer: TaskApprovalAnswer) -> [String: AutomationJSONValue] {
+        [
+            "id": .string(answer.id.uuidString),
+            "questionID": .string(answer.questionID.uuidString),
+            "decision": .string(answer.decision.rawValue),
+            "question": .string(answer.question),
+            "delivery": .string(answer.delivery.rawValue),
+            "sessionID": answer.sessionID.map(AutomationJSONValue.string) ?? .null,
+            "webhookName": answer.grant.map { .string($0.webhookName) } ?? .null,
+        ]
+    }
+
     static func taskSnapshot(_ record: TaskRecord, stage: TaskStageSnapshot? = nil) -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         func date(_ value: Date?) -> AutomationJSONValue { optional(value.map { ISO8601DateFormatter().string(from: $0) }) }
@@ -925,11 +1079,32 @@ extension AppControlExecutor {
             "mergeCommit": optional(record.mergeCommit),
             "readyForReviewAt": date(record.readyForReviewAt),
             "replyRequest": record.replyRequest.map {
-                .object(["askedAt": date($0.askedAt), "question": optional($0.question)])
+                .object([
+                    "askedAt": date($0.askedAt), "question": optional($0.question),
+                    "approvalID": optional($0.approvalID?.uuidString),
+                    "fleetChecks": $0.fleetChecks.map {
+                        .object(["version": .string($0.version), "targets": .array($0.targets.map(AutomationJSONValue.string))])
+                    } ?? .null,
+                ])
             } ?? .null,
+            "lastApprovalAnswer": record.lastApprovalAnswer.map { .object(approvalAnswerSnapshot($0)) } ?? .null,
             "waiting": record.waiting.map {
                 .object(["on": .string($0.on), "since": date($0.since), "wakeAt": date($0.wakeAt), "wokenAt": date($0.wokenAt)])
             } ?? .null,
+            // Messages from task.send with queue, or without it when they
+            // had to wait, and their outcome.
+            "queuedMessages": .array((record.queuedMessages ?? []).map { message in
+                .object([
+                    "messageID": .string(message.id.uuidString),
+                    "from": .string(message.from),
+                    "steer": .bool(message.isSteer),
+                    "queuedAt": date(message.queuedAt),
+                    "state": .string(message.outcome?.kind.rawValue ?? "queued"),
+                    "at": date(message.outcome?.at),
+                    "sessionID": optional(message.outcome?.sessionID),
+                    "reason": optional(message.outcome?.reason),
+                ])
+            }),
             "mergeRequestedAt": date(record.mergeRequestedAt),
             "mergeCancelledAt": date(record.mergeCancelledAt),
             "mergeFailure": record.mergeFailure.map {

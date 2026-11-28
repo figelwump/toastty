@@ -58,6 +58,11 @@ reattached. A run whose source or options differ starts as a new run. A run
 that waits for a slot with nobody following it for 15 minutes gives up without
 starting. Stop a detached run on purpose with
 `sv exec -- scripts/remote/cancel.sh <run-label>`; its own cleanup still runs.
+A cancelled run that had started keeps its evidence on the remote host.
+`cancel.sh` removes its build caches unless the run used `--full-artifacts` or
+`--keep-remote`; then a wrapper that follows the run removes them after it
+copies the evidence. A reattach needs the same `--full-artifacts` and
+`--keep-remote` options as the run.
 Runs with `--live-gateway` stay attached to SSH, because their session holds
 the gateway credential and is never written to disk.
 
@@ -158,16 +163,26 @@ recordings, runtime metadata, and other evidence. They omit known build product,
 intermediate, dependency, and compiler cache directories under `Derived/` and
 `run/Derived/`. Use `--full-artifacts` at the start of a run to also copy those
 directories, including app binaries and dSYMs. This option controls the local
-copy; `--keep-remote` separately retains the remote files. A failed evidence
-copy makes the wrapper fail and retains the remote run for inspection. Early
-Computer Use exits also retain remote evidence. No historical artifacts are
-removed by these options.
+copy; `--keep-remote` separately retains the remote files. After each copy, the
+wrapper compares the destination with the remote run and fails the copy if any
+copied file differs. A failed evidence copy makes the wrapper fail and retains
+the remote run, build caches included, for inspection. Early Computer Use exits
+also retain remote evidence.
+
+When the wrapper retains a remote run after a verified copy, for example after
+an unconfirmed run cleanup or a failed Git worktree removal, it removes that
+run's build caches: the directories that the evidence copy omits. It removes
+them only when the remote session recorded its end and no process refers to the run's `Derived/`,
+`run/Derived/` or runtime home; otherwise the caches stay and the wrapper
+prints a warning. The evidence, the worktree and simulators stay. With
+`--keep-remote` nothing is removed. `run-metadata.json` records the outcome as
+`remoteCachesRemoved`. No historical artifacts are removed by these options.
 
 Each allocated local run writes `run-metadata.json` next to `result.json`. It
 records the local source commit, scope, dirty state, selected check family,
 execution target, fallback reason, artifact mode, exit code, intended remote
-paths, whether allocation was confirmed, and
-phase durations in whole seconds. Test and smoke phases include their builds;
+paths, whether allocation was confirmed, whether the remote run or its build
+caches were removed, and phase durations in whole seconds. Test and smoke phases include their builds;
 Computer Use records build/launch and agent time separately. Wrapper retries
 are zero; test attempt counts remain unknown and must be read from `.xcresult`.
 For `head` and `ref`, the resolved commit is also used for the Git archive.
@@ -300,6 +315,19 @@ The Claude check also saves its transcript files, then removes the project
 directory and trust entry for its temporary working directory. Other provider
 history for that directory can remain in the validation account.
 
+### Terminal window cleanup for GUI checks
+
+The `--gui-session` launcher closes its own Terminal window at the end of each
+check. The command below builds a disposable app on the validation Mac and
+opens and closes test windows through Terminal. It verifies that the PTYs are
+released and existing windows stay open. It uses a fixture in place of a
+provider login.
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope head \
+  --validation-command 'python3 scripts/automation/terminal-gui-session-self-test.py'
+```
+
 ### Task send with steer
 
 ```bash
@@ -309,7 +337,7 @@ sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
   --validation-command 'python3 scripts/automation/remote-task-steer-check.py --provider codex'
 ```
 
-Run this after a change to `task send --steer` or to the input checks it
+Run this after a change to `task send` or to the input checks it
 uses. Each run mutates one disposable Toastty instance on the dedicated
 validation Mac, with a throwaway runtime home; the installed production app is
 not touched. It uses the real, authenticated provider CLI and subscription
@@ -317,11 +345,12 @@ usage. Remote Access stays off, so nothing follows the agent's conversation
 before the first send.
 
 The check makes one task with a real agent and sends to it with
-`task send --steer`: at its open prompt (`sent`), and in a turn that a script
+`task send`, with no flag: at its open prompt (`sent`), and in a turn that a script
 of the run holds for 40 seconds (`steered`, and the agent must answer as that
 message says, not as the turn's first message said). Messages with image paths
-on lines of their own must be answered too: one with a plain `task send` and
-two with `--steer` at the open prompt, and one in the steered message. The
+on lines of their own must be answered too: one path and then two at the
+open prompt, the second with `--steer`, which names the default, and one in
+the steered message. The
 screen must never show `[Image #`. A host without Codex's
 hooks reports a Codex agent in a long command as idle; the check then requires
 `queued`, nothing typed during the turn, and the message after the turn. With
@@ -428,6 +457,73 @@ that the typed digest started a turn.
 Both write `remote-coordinator-wake-check-<provider>.json` and the app log
 under the run's artifacts directory. The fake run also saves the agent's
 event log and the final `task-webhook-outbox.json`.
+
+### Coordinator direct session
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-direct-session-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers the prototype in
+[A direct session for a Claude coordinator](../tasks.md#a-direct-session-for-a-claude-coordinator-prototype):
+the instance runs with `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1`, so the
+coordinator's Claude Code agent is a process of Toastty's own.
+
+The run uses the real, authenticated Claude CLI and subscription usage, and
+fails if its environment holds an API key. After the build, the check itself
+takes about 5 minutes. The profile gives Claude the Bash tool and the
+question tool, and allows only commands that start with `sleep` without a
+request. Three seeded devices
+stand in for paired iPhones on the loopback gateway; two may approve
+permission requests. The run marks only its temporary coordinator folder
+trusted in `~/.claude.json`, and removes that entry and the folder's Claude
+project directory afterward. `--gui-session` reruns the check through
+Terminal in the GUI session, where the Claude login is readable. Nothing
+moves focus.
+
+It checks, in this order:
+
+- The start: the app's log names a Claude plan before any message is taken,
+  one Claude Code process of the app runs in stream-json mode, and the
+  coordinator's terminal shows no Claude Code.
+- A message from a phone gets a receipt under its own request ID, a reply,
+  and the open prompt. A message from `toastty coordinator send` runs a turn,
+  and a phone that reads from an earlier cursor gets that turn.
+- A timer wake (`coordinator wake`) starts a turn at the open prompt.
+- During a busy turn, a queued phone message, a `coordinator send` message
+  and a timer wake all wait. Each runs as a turn of its own after the turn's
+  end, and none enters the turn.
+- A steer enters the running turn and has a receipt of its own.
+- Stop ends the turn, and the next message runs.
+- A permission request: a phone without approvals is refused. Two phones
+  then answer at the same moment, one with Allow and one with Deny. One
+  answer is taken, the command runs or not as that answer says, and a late
+  answer is refused.
+- A question: a phone and the Mac (`coordinator.answer-question`) answer at
+  the same moment with different choices, and one is taken.
+- For both, the session's status is `needs_approval` while the request
+  waits, and is not from the moment of the answer.
+- `/model` as a message: Claude Code's answer shows as the coordinator's
+  message, and the prompt opens again.
+- `/compact` at the open prompt, then one message: one receipt, one reply.
+- Closing the coordinator's workspace ends the Claude Code process.
+- A second coordinator starts in the same app. After a kill of the app at
+  the open prompt, the relaunched app resumes the same conversation with the
+  same conversation ID, shows its history, and Claude remembers its first
+  answer.
+- After a kill of the app during a turn, the Claude Code process ends
+  within 15 seconds, the relaunched app sends nothing again, the cut-off
+  turn does not finish, and the next message runs.
+- With the setting off, the next launch resumes the same conversation in
+  the terminal, and it takes a message there.
+
+A wake's turn may ask for a command that the profile does not allow; the
+check denies such a request, as a user would. It writes
+`remote-coordinator-direct-session-check.json`, the app logs and Claude's
+transcripts under the run's artifacts directory.
 
 ### Prompt reopen
 
@@ -731,6 +827,22 @@ session, where the Claude login is readable.
 - The user's messages are typed into the coordinator's terminal
   (`terminal.send-text`). `coordinator send` would not do: Toastty marks its
   text with the sender, and the coordinator reads such a message as data.
+- When the coordinator asks with Claude Code's question tool, as the first-run
+  setup does for each part after the first, Toastty's chat shows a card, and the coordinator's status is
+  `needs_approval` until it is answered. The check answers the card through
+  `coordinator.answer-question`: `first-run` picks choices, and the other
+  first-run scenarios type the user's words into the card. An answer from
+  that action normally starts with Toastty's line for its sender, and the
+  coordinator never takes a policy change on a sender's word. So the check
+  launches its instance with `TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER=1`: in a
+  Debug build, an answer from a caller with no session and no `from` name
+  then counts as the user's, as the chat's card gives it. A release build
+  ignores the variable. `first-run-sender` answers a setup card as
+  `"Grok Bot"` and checks that Claude reads that sender's line and that the
+  coordinator saves nothing. `first-run-request`
+  runs Claude with `--disallowedTools AskUserQuestion`, so the coordinator asks
+  in plain text, as it does with Codex or pi. The result counts the cards that
+  each run answered (`cardsAnswered`).
 - GitHub is a fake `gh`, first on the PATH of the app and of the
   coordinator. It serves pull requests from a state file, records each call
   with the calling session, and refuses every call that changes something.
@@ -742,14 +854,22 @@ session, where the Claude login is readable.
   auto mode, where Claude Code's classifier also judges each command and can
   refuse `toastty task request-merge`.
 
-The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
+The `checked-task-answer` scenario uses Accessibility to approve a task
+question in Coordinator chat. With `--permission-mode auto`, it checks that
+the task receives the app's recorded answer while the real Claude Code
+Coordinator runs in auto mode. The `signed-task-answer` scenario grants
+an approved test webhook access to a disposable release's fleet question,
+then submits the signed answer through the CLI and checks replay
+rejection. Both scenarios need an unlocked validation desktop.
+
+The other scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
-`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
+`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `approval-passed-on`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
-`user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `dependency-busy`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
-passes the words on with `task send --steer` and not without it. In
+passes the words on with `task send` and without `--queue`. In
 `ci-failed` the failed test is in the pull request's change: the task is
 told to fix it once, and a second failure goes to the user. In the two
 `ci-rerun` scenarios the failed test is outside the change: the task is
@@ -775,7 +895,12 @@ needs Accessibility for the GUI session's Terminal and an unlocked screen,
 and reports BLOCKED without them. Every scenario also checks that each
 `coordinator reply` names a message that the run sent.
 `dependency` also checks that the coordinator
-asks Toastty to watch the task it waits for. The five merge scenarios cover
+asks Toastty to watch the task it waits for. In `dependency-busy` the waiting
+task's agent works when the merge comes: the coordinator must send its
+message at once with `task send`. The check's agent cannot read during a
+turn, so it must read nothing during its turn, and after the check ends the
+turn, the real app must type the message once and `task get` must report it
+`sent`. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
 asks for one when the user says "merge it"; asked to merge simple changes
@@ -818,11 +943,15 @@ remaining work in the same project, without `--start-work`, and tells the
 user. `daily-list` names a list time in Talking that has just passed and
 seeds the ledger with a question, two offers (one that was on 3 lists), a
 question that the policy already answers, and a follow-up. It checks that
-the list is one chat message with the open items and no Scratchpad, the
+the list is one chat message with the open items and no Scratchpad, that the
+open offer is in one `toastty-offers` block of valid JSON with an ID, what it
+is, an example and what a yes starts, the
 dropped offer and the answered question, the raised `listed=` counts, the
 `list` line, and the next check a day later;
-then that "what waits for me?" changes no count, and that an answer with an
-item's number creates the offered task. `daily-list-quiet` checks that a due
+then that "what waits for me?" changes no count, that a question about the
+offer, typed as the chat's Ask types it, gets an answer and starts nothing,
+and that a yes, typed as the cards' Send answers types it, creates the
+offered task. `daily-list-quiet` checks that a due
 list with nothing on it is a quiet turn. Every other scenario seeds Talking
 with "No daily list", so that its checks of the next check stay as they were.
 `--scenarios a,b` selects some, and `--scenarios judgment`
@@ -836,9 +965,9 @@ otherwise. `interrupted` kills and relaunches its instance.
 Every run also checks what must hold whatever the coordinator decided: no
 merge of its own, review approval or push; no call that changes GitHub; no
 `request-merge` but for a task whose merge the scenario expects; every message
-to a task starts with `[coordinator]`; no message to an agent that works or
-waits at a prompt, except a `task send --steer` to one that works, and no
-send without `--steer` to a task whose agent works; every turn that a digest started set the next check; and
+to a task starts with `[coordinator]`; Toastty types no message into an agent
+that works or waits at a prompt, and the coordinator makes no send without
+`--queue` to a task whose agent waits at a prompt; every turn that a digest started set the next check; and
 no file written but the policy, the ledger and the two records, and nothing
 committed but the policy.
 

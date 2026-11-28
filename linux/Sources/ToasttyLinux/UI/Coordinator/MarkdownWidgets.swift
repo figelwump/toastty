@@ -3,6 +3,7 @@ import CGtk
 import CGtkShim
 @testable import ConversationUI
 import Foundation
+import RemoteProtocol
 
 /// An agent's markdown as GTK widgets (macOS `ToasttyMarkdownText`): one
 /// selectable label per paragraph, heading, list item or quote, a framed
@@ -50,8 +51,13 @@ enum MarkdownWidgets {
             return line
         case .blockQuote:
             return label(markup(block.content, linkPresenter: linkPresenter), classes: ["md-quote"], onLink: onLink)
-        case .code(let language):
+        case .code, .offers:
             let frame = Gtk.vbox(spacing: 2, classes: ["md-code"])
+            let language: String? = switch block.style {
+            case .code(let language): language
+            case .offers: CoordinatorOfferGroup.codeLanguage
+            default: nil
+            }
             if let language, language.isEmpty == false {
                 Gtk.append(frame, Gtk.label(language, classes: ["md-code-language"]))
             }

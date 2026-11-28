@@ -405,9 +405,12 @@ extension TaskAppControlTests {
         func lastUserInputAt(_ id: UUID) throws -> Date? { date(try get(executor, id)["lastUserInputAt"]) }
         #expect(try get(executor, task.id)["lastUserInputAt"] == .null)
 
-        // Another agent's message is typed into the terminal, but no person
-        // typed it.
-        _ = try executor.runAction(
+        // Another agent's message is typed into the terminal, at the prompt
+        // after the launch turn, but no person typed it.
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        report(fixture, session, .working)
+        report(fixture, session, .ready)
+        _ = try await executor.runActionAsync(
             id: "task.send", args: ["taskID": .string(task.id.uuidString), "text": .string("Rebase on main, please")], context: context()
         )
         #expect(fixture.sessionRuntimeStore.lastLocalInputAt(panelID: panel) != nil)
@@ -427,12 +430,17 @@ extension TaskAppControlTests {
         #expect(try get(executor, other.id)["lastUserInputAt"] == .null)
 
         // A paste counts as well, and a later `task send` does not move it.
+        // It types once the person's text went out: a new turn starts, and
+        // its end opens the prompt.
         terminals.handleLocalInput(for: try #require(other.operation.taskSpace?.panelID), kind: .paste)
         #expect(try lastUserInputAt(other.id) != nil)
         let typed = try get(executor, task.id)["lastUserInputAt"]
-        _ = try executor.runAction(
+        report(fixture, session, .working)
+        report(fixture, session, .ready)
+        let sent = try await executor.runActionAsync(
             id: "task.send", args: ["taskID": .string(task.id.uuidString), "text": .string("status?")], context: context()
         )
+        #expect(sent.result?["delivery"] == .string("sent"))
         #expect(try get(executor, task.id)["lastUserInputAt"] == typed)
     }
 

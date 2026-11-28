@@ -25,6 +25,14 @@ protocol SessionRemoteInputProbe: AnyObject {
     /// steered it or stopped it. Toastty's later delivery of a queued
     /// message does not count.
     func lastRemoteUserInputAt(panelID: UUID) -> Date?
+    /// When Toastty last typed a message from a phone or an in-app sender
+    /// into the panel without a confirmed Return. Its text can still be in
+    /// the agent's prompt.
+    func lastUnconfirmedRemoteDeliveryAt(panelID: UUID) -> Date?
+}
+
+extension SessionRemoteInputProbe {
+    func lastUnconfirmedRemoteDeliveryAt(panelID: UUID) -> Date? { nil }
 }
 
 /// Two exits that clean up after an agent:
@@ -66,6 +74,9 @@ final class SessionExitController {
         case newTurnStarted = "new_turn_started"
         case localInput = "local_input"
         case remoteInput = "remote_input"
+        /// Claude Code shows one of its own dialogs, such as the compact
+        /// offer, where Return picks a choice.
+        case agentDialog = "agent_dialog"
         case deliveryFailed = "delivery_failed"
     }
 
@@ -73,6 +84,9 @@ final class SessionExitController {
     private weak var sessionRuntimeStore: SessionRuntimeStore?
     private let sessionCloseController: SessionCloseController
     private let sendText: @MainActor (_ text: String, _ panelID: UUID) -> Bool
+    /// Whether Claude Code shows one of its own dialogs in the panel. It
+    /// reports no status or interaction for them.
+    private let claudeHasNativeDialog: @MainActor (_ panelID: UUID) -> Bool
     /// Claude's completion hook precedes its composer reset, so text typed at
     /// once can be cleared. Remote Access waits the same time before it opens
     /// the phone's compose bar.
@@ -94,6 +108,7 @@ final class SessionExitController {
         sessionRuntimeStore: SessionRuntimeStore,
         sessionCloseController: SessionCloseController,
         sendText: @escaping @MainActor (String, UUID) -> Bool,
+        claudeHasNativeDialog: @escaping @MainActor (UUID) -> Bool = { _ in false },
         promptSettleDelay: Duration = .milliseconds(500),
         now: @escaping () -> Date = Date.init
     ) {
@@ -101,6 +116,7 @@ final class SessionExitController {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.sessionCloseController = sessionCloseController
         self.sendText = sendText
+        self.claudeHasNativeDialog = claudeHasNativeDialog
         self.promptSettleDelay = promptSettleDelay
         self.now = now
     }
@@ -255,6 +271,9 @@ final class SessionExitController {
         }
         if remoteInputProbe?.hasRemoteInput(panelID: armed.panelID, since: armed.turnStartedAt) == true {
             return .remoteInput
+        }
+        if record.agent == .claude, claudeHasNativeDialog(armed.panelID) {
+            return .agentDialog
         }
         return nil
     }

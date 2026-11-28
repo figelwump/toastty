@@ -114,7 +114,11 @@ struct TaskCoordinatorTests {
         deinit { try? FileManager.default.removeItem(at: root) }
 
         /// A coordinator as a new app launch would make one, over `records`.
-        func makeCoordinator(records: TaskRecordStore, readinessTimeout: Duration = .seconds(3)) -> TaskCoordinator {
+        func makeCoordinator(
+            records: TaskRecordStore,
+            readinessTimeout: Duration = .seconds(3),
+            worktreeCreator: TaskWorktreeCreator = TaskWorktreeCreator()
+        ) -> TaskCoordinator {
             TaskCoordinator(
                 records: records,
                 store: store,
@@ -133,6 +137,7 @@ struct TaskCoordinatorTests {
                 grantScope: { [unowned self] sessionID, workspaceID in
                     scopeGrants.append((sessionID, workspaceID))
                 },
+                worktreeCreator: worktreeCreator,
                 now: { [unowned self] in clock ?? Date() },
                 terminalReadinessTimeout: readinessTimeout,
                 triageRunner: triage,
@@ -357,7 +362,9 @@ struct TaskCoordinatorTests {
             #expect(skillLine.upperBound < path.lowerBound)
             #expect(path.upperBound < text.lowerBound)
             #expect(sent.contains(TaskPrompt.replyLine), "\(agent)")
-            #expect(sent.contains(TaskPrompt.coordinatorLine), "\(agent)")
+            // The line quotes the coordinator's first line, which has
+            // apostrophes: the check reads the parts between them.
+            #expect(TaskPrompt.coordinatorLine.split(separator: "'").allSatisfy { sent.contains($0) }, "\(agent)")
             let session = try #require(record.operation.agentLaunch?.sessionID)
             #expect(fixture.launcher.lacksShippedSkills(sessionID: session))
 

@@ -65,17 +65,7 @@ enum TaskChipColors {
 
     /// Every task's chip, keyed by task ID, for the transcript's links.
     static func chips(_ items: [TaskBoardItem]) -> [UUID: ConversationLinkChip] {
-        var chips: [UUID: ConversationLinkChip] = [:]
-        for item in items {
-            guard case .task(let taskID) = item.id else { continue }
-            chips[taskID] = ConversationLinkChip(
-                markColor: color(for: item),
-                title: ConversationLinkChip.taskTitle(item.title),
-                detail: item.pullRequest.map { "#\($0.number)" },
-                showsActivity: CoordinatorChatPresentation.chipShowsActivity(for: item)
-            )
-        }
-        return chips
+        CoordinatorChatPresentation.taskChips(items) { color(for: $0) }
     }
 }
 

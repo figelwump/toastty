@@ -87,7 +87,9 @@ struct TaskStartWorkTests {
                 cwd: cwd,
                 isActive: true,
                 isInTurn: true,
-                nativeConversationID: forkFromSessionID == nil ? "conversation-\(sessionID)" : nil
+                nativeConversationID: forkFromSessionID == nil ? "conversation-\(sessionID)" : nil,
+                // The first prompt starts a turn.
+                latestTurnStartedAt: Date()
             )
             return AgentLaunchResult(
                 agent: agent,
@@ -145,14 +147,27 @@ struct TaskStartWorkTests {
         }
 
         /// What the next checked deliveries report.
-        var steerResult: Result<TaskSteerDelivery, TaskSteerFailure> = .failure(.stateUnknown)
+        var steerResult: Result<TaskSteerDelivery, TaskSteerFailure> = .success(.mustWait)
+        /// The latest checked delivery's check of the open prompt, and of
+        /// a running turn.
+        var mayTypeAtPrompt: (@MainActor () -> Bool)?
+        var mayTypeIntoTurn: (@MainActor () -> Bool)?
         /// Text given to each panel's checked delivery, in order.
         private(set) var steered: [(panelID: UUID, text: String)] = []
 
-        func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+        func deliverSteering(
+            _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
+        ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
             steered.append((panelID, text))
+            mayTypeAtPrompt = { mayType(.openPrompt) }
+            mayTypeIntoTurn = { mayType(.runningTurn) }
             return steerResult
         }
+
+        /// When a checked delivery last typed into each panel.
+        var steerTypedAt: [UUID: Date] = [:]
+
+        func lastSteerTypedAt(panelID: UUID) -> Date? { steerTypedAt[panelID] }
 
         func lastReply(sessionID: String) -> TaskAgentReply? { replies[sessionID] }
 
@@ -163,22 +178,36 @@ struct TaskStartWorkTests {
         /// When a person last typed into each panel, or a phone message
         /// reached it.
         var userInputAt: [UUID: Date] = [:]
-        var sessionsWithPendingInput: Set<String> = []
-        private(set) var pendingInputChecks: [String: Int] = [:]
+        /// Sessions whose prompt shows a permission prompt, a question or a
+        /// dialog.
+        var sessionsShowingInteraction: Set<String> = []
+        /// For sessions whose followed conversation shows an open prompt:
+        /// since when Toastty followed it.
+        var openPromptFollowedSince: [String: Date] = [:]
+        private(set) var promptChecks: [String: Int] = [:]
 
         func lastOutputAt(sessionID: String) -> Date? { outputAt[sessionID] }
 
         func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
 
-        func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
-            pendingInputChecks[session.sessionID, default: 0] += 1
-            return sessionsWithPendingInput.contains(session.sessionID)
+        /// A person's typing in these tests goes into the agent's prompt.
+        func lastPromptInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
+
+        func promptView(in session: TaskSessionInfo) -> TaskPromptView {
+            promptChecks[session.sessionID, default: 0] += 1
+            return TaskPromptView(
+                showsInteraction: sessionsShowingInteraction.contains(session.sessionID),
+                openPromptFollowedSince: openPromptFollowedSince[session.sessionID]
+            )
         }
 
-        /// Reports a status, as the agent's hooks do.
-        /// A turn that was running ends at `.idle`, `.ready` or `.error`.
+        /// Reports a status, as the agent's hooks do. `.working` starts a
+        /// turn; a turn that was running ends at `.idle`, `.ready` or `.error`.
         func report(_ sessionID: String, _ kind: SessionStatusKind, at date: Date = Date()) {
             let wasInTurn = sessions[sessionID]?.isInTurn == true
+            if kind == .working, wasInTurn == false {
+                sessions[sessionID]?.latestTurnStartedAt = date
+            }
             sessions[sessionID]?.status = SessionStatus(kind: kind, summary: kind.rawValue)
             sessions[sessionID]?.statusUpdatedAt = date
             sessions[sessionID]?.isInTurn = [.working, .needsApproval].contains(kind)
@@ -514,6 +543,22 @@ struct TaskStartWorkTests {
         #expect(moved.startWork?.state == .finished)
         #expect(moved.operation.sourceOutcome == .kept(reason: "Someone typed into this session after the move began."))
         #expect(fixture.sessions.closedPanels.isEmpty)
+
+        // Text that a person typed during the turn that asked for the move,
+        // and did not send, can still be in the prompt: the close's exit
+        // would submit it.
+        let draft = try Fixture()
+        let draftTask = try await draft.startedTask()
+        let draftSource = try #require(draftTask.operation.agentLaunch?.sessionID)
+        draft.sessions.userInputAt[try #require(draftTask.operation.taskSpace?.panelID)] = Date()
+        _ = try draft.coordinator.startWork(TaskStartWorkRequest(), caller: draft.caller(of: draftTask))
+        draft.sessions.endTurn(draftSource)
+        await draft.waitUntil("the fork launches") { draft.launcher.calls.count == 2 }
+        draft.sessions.confirm("launched-2")
+        await draft.waitForMove(draftTask.id)
+        #expect(draft.record(draftTask.id)?.operation.sourceOutcome
+            == .kept(reason: "This session's prompt can still hold text that was typed during its last turn."))
+        #expect(draft.sessions.closedPanels.isEmpty)
     }
 
     @Test func agentThatCannotBeForkedStartsFreshWithTheTaskAndTheSourceStays() async throws {
@@ -687,6 +732,86 @@ struct TaskStartWorkTests {
         }
     }
 
+    // MARK: - New projects
+
+    /// A new project gets a repository with a first commit, so a task can
+    /// start work there at once.
+    @Test func newProjectMakesARepositoryThatATaskStartsWorkIn() async throws {
+        let fixture = try Fixture()
+        let folder = fixture.repository.root.appendingPathComponent("minecraft-mods").path
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Build the mods site", rootDirectory: folder, newProject: true, agent: "codex", startWork: true
+        ))
+        await fixture.waitUntil("setup ends") { fixture.record(created.id)?.setup != .settingUp }
+        let record = try #require(fixture.record(created.id))
+        #expect(record.setup == .started)
+        #expect(record.projectRoot == TasksConfigFile.normalizedPath(folder))
+        #expect(try TaskGitTestRepository.git(["log", "--format=%s"], in: folder) == "Initial commit")
+        let worktree = try #require(record.worktree)
+        #expect(try TaskGitTestRepository.git(["rev-parse", "HEAD"], in: worktree.path)
+            == TaskGitTestRepository.git(["rev-parse", "HEAD"], in: folder))
+        let launch = try #require(fixture.launcher.calls.first { $0.workspaceID == record.taskSpaceWorkspaceID })
+        #expect(launch.cwd == worktree.path)
+
+        // The folder is a repository now, so a second new project there is
+        // refused.
+        await #expect(throws: TaskError.self) {
+            try await fixture.coordinator.create(TaskCreateRequest(text: "x", rootDirectory: folder, newProject: true, agent: "codex"))
+        }
+    }
+
+    /// Toastty never writes into a folder with files, and a create that
+    /// fails after the folder was made leaves the disk as it was.
+    @Test func newProjectNeverWritesIntoAFolderWithFilesAndUndoesAFailedCreate() async throws {
+        let fixture = try Fixture()
+        let root = fixture.repository.root
+        let files = FileManager.default
+        func newProject(_ path: String, base: String? = nil) async throws -> TaskRecord {
+            try await fixture.coordinator.create(TaskCreateRequest(
+                text: "x", rootDirectory: path, newProject: true, agent: "codex", base: base
+            ))
+        }
+
+        let notes = root.appendingPathComponent("notes")
+        try files.createDirectory(at: notes, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: notes.appendingPathComponent("todo.txt"))
+        // Only Finder's .DS_Store file counts as empty, not a folder of that name.
+        let hidden = root.appendingPathComponent("hidden")
+        try files.createDirectory(at: hidden.appendingPathComponent(".DS_Store"), withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: hidden.appendingPathComponent(".DS_Store/notes.txt"))
+        let refused = [
+            hidden.path,
+            notes.path,
+            notes.appendingPathComponent("todo.txt").path,
+            fixture.repository.project,
+            root.appendingPathComponent("missing/site").path,
+        ]
+        for path in refused {
+            await #expect(throws: TaskError.self) { _ = try await newProject(path) }
+        }
+        #expect(try files.contentsOfDirectory(atPath: notes.path) == ["todo.txt"])
+        #expect(files.fileExists(atPath: hidden.appendingPathComponent(".git").path) == false)
+        #expect(files.fileExists(atPath: root.appendingPathComponent("missing").path) == false)
+
+        // --base without --start-work fails after the folder was made.
+        let site = root.appendingPathComponent("site").path
+        await #expect(throws: TaskError.self) { _ = try await newProject(site, base: "main") }
+        #expect(files.fileExists(atPath: site) == false)
+
+        // An empty folder, as Finder leaves it, keeps only what it had.
+        let empty = root.appendingPathComponent("empty")
+        try files.createDirectory(at: empty, withIntermediateDirectories: false)
+        try Data().write(to: empty.appendingPathComponent(".DS_Store"))
+        await #expect(throws: TaskError.self) { _ = try await newProject(empty.path, base: "main") }
+        #expect(try files.contentsOfDirectory(atPath: empty.path) == [".DS_Store"])
+
+        let created = try await newProject(empty.path)
+        #expect(created.projectRoot == TasksConfigFile.normalizedPath(empty.path))
+        #expect(try TaskGitTestRepository.git(["log", "--format=%s"], in: empty.path) == "Initial commit")
+        await fixture.waitUntil("setup ends") { fixture.record(created.id)?.setup != .settingUp }
+        #expect(fixture.record(created.id)?.setup == .started)
+    }
+
     // MARK: - Forked tasks
 
     @Test func forkedTasksWaitForTheCallersTurnAndForkItsConversationIntoTheirTaskSpaces() async throws {
@@ -764,7 +889,8 @@ struct TaskStartWorkTests {
             You own only this task. The conversation above can plan other tasks and other work: do not do them, and do \
             not act for the session that created this task. The task [\(parent.title)](toastty://task/\(parent.id.uuidString)) \
             created this task. Report progress, questions and results to it with \
-            `toastty task send \(parent.id.uuidString) "<message>"`.
+            `toastty task send \(parent.id.uuidString) "<message>"`. Toastty types the message into that task's turn \
+            or at its prompt, or saves it for its next prompt.
 
             Brief for the parser.
 
@@ -778,7 +904,7 @@ struct TaskStartWorkTests {
             """)
         #expect(projectFork.prompt.contains("You are in the git worktree") == false)
         #expect(projectFork.prompt.hasSuffix(
-            "`toastty task send \(parent.id.uuidString) \"<message>\"`.\n\nSplit the lexer\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
+            "\(TaskPrompt.parentLine(.init(id: parent.id, title: parent.title)))\n\nSplit the lexer\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
         ))
 
         // Setup ends only once each fork reports its own conversation.
@@ -825,7 +951,8 @@ struct TaskStartWorkTests {
         let launched = try #require(fixture.launcher.calls.last)
         // The title is escaped for the link, and the ID stays in the command.
         let parentLine = #"The task [Plan the \[beta\] release](toastty://task/\#(parent.id.uuidString)) created this task. "#
-            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) "<message>"`."#
+            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) "<message>"`. "#
+            + "Toastty types the message into that task's turn or at its prompt, or saves it for its next prompt."
         #expect(launched.prompt.contains(parentLine))
         // A launch that cannot give the agent its skills sends another
         // message, which names the parent too.

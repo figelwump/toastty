@@ -86,6 +86,7 @@ The `ToasttyMobileApp` scheme starts the real pairing flow with an empty home sn
 | `TOASTTY_DEBUG_LOGIN_SHELL` | unset | Debug-only override for the terminal login shell used by embedded Ghostty surfaces. When set to an absolute shell path such as `/usr/local/bin/fish`, Toastty temporarily applies that path as `SHELL` while Ghostty finalizes its default command selection, so Xcode Run schemes can reproduce shell-specific behavior without changing the user's account shell. |
 | `TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL` | unset | Debug-only escape hatch for manual shell-integration validation from a runtime-isolated Xcode run. When set to `1` in a `DEBUG` build, Toastty's `Install Shell Integration…` flow is allowed to modify the real detected shell init file instead of stopping at the runtime-isolation guard. When this flag and `TOASTTY_DEBUG_LOGIN_SHELL` are both set, the installer also uses the debug login shell override for shell detection. Off by default. Release builds ignore this flag. |
 | `TOASTTY_DEBUG_RESTORED_LAUNCH_CONTEXT` | unset | Debug-only diagnostic flag for restored terminal launches. When truthy, Toastty probes the restored shell command environment and logs whether `TOASTTY_PANEL_ID`, `TOASTTY_PANE_JOURNAL_FILE`, and `TOASTTY_LAUNCH_REASON` reached the shell. Off by default because the probe is diagnostic-only. |
+| `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION` | unset | Prototype switch for the coordinator. `1` starts a Claude coordinator as a direct session: a process of Toastty's own that exchanges JSON messages with Toastty, with no agent in the coordinator's terminal. `0` forces the terminal. Unset reads the `toastty.coordinator.claudeDirectSession` default. See "A direct session for a Claude coordinator" in `docs/tasks.md`. |
 | `TOASTTY_GHOSTTY_CONFIG_PATH` | unset | Overrides Ghostty config loading with a specific config file. Must be an absolute path or use a `~/` prefix. Toastty loads that file and then Ghostty recursive includes. |
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
 | `TOASTTY_GHOSTTY_SURFACE_DIAGNOSTICS` | unset | Debug-only diagnostic flag for Ghostty surface lifecycle issues. When truthy, Toastty logs Ghostty surface snapshot counts and visibility metadata during terminal workspace updates. |
@@ -342,6 +343,7 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
 | `TOASTTY_SPARKLE_PRIVATE_KEY` | none | Required Sparkle EdDSA private key used to sign the final stapled DMG. Store it in `sv` and inject it with `sv exec --`. |
+| `TOASTTY_REMOTE_GUI_HOST` | none | Required SSH host for the candidate check of the finished DMG. Use the dedicated Toastty validation Mac mini. |
 Additional release behavior:
 
 - run automated validation before the build; prefer `./scripts/automation/check.sh` on the release candidate checkout
@@ -354,6 +356,7 @@ Additional release behavior:
   - `artifacts/release/<version>-<build>/release-metadata.env`
   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
   - `artifacts/release/<version>-<build>/sparkle-metadata.env`
+  - `artifacts/release/<version>-<build>/candidate-check/remote/result.json` and `admission.json`
 - the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is drafted later by an agent or human using the recorded release diff and Ghostty metadata; the repo-local `toastty-release` skill documents that workflow and the repo-local `toastty-publish` skill handles later publication
 
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
@@ -382,6 +385,7 @@ Prerequisites:
 - `gh` must be installed and authenticated
 - the release metadata file must exist at `artifacts/release/<version>-<build>/release-metadata.env`
 - the Sparkle metadata file must exist at `artifacts/release/<version>-<build>/sparkle-metadata.env`
+- the successful candidate check receipt, with every stage passed, and the desktop admission record in `artifacts/release/<version>-<build>/candidate-check/remote/` must match the DMG and recorded source commit
 - the recorded release commit must exist in the current checkout
 - the tag must already exist locally and on `origin`, unless `--create-tag` is used
 

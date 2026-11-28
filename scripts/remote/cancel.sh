@@ -3,7 +3,9 @@ set -euo pipefail
 # Stops one detached remote run on purpose. The run's own cleanup still runs.
 # A run that never left the queue has no evidence: its remote worktree and run
 # folder are removed. A run that had started keeps its evidence on the remote
-# host for inspection. The same command run again starts a new run.
+# host for inspection. Its build caches are removed unless the run copies them
+# (--full-artifacts) or keeps them (--keep-remote). The same command run again
+# starts a new run.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "$ROOT_DIR/scripts/remote/run-support.sh"
 [[ $# -eq 1 && "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo 'usage: scripts/remote/cancel.sh <run-label>' >&2; exit 64; }
@@ -15,7 +17,7 @@ printf -v remote_command '%q ' /usr/bin/python3 - cancel --root "$remote_root" -
 ssh "${ssh_options[@]}" "$TOASTTY_REMOTE_GUI_HOST" "$remote_command" <"$ROOT_DIR/scripts/remote/admission.py"
 ssh "${ssh_options[@]}" "$TOASTTY_REMOTE_GUI_HOST" /bin/bash -l -s -- "$remote_repo" "$remote_root" "$1" <<EOF
 set -euo pipefail
-$(declare -f toastty_remove_remote_run)
+$(declare -f toastty_remove_remote_run toastty_run_cache_paths toastty_run_paths_have_live_process toastty_wait_run_paths_idle toastty_remove_run_caches)
 repo="\$1" root="\$2" label="\$3"
 for parent in test-runs runs; do
   run_root="\$root/\$parent/\$label"
@@ -33,6 +35,13 @@ for parent in test-runs runs; do
     printf '[cancel] %s never started; removed its remote folders\n' "\$label"
   else
     printf '[cancel] %s had started; its evidence stays: %s\n' "\$label" "\$run_root"
+    # The evidence copy omits these caches, so a wrapper that still follows
+    # the run loses nothing.
+    if [[ -f "\$run_root/CANCELLED" && -f "\$run_root/cache-policy.json" ]] \
+      && jq -e '.fullArtifacts == false and .keepRemote == false' "\$run_root/cache-policy.json" >/dev/null; then
+      toastty_remove_run_caches "\$run_root"
+      printf '[cancel] removed the build caches of %s\n' "\$label"
+    fi
   fi
 done
 EOF

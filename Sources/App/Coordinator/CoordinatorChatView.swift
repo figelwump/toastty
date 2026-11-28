@@ -61,7 +61,8 @@ struct CoordinatorChatView: View {
                 workingIndicator: model.workingIndicator,
                 jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest,
                 newMessages: model.newMessages,
-                answerStates: model.interactionAnswerStates
+                answerStates: model.interactionAnswerStates,
+                offerAnswers: model.offerAnswers
             )
             .equatable()
             .modifier(TranscriptViewport(settledDockWidth: settledDockWidth))
@@ -69,6 +70,11 @@ struct CoordinatorChatView: View {
                 if model.showsIntroduction {
                     introduction
                 }
+            }
+            if let coordinator = sessionRuntimeStore.taskCoordinator, let webhooks = coordinator.webhooks {
+                CoordinatorTaskApprovalCards(items: items, coordinator: coordinator, webhooks: webhooks)
+                    .frame(maxWidth: Self.maximumContentWidth)
+                    .padding(.horizontal, 16)
             }
             composerArea(mentionCandidates: CoordinatorMentionCandidate.candidates(from: items))
         }
@@ -204,6 +210,9 @@ struct CoordinatorChatView: View {
                 }
             case .agentStarting, .startWaitsInTerminal, .awaitingAnswerInTerminal:
                 showTerminalButton
+            case .directAgentStarting, .awaitingAnswerOutsideChat:
+                // Nothing of a direct session waits in its terminal.
+                EmptyView()
             case .terminalDraft:
                 showTerminalButton
                 noticeButton("Send Anyway", identifier: "coordinator.chat.notice.send-anyway") {
@@ -350,6 +359,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
     let jumpToLiveEdgeRequest: UInt64
     let newMessages: ToasttyNewMessagesMarker?
     let answerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let offerAnswers: ToasttyOfferAnswers
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -359,6 +369,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
             && lhs.newMessages == rhs.newMessages
             && lhs.answerStates == rhs.answerStates
+            && lhs.offerAnswers == rhs.offerAnswers
     }
 
     var body: some View {
@@ -379,6 +390,10 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             canAcknowledgeRead: false,
             options: CoordinatorChatView.transcriptOptions,
             replyToMessage: { model.reply(to: $0) },
+            offers: ToasttyOfferCards(answers: offerAnswers, actions: ToasttyOfferActions(
+                send: { model.sendOfferAnswers($0, offeredAt: $1) },
+                ask: { model.ask(about: $0, offeredAt: $1) }
+            )),
             newMessages: newMessages
         )
     }
@@ -404,27 +419,13 @@ struct CoordinatorTaskChips {
     let chips: [UUID: ConversationLinkChip]
 
     init(items: [TaskBoardItem]) {
-        var chips: [UUID: ConversationLinkChip] = [:]
-        for item in items {
-            guard case .task(let taskID) = item.id else { continue }
-            chips[taskID] = ConversationLinkChip(
-                markColor: Self.chipColor(Self.markColor(for: item)),
-                title: ConversationLinkChip.taskTitle(item.title),
-                detail: item.pullRequest.map { "#\($0.number)" },
-                showsActivity: Self.showsActivity(for: item)
-            )
+        chips = CoordinatorChatPresentation.taskChips(items) { item in
+            Self.chipColor(Self.markColor(for: item))
         }
-        self.chips = chips
     }
 
     var presenter: ConversationLinkPresenter {
         .taskChips(chips)
-    }
-
-    /// A spinner in place of the dot while the task's agent works, as the
-    /// Tasks view draws it.
-    static func showsActivity(for item: TaskBoardItem) -> Bool {
-        CoordinatorChatPresentation.chipShowsActivity(for: item)
     }
 
     /// The color of the task's stage mark, as the Tasks view draws it.

@@ -335,6 +335,7 @@ esac
     assert.match(documentedSkip.metadata, /STATUS=validated/);
     assert.match(documentedSkip.metadata, /GIT_SHA=[a-f0-9]{40}\n/);
     assert.match(documentedSkip.metadata, /CI_EVENT_SHA=ci-event-fixture\n/);
+    assert.match(documentedSkip.metadata, /CI_GATE=none\n/);
     assert.match(documentedSkip.metadata, /XCODE_VERSION=Xcode 26.0 Build version 17A123/);
     assert.match(documentedSkip.metadata, /SWIFT_VERSION=Apple Swift version 6.2/);
     assert.match(documentedSkip.metadata, /IOS_SDK_VERSION=26.0/);
@@ -383,8 +384,10 @@ esac
     const upload = runStubbedRelease("upload", {
       TOASTTY_IOS_UPLOAD: "1",
       GITHUB_ACTIONS: "true",
-      GITHUB_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      GITHUB_SHA: "main-tip-fixture",
       TOASTTY_IOS_VERIFIED_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      TOASTTY_IOS_SOURCE_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      TOASTTY_IOS_CI_GATE: "override",
     });
     assert.match(upload.invocations, /xcrun altool --validate-app/);
     assert.match(upload.invocations, /xcrun altool --upload-app/);
@@ -392,11 +395,14 @@ esac
     assert.match(upload.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
     assert.match(upload.metadata, /UPLOAD_REQUESTED=1/);
     assert.match(upload.metadata, /UPLOAD_SUPPRESSED_BY=none/);
+    assert.match(upload.metadata, /CI_EVENT_SHA=main-tip-fixture\n/);
+    assert.match(upload.metadata, /CI_GATE=override\n/);
 
     assert.throws(() => runStubbedRelease("changed-source", {
       GITHUB_ACTIONS: "true",
-      GITHUB_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
       TOASTTY_IOS_VERIFIED_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      TOASTTY_IOS_SOURCE_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim(),
+      TOASTTY_IOS_CI_GATE: "full-ci",
       STUB_DIRTY_TRACKED_SOURCE: "1",
     }), (error) => {
       assert.match(error.stderr.toString(), /tracked source modified after checkout/);
@@ -735,15 +741,25 @@ test("privacy manifest declares required-reason APIs without tracking or collect
 });
 
 // Source mismatch must stop before invoking any signing or archive tools.
-test("Actions release rejects absent or mismatched verified source", () => {
+test("Actions release rejects absent or mismatched verified source or gate", () => {
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim();
-  for (const [verified, event] of [["", sha], ["0".repeat(40), sha], [sha, "0".repeat(40)]]) {
+  for (const [verified, source] of [["", sha], ["0".repeat(40), sha], [sha, "0".repeat(40)], [sha, ""]]) {
     assert.throws(() => execFileSync("bash", [releaseScript], {
       cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      env: { PATH: process.env.PATH, GITHUB_ACTIONS: "true", GITHUB_SHA: event,
-        TOASTTY_IOS_VERIFIED_SHA: verified },
+      env: { PATH: process.env.PATH, GITHUB_ACTIONS: "true", GITHUB_SHA: sha,
+        TOASTTY_IOS_VERIFIED_SHA: verified, TOASTTY_IOS_SOURCE_SHA: source, TOASTTY_IOS_CI_GATE: "full-ci" },
     }), (error) => {
       assert.match(error.stderr, /archive source must match the verified CI SHA/);
+      return true;
+    });
+  }
+  for (const gate of ["", "skipped", "none"]) {
+    assert.throws(() => execFileSync("bash", [releaseScript], {
+      cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      env: { PATH: process.env.PATH, GITHUB_ACTIONS: "true", GITHUB_SHA: sha,
+        TOASTTY_IOS_VERIFIED_SHA: sha, TOASTTY_IOS_SOURCE_SHA: sha, TOASTTY_IOS_CI_GATE: gate },
+    }), (error) => {
+      assert.match(error.stderr, /TOASTTY_IOS_CI_GATE must be full-ci or override/);
       return true;
     });
   }

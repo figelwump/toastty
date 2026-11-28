@@ -768,6 +768,7 @@ struct WorkspaceView: View {
         // Tasks with a pull request keep their merge controls. Tasks without
         // one offer completion only while their derived stage is ready.
         if store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
+           sessionRuntimeStore.workspaceAllowsPullRequestActions(workspace),
            let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],

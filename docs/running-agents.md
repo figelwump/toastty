@@ -376,7 +376,8 @@ When the profile ID is `claude`, Toastty:
    - `PreToolUse` (wildcard matcher) — fires before any tool use. A main-agent tool call shows **Working**. A tool call from an agent that Toastty does not track shows **Working** only during a main turn; see below
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready** (except after a failed turn, whose **Error** stays until the next turn), `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
-5. **Writes a private process-lifetime settings file** and passes `--settings <path>` to Claude
+5. **Adds one auto mode entry** to `autoMode.environment` in the merged settings, after the profile's own entries. It tells Claude Code's auto mode check that an approval or a decision in the coordinator's message to a task is yours; see [Approvals and decisions from the coordinator](tasks.md#approvals-and-decisions-from-the-coordinator). Your own `autoMode` settings stay in force
+6. **Writes a private process-lifetime settings file** and passes `--settings <path>` to Claude
 
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). `SessionStart` also persists Claude native resume metadata so restored managed Claude panels can run `claude --resume <session-id>` instead of starting a fresh session. Non-actionable notifications such as `auth_success` are ignored.
 When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the durable per-launch artifacts directory, but still exits successfully so Claude keeps running. Toastty keeps the directory available for the owning Claude process and removes it only after the session is inactive and that process is proven to have exited.
@@ -637,7 +638,9 @@ with `toastty task merge` finish its reply.
   worktree has uncommitted changes or is not at the PR head, when the
   workspace has unsaved documents or a terminal in another worktree, or when
   the workspace is no longer marked done. Closing the workspace ends its agent
-  sessions and running commands.
+  sessions and running commands. A task's task space is the exception for a
+  terminal in another worktree: its cleanup ends that terminal too, as
+  [Tasks](tasks.md) describes.
 - A detached release worktree can also be cleaned up at the PR head or its
   merge commit. Its workspace must have one unambiguous `github-pr` URL for
   that PR. Toastty checks the URL and exact worktree commit again before

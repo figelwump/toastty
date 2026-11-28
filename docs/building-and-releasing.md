@@ -301,7 +301,11 @@ must find the parts it talks to already updated. Do the steps in this order:
 5. **Release the Mac app.** Build the DMG with `scripts/release/release.sh`,
    write the release notes with a `## Highlights` section, and publish with
    `scripts/release/publish-github-release.sh`. Only `--publish` changes the
-   update feed, so existing users get the update at that point.
+   update feed, so existing users get the update at that point. Right before
+   `--publish`, the release agent asks the repository owner "publish now?"
+   and publishes only after a plain yes to that question, also when the
+   release approval already covers publication; see
+   [Publish now?](../.agents/skills/toastty-publish/SKILL.md#publish-now).
 6. **Publish the website change.** Merge its pull request into `main` after the
    Mac release is live, then confirm on toastty.dev that the change shows. For
    `0.10.0` the website change is two stacked pull requests that land together:
@@ -351,6 +355,8 @@ The release script expects:
 - a local `Developer ID Application` certificate
 - notarization credentials injected at runtime
 - a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
+- the configured Toastty Mac mini, with its validation desktop unlocked, Accessibility available, and the Claude CLI signed in
+- `gh` signed in, to download the previous release's DMG for the candidate check
 
 Before building a release artifact, run the full automated gate on the release candidate:
 
@@ -369,6 +375,57 @@ sv exec -- env \
 ```
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
+Before reporting the candidate ready, it runs the candidate check: one check
+of the signed app as a user meets it. A release that fails it does not go to
+the user. The check sends the finished DMG, and the DMG of the previous
+release (`RELEASE_PREVIOUS_TAG`, downloaded from its GitHub release), to the
+Toastty validation Mac mini, and holds the mini's desktop through the remote
+admission queue. It copies each app from a read-only mount into disposable
+folders. Every stage has its own runtime home and user home; the mini's
+installed Toastty is not touched. The stages:
+
+| Stage | What it does with the candidate |
+| --- | --- |
+| `firstLaunch` | Starts with no saved state. The What's New sheet must show, **Not Now** must close it, and the app must answer a query after that. A crash or an AppKit startup exception fails it. |
+| `update` | The previous release saves a layout with two workspaces. The candidate replaces the app at the same path, restores the layout, and shows the What's New sheet over it. **Start Coordinator** opens the coordinator, and the first message gets its answer. |
+| `sessions` | The previous release saves a coordinator conversation and two task agents, and quits from its menu. The candidate replaces it. Each new shell takes three seconds to its first prompt. The coordinator answers in its saved conversation, and each task agent starts once, with its saved conversation. |
+| `restart` | The coordinator's agent ends and a chat message waits. **Restart Coordinator** in the chat's notice starts a new agent, which gets the message once. |
+| `compact` | Claude Code's real "We recommend compacting earlier" offer: **Show Terminal**, arrow keys, the scroll wheel, Escape, and the waiting message delivered once. |
+
+The coordinator is the real Claude CLI with the mini's Claude account; a
+task's agent is a script that records each start. A run takes about four
+minutes after the queue, and uses about eight short Claude turns plus one turn
+with about 230k input tokens. The receipt,
+`artifacts/release/<version>-<build>/candidate-check/remote/result.json`,
+records each stage, the mini's macOS version, the Claude CLI version, and the
+SHA-256 of both DMGs.
+
+The check does not cover: a macOS version or display setup other than the
+mini's (it records its version, and has one display); the user's own shell
+startup files, plugins, agents and saved state; installation through a
+Sparkle update or a Gatekeeper prompt for a downloaded file; an Intel Mac; and
+the iPhone.
+
+To check an existing candidate separately, use the full source commit from
+the candidate build, the previous release's tag, and a new evidence
+directory. Set `TOASTTY_PREVIOUS_DMG` to a local DMG of that release to skip
+the download:
+
+```bash
+sv exec -- ./scripts/release/verify-candidate.sh \
+  artifacts/release/<version>-<build>/Toastty-<version>.dmg \
+  <full-source-commit> <previous-release-tag> <new-evidence-directory>
+```
+
+The release build keeps the evidence at
+`artifacts/release/<version>-<build>/candidate-check/`: the receipt, the
+desktop admission record, the app logs, Claude's transcripts, and frames of
+each stage under `remote/use/`. If the desktop or connection was unavailable,
+move any failed evidence directory aside and rerun the check with
+`candidate-check/` as the destination inside that same release directory.
+The staged DMG and release metadata remain available for the retry.
+If macOS displays a crash alert for the failed candidate, dismiss it on the
+validation desktop before retrying.
 `sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
 `sv exec` must also provide the production session push relay: `TUIST_TOASTTY_PUSH_RELAY_URL`, `TUIST_TOASTTY_PUSH_RELAY_ID`, and `TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT=production`. The release fails before building when they are missing or not production, and after export when the app's `Info.plist` does not contain them. Without these values, the Mac sends no iPhone session alerts.
 Before the archive is built, the release workflow verifies the generated
@@ -386,7 +443,7 @@ license file, and the text is the MIT `License.md` its author added upstream.
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
-- `sparkle-metadata.env` with the feed URL, public key, DMG signature, and enclosure metadata needed for appcast publication
+- `sparkle-metadata.env` with the feed URL, public key, DMG signature, SHA-256, and enclosure metadata needed for appcast publication
 
 The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. The repo-local `toastty-release` skill covers the build step and drafting `release-notes.md` from the recorded release diff so it can be reviewed before publish; the repo-local `toastty-publish` skill covers publishing those drafted notes later.
 
@@ -394,11 +451,18 @@ The script also records the canonical `artifacts/release/<version>-<build>/relea
 
 After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately and update the Sparkle appcast at `https://updates.toastty.dev/appcast.xml`.
 
+`--publish` makes the release visible to users: the latest GitHub release, which the website's Download links open, and the Sparkle update feed. Without `--dry-run`, the script refuses `--publish` unless `--confirm-publish` is also given. Pass `--confirm-publish` only after the repository owner answered a plain yes to "publish now?" for this version and build. A draft release and `--publish --dry-run` need no confirmation.
+
 Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
+- the `candidate-check/remote/` receipt records a successful desktop check,
+  with every stage passed, for the recorded source commit and the SHA-256 of
+  the DMG being uploaded. This also applies to draft releases and dry runs.
+- the upload matches the SHA-256 and file size recorded alongside the
+  Sparkle signature
 
-Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
+Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--create-tag --publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
 
 ```bash
 sv exec -- env \

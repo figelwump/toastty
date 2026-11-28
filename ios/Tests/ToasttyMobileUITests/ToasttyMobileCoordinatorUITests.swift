@@ -276,8 +276,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(newTask.waitForExistence(timeout: 10))
         newTask.tap()
 
-        // The Mac's panel with a coordinator: To coordinator, Send first,
-        // both pills on Auto, and Create Task kept.
+        // The Mac's panel with a coordinator: To coordinator, both pills on
+        // Auto, and Send as the one action.
         let send = app.buttons["toastty-mobile-new-task-send"]
         XCTAssertTrue(send.waitForExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["To Coordinator"].exists)
@@ -288,7 +288,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertEqual(agent.value as? String, "Auto")
         XCTAssertFalse(app.buttons["toastty-mobile-new-task-model"].exists, "Model and Effort belong to a chosen agent")
         XCTAssertFalse(app.buttons["toastty-mobile-new-task-effort"].exists)
-        XCTAssertTrue(app.buttons["toastty-mobile-new-task-create"].exists)
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertFalse(create.exists, "Under Auto there is nothing to create directly")
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-new-task-footer"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-new-task-coordinator-note"].exists,
                        "A coordinator at its prompt takes the message at once")
         attachScreenshot(named: "coordinator-new-task-empty", of: app)
@@ -312,11 +314,19 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         claude.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "Claude" })
         XCTAssertEqual(app.buttons["toastty-mobile-new-task-model"].value as? String, "Default")
+        // Both pills set: nothing is left for the coordinator, so Send
+        // becomes Create.
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertFalse(send.exists)
+        XCTAssertTrue(app.navigationBars["New Task"].exists)
+        attachScreenshot(named: "coordinator-new-task-both-pills-set", of: app)
         agent.tap()
         let auto = app.buttons["Auto"]
         XCTAssertTrue(auto.waitForExistence(timeout: 5))
         auto.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "Auto" })
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "A pill back on Auto brings Send back")
+        XCTAssertFalse(create.exists)
         attachScreenshot(named: "coordinator-new-task-filled", of: app)
 
         send.tap()
@@ -358,17 +368,29 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         let newTask = app.buttons["toastty-mobile-home-new-task"]
         XCTAssertTrue(newTask.waitForExistence(timeout: 10))
         newTask.tap()
-        let create = app.buttons["toastty-mobile-new-task-create"]
-        XCTAssertTrue(create.waitForExistence(timeout: 5))
-        XCTAssertFalse(create.isEnabled, "A task needs its text")
+        let send = app.buttons["toastty-mobile-new-task-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
         let text = app.textViews["toastty-mobile-new-task-text"]
         text.tap()
         text.typeText("Composer keeps a blank line after send.")
-        XCTAssertTrue(waitUntil(timeout: 5) { create.isEnabled })
-        // The line under Create Task names what Auto falls back to.
+
+        // Choosing a project and an agent turns Send into Create.
+        let workspace = app.buttons["toastty-mobile-new-task-workspace"]
+        workspace.tap()
+        let research = app.buttons["herdr research"]
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        research.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { workspace.value as? String == "herdr research" })
+        XCTAssertTrue(send.exists, "The coordinator still chooses the agent")
+        app.buttons["toastty-mobile-new-task-frequent-0"].tap()
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertTrue(create.isEnabled)
+        XCTAssertFalse(send.exists)
+        // The line under the pills says why, and names only chosen values.
         let footer = app.descendants(matching: .any)["toastty-mobile-new-task-footer"]
-        XCTAssertTrue(footer.label.contains("Create Task makes it now in toastty with codex · gpt-6.1-sol · high."),
-                      footer.label)
+        XCTAssertEqual(footer.label, "Create makes the task now in herdr research with claude · opus-5.5 · xhigh, without the coordinator.")
+        attachScreenshot(named: "coordinator-new-task-create", of: app)
         create.tap()
 
         let notice = app.staticTexts["toastty-subspace-done-notice"]
@@ -1262,6 +1284,137 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(queued.waitForNonExistence(timeout: 5))
         XCTAssertTrue(waitForLabel("Queue message", of: send))
         attachScreenshot(named: "coordinator-reply-edit", of: app)
+    }
+
+    // MARK: - Offer cards
+
+    /// The coordinator's offers show as cards, as in the Mac's chat. A card
+    /// opens to its details. Yes and Skip collect, and Send answers sends
+    /// them as one message apart from the draft, which keeps its text and
+    /// its reply. The message steers or queues as the draft's Send would,
+    /// and the cards show its answers while it waits. A waiting answer that
+    /// the user removes gives its card the buttons back. Ask makes the
+    /// draft a reply to the offer.
+    func testOfferCardsAnswerTheCoordinatorsOffers() {
+        let app = launch(coordinator: "working", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_OFFERS": "1"])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let (signup, rule, flakes) = ("safari-signup-check", "docs-merge-rule", "ui-test-flake-sweep")
+        let signupToggle = app.buttons["toastty-offer-\(signup)-toggle"]
+        XCTAssertTrue(signupToggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(textView(containing: "\"offers\"", in: app).exists, "The block shows as cards, not as its text")
+        let count = app.staticTexts["toastty-offers-count"]
+        let sendAnswers = app.buttons["toastty-offers-send"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(sendAnswers, in: app))
+        XCTAssertEqual(count.label, "No answers yet")
+        XCTAssertFalse(sendAnswers.isEnabled)
+        attachScreenshot(named: "coordinator-offers-closed", of: app)
+
+        XCTAssertTrue(scrollIntoUncoveredTranscript(signupToggle, in: app))
+        signupToggle.tap()
+        XCTAssertTrue(app.staticTexts["What it does"].waitForExistence(timeout: 5))
+        XCTAssertEqual(signupToggle.value as? String, "Expanded")
+        XCTAssertTrue(scrollIntoUncoveredTranscript(app.staticTexts["A yes starts"], in: app))
+        attachScreenshot(named: "coordinator-offers-open", of: app)
+
+        let signupYes = app.buttons["toastty-offer-\(signup)-yes"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(signupYes, in: app))
+        signupYes.tap()
+        let ruleSkip = app.buttons["toastty-offer-\(rule)-skip"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(ruleSkip, in: app))
+        ruleSkip.tap()
+        XCTAssertTrue(waitForLabel("2 answers not sent", of: count))
+        XCTAssertTrue(signupYes.isSelected)
+        XCTAssertTrue(sendAnswers.isEnabled)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(sendAnswers, in: app))
+        attachScreenshot(named: "coordinator-offers-chosen", of: app)
+
+        // Ask on the offer that the coordinator would skip: the draft
+        // answers it.
+        let showSkips = app.buttons["toastty-offers-show-skips"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(showSkips, in: app))
+        showSkips.tap()
+        let flakesAsk = app.buttons["toastty-offer-\(flakes)-ask"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(flakesAsk, in: app))
+        flakesAsk.tap()
+        let bar = app.descendants(matching: .any)["toastty-mobile-composer-reply"]
+        let excerpt = app.staticTexts["toastty-mobile-composer-reply-excerpt"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(excerpt.label.hasPrefix("Offer \(flakes): Sweep the iOS UI test flakes"), excerpt.label)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "The field takes the keyboard")
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        input.typeText("Which tests fail most?")
+        attachScreenshot(named: "coordinator-offers-ask", of: app)
+        dropTheKeyboard(in: app)
+
+        // Steer, the default while the coordinator works. The draft and its
+        // reply stay.
+        XCTAssertTrue(scrollIntoUncoveredTranscript(sendAnswers, in: app))
+        sendAnswers.tap()
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            steered.label.hasPrefix("Yes: A check of the sign-up page in Safari\nSkip: Merge pull requests that change only docs"),
+            steered.label
+        )
+        XCTAssertEqual(input.value as? String, "Which tests fail most?", "The draft stays")
+        XCTAssertTrue(bar.exists, "The draft's reply stays")
+        let signupAnswered = app.descendants(matching: .any)["toastty-offer-\(signup)-answered"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(signupAnswered, in: app))
+        XCTAssertEqual(signupAnswered.label, "You said yes")
+        XCTAssertEqual(app.descendants(matching: .any)["toastty-offer-\(rule)-answered"].label, "You skipped it")
+        XCTAssertFalse(signupYes.exists)
+        XCTAssertEqual(count.label, "2 of 3 answered")
+        attachScreenshot(named: "coordinator-offers-sent", of: app)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(steered, in: app))
+        attachScreenshot(named: "coordinator-offers-sent-message", of: app)
+
+        // Queue: the card shows the answer while its message waits, and
+        // Remove gives the card its buttons back.
+        let mode = app.buttons["toastty-mobile-composer-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.tap()
+        let queueChoice = app.buttons["toastty-mobile-composer-mode-queue"]
+        XCTAssertTrue(queueChoice.waitForExistence(timeout: 5))
+        queueChoice.tap()
+        XCTAssertTrue(waitForLabel("Queue selected", of: mode))
+        let flakesSkip = app.buttons["toastty-offer-\(flakes)-skip"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(flakesSkip, in: app))
+        flakesSkip.tap()
+        XCTAssertTrue(scrollIntoUncoveredTranscript(sendAnswers, in: app))
+        sendAnswers.tap()
+        let queued = queuedRow("fixture-queued-2", in: app)
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+        XCTAssertTrue(queued.label.contains("Skip: Sweep the iOS UI test flakes"), queued.label)
+        XCTAssertFalse(queued.label.contains("[Toastty]"), queued.label)
+        let flakesAnswered = app.descendants(matching: .any)["toastty-offer-\(flakes)-answered"]
+        XCTAssertTrue(scrollIntoUncoveredTranscript(flakesAnswered, in: app))
+        XCTAssertEqual(count.label, "All 3 answered")
+        attachScreenshot(named: "coordinator-offers-queued", of: app)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(queued, in: app))
+        attachScreenshot(named: "coordinator-offers-queued-message", of: app)
+
+        let remove = queuedAction("remove", "fixture-queued-2", in: app)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(remove, in: app))
+        remove.tap()
+        XCTAssertTrue(queued.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(scrollIntoUncoveredTranscript(flakesSkip, in: app), "The card takes an answer again")
+        XCTAssertEqual(count.label, "2 of 3 answered")
+        XCTAssertEqual(input.value as? String, "Which tests fail most?")
+        attachScreenshot(named: "coordinator-offers-removed", of: app)
+    }
+
+    /// A slow drag down the chat drops the keyboard, with the simulator's
+    /// first-use tip over it.
+    private func dropTheKeyboard(in app: XCUIApplication) {
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).press(
+            forDuration: 0.1,
+            thenDragTo: transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
     }
 
     // MARK: - Attached images

@@ -28,6 +28,8 @@ public struct ToasttyTranscriptView: View {
     let options: ToasttyTranscriptOptions
     /// Reply on an agent's message. `nil` offers no Reply.
     let replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)?
+    /// Set by a chat that answers the coordinator's offers.
+    let offers: ToasttyOfferCards?
     /// Where the messages that the reader has not seen start, or `nil` to
     /// draw no line.
     let newMessages: ToasttyNewMessagesMarker?
@@ -47,6 +49,7 @@ public struct ToasttyTranscriptView: View {
     @State private var entryScrollPosition: TranscriptEntryScrollPosition
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
     @State private var messageHover = ToasttyMessageHoverState()
+    @State private var offerSelections = ToasttyOfferSelections()
     @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
     /// Counts the reader's own scrolls, so that a scroll to the new
     /// messages' line gives way to one.
@@ -80,6 +83,7 @@ public struct ToasttyTranscriptView: View {
         onVisibleLiveEdge: @escaping () -> Void = {},
         options: ToasttyTranscriptOptions = ToasttyTranscriptOptions(),
         replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)? = nil,
+        offers: ToasttyOfferCards? = nil,
         newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.state = state
@@ -97,6 +101,7 @@ public struct ToasttyTranscriptView: View {
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.options = options
         self.replyToMessage = replyToMessage
+        self.offers = offers
         self.newMessages = newMessages
         _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
         _followsLiveEdge = State(initialValue:
@@ -470,6 +475,9 @@ public struct ToasttyTranscriptView: View {
             .environment(\.toasttyTranscriptOptions, options)
             .environment(messageHover)
             .environment(\.toasttyMessageReply, replyToMessage.map(ToasttyMessageReplyAction.init))
+            .environment(\.toasttyOfferCards, offers)
+            .environment(\.toasttyDrawsOfferCards, offers != nil)
+            .environment(offerSelections)
             .environment(\.toasttyRevealRow, ToasttyRevealRowAction { rowID in
                 revealRow(rowID, using: proxy)
             })
@@ -628,12 +636,23 @@ public struct ToasttyTranscriptView: View {
     private var workingLine: ToasttyTranscriptWorkingLine {
         let liveTurnID = self.liveTurnID
         return .place(
-            isWorking: workingIndicator != nil && state.phase == .live,
+            isWorking: workingIndicator != nil && isPhaseShowingWork,
             foldsRunningWork: options.foldsRunningWork,
             sendItems: state.sendItems,
             liveTurn: liveTurnID == nil ? nil : state.turns.last,
             isLiveTurnExpanded: liveTurnID.map(turnFold.isExpanded) ?? false
         )
+    }
+
+    /// A host that shows the connection itself keeps the working row while
+    /// the transcript recovers, so the chat does not move; it supplies no
+    /// indicator once the work is no longer known.
+    private var isPhaseShowingWork: Bool {
+        switch state.phase {
+        case .live: true
+        case .resyncing, .stale, .failure: options.showsConnectionStatus == false
+        case .loading: false
+        }
     }
 
     /// Blocks interleaved with per-turn work strips; a folded turn's work
@@ -747,7 +766,7 @@ public struct ToasttyTranscriptView: View {
                 Text("Loading transcript…")
             }
             .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
-        case .resyncing:
+        case .resyncing where options.showsConnectionStatus:
             HStack(spacing: 9) {
                 ProgressView()
                     .tint(ConversationDesignTokens.amber)
@@ -755,14 +774,14 @@ public struct ToasttyTranscriptView: View {
             }
             .transcriptBannerStyle(color: ConversationDesignTokens.amberText)
             .accessibilityIdentifier("toastty-mobile-transcript-resyncing")
-        case .stale:
+        case .stale where options.showsConnectionStatus:
             Label("Connection paused — transcript may be stale", systemImage: "wifi.slash")
                 .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
                 .accessibilityIdentifier("toastty-mobile-transcript-stale")
-        case .failure(let message):
+        case .failure(let message) where options.showsConnectionStatus:
             Label(message, systemImage: "exclamationmark.triangle")
                 .transcriptBannerStyle(color: ConversationDesignTokens.red)
-        case .live:
+        case .live, .resyncing, .stale, .failure:
             EmptyView()
         }
 
@@ -777,7 +796,11 @@ public struct ToasttyTranscriptView: View {
     }
 
     private var showsStatusContent: Bool {
-        state.phase != .live || state.historyTruncated
+        switch state.phase {
+        case .live: state.historyTruncated
+        case .resyncing, .stale, .failure: options.showsConnectionStatus || state.historyTruncated
+        case .loading: true
+        }
     }
 
     @ViewBuilder
@@ -2377,6 +2400,7 @@ private struct ToasttyTranscriptRowView: View {
     @Environment(\.toasttyTranscriptOptions) private var options
     @Environment(ToasttyMessageHoverState.self) private var messageHover: ToasttyMessageHoverState?
     @Environment(\.toasttyMessageReply) private var messageReply
+    @Environment(\.toasttyDrawsOfferCards) private var drawsOfferCards
     /// Counts copies, so a second copy restarts the copied mark's timer.
     @State private var messageCopyCount = 0
 
@@ -2490,7 +2514,10 @@ private struct ToasttyTranscriptRowView: View {
         // buttons, and they act on the whole message.
         let copiesMessage = options.showsMessageCopyButton && (chunk?.isLast ?? true)
         let repliesToMessage = isUser == false && messageReply != nil && (chunk?.isLast ?? true)
-        let accessibilityLabel = text + (metadata.map { ", " + $0 } ?? "")
+        // The offers of a message are cards with their own labels. The
+        // message's label names them and leaves out their data.
+        let spokenText = isUser == false && drawsOfferCards ? ToasttyOfferGroupPresentation.spokenText(of: text) : text
+        let accessibilityLabel = spokenText + (metadata.map { ", " + $0 } ?? "")
 
         if isUser {
             // Copy takes the names of the files after the text, as a
@@ -2517,6 +2544,8 @@ private struct ToasttyTranscriptRowView: View {
                             ? ConversationDesignTokens.secondaryText
                             : ConversationDesignTokens.primaryText
                     )
+                    // The agent's own message: its offers draw as cards.
+                    .environment(\.toasttyOfferRow, ToasttyOfferRow(rowID: row.id, timestamp: row.timestamp))
 
                     if let metadata {
                         Text(metadata)

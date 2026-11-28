@@ -1073,7 +1073,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
             }
-            _ = try resolveActiveSession(
+            let activeSession = try resolveActiveSession(
                 sessionID: sessionID,
                 rawPanelID: event.panelID
             )
@@ -1087,9 +1087,34 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("summary is required")
             }
             let detail = normalizedOptionalText(event.payload.string("detail"))
+            // A direct session's process reports each request and its
+            // answer. The hook reports only the request, so its status
+            // would stay after the answer.
+            if kind == .needsApproval,
+               sessionRuntimeStore.takesWaitingRequestsFromItsProcess(sessionID: sessionID) {
+                return [
+                    "eventType": .string(event.eventType),
+                    "stateVersion": .int(stateVersion),
+                ]
+            }
+            var quota: ClaudeFableQuota?
+            if kind == .error, activeSession.agent == .claude,
+               ClaudeFableQuota.isRejection(detail),
+               let rawID = event.payload.string("claudeFableQuotaSessionID"),
+               let nativeID = UUID(uuidString: rawID),
+               let binding = sessionRuntimeStore.nativeSessionBindingConfirmation(for: sessionID),
+               binding.panelID == activeSession.panelID,
+               UUID(uuidString: binding.nativeSessionID) == nativeID {
+                quota = ClaudeFableQuota(
+                    nativeSessionID: nativeID,
+                    resetsAt: ClaudeFableQuota.resetDate(from: detail, at: now)
+                )
+            }
             sessionRuntimeStore.updateStatus(
                 sessionID: sessionID,
-                status: SessionStatus(kind: kind, summary: summary, detail: detail),
+                status: SessionStatus(
+                    kind: kind, summary: quota == nil ? summary : "Fable usage limit", detail: detail, claudeFableQuota: quota
+                ),
                 at: now
             )
             stateVersion += 1
@@ -2654,6 +2679,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     ) -> Bool {
         var scopedResumeRecord = resumeRecord
         scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        sessionRuntimeStore.noteStartReportFromHook(sessionID: sessionID)
         _ = sessionRuntimeStore.confirmNativeSessionBinding(
             managedSessionID: sessionID,
             panelID: activeSession.panelID,

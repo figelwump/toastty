@@ -136,14 +136,19 @@ struct ClaudeFolderTrust: Sendable {
               let key = Self.folderKey(for: folder) else {
             return .skipped("\(folder.path) is not a folder of its own")
         }
-        // Without the lock first: a file that names the folder already
-        // needs no write and no wait. The rename makes each read whole.
-        switch readEdit(key: key) {
-        case .success(.alreadyTrusted):
-            return .alreadyTrusted
-        case .failure(let failure):
-            return .skipped(failure.reason)
-        case .success(.edited):
+        // A stable read can find the folder trusted without waiting.
+        switch readFile() {
+        case .success(let file):
+            switch edit(file.data, key: key) {
+            case .success(.alreadyTrusted): return .alreadyTrusted
+            case .failure(let failure): return .skipped(failure.reason)
+            case .success(.edited): break
+            }
+        case .failure(.unavailable(let reason)):
+            return .skipped(reason)
+        case .failure(.changed):
+            // A session can replace the file during the unlocked read.
+            // Take the lock and read the version that session wrote.
             break
         }
         let lockPath = configFileURL.path + Self.lockSuffix
@@ -194,11 +199,6 @@ struct ClaudeFolderTrust: Sendable {
         }
     }
 
-    /// What the file needs, read now. It takes no lock and writes nothing.
-    private func readEdit(key: String) -> Result<ClaudeConfigTrustEdit.Result, ClaudeConfigTrustEdit.Failure> {
-        readFile().flatMap { file in edit(file.data, key: key) }
-    }
-
     private func edit(_ data: Data, key: String) -> Result<ClaudeConfigTrustEdit.Result, ClaudeConfigTrustEdit.Failure> {
         do {
             return .success(try ClaudeConfigTrustEdit.trusting(folderKey: key, in: data))
@@ -215,6 +215,17 @@ struct ClaudeFolderTrust: Sendable {
         var data: Data
         var identity: Identity
         var permissions: mode_t
+    }
+
+    private enum ReadFailure: Error {
+        case unavailable(String)
+        case changed(String)
+
+        var reason: String {
+            switch self {
+            case .unavailable(let reason), .changed(let reason): reason
+            }
+        }
     }
 
     /// What tells one version of the file from the next.
@@ -235,11 +246,11 @@ struct ClaudeFolderTrust: Sendable {
         }
     }
 
-    private func readFile() -> Result<ReadFile, ClaudeConfigTrustEdit.Failure> {
+    private func readFile() -> Result<ReadFile, ReadFailure> {
         // A config file that is a link stays a link: the write replaces
         // the file it points to.
         guard let resolved = realpath(configFileURL.path, nil) else {
-            return .failure(.init(reason: errno == ENOENT
+            return .failure(.unavailable(errno == ENOENT
                 ? "Claude Code has no config file at \(configFileURL.path) yet"
                 : "\(configFileURL.path) cannot be read: \(String(cString: strerror(errno)))"))
         }
@@ -247,16 +258,16 @@ struct ClaudeFolderTrust: Sendable {
         let path = String(cString: resolved)
         var before = stat()
         guard stat(path, &before) == 0, (before.st_mode & S_IFMT) == S_IFREG else {
-            return .failure(.init(reason: "\(path) is not a file"))
+            return .failure(.unavailable("\(path) is not a file"))
         }
         guard let data = FileManager.default.contents(atPath: path) else {
-            return .failure(.init(reason: "\(path) cannot be read"))
+            return .failure(.unavailable("\(path) cannot be read"))
         }
         // The same file before and after the read, so the text is one
         // version of it.
         var after = stat()
         guard stat(path, &after) == 0, Identity(after) == Identity(before) else {
-            return .failure(.init(reason: "\(path) changed while it was read"))
+            return .failure(.changed("\(path) changed while it was read"))
         }
         return .success(ReadFile(path: path, data: data, identity: Identity(after), permissions: after.st_mode & 0o7777))
     }

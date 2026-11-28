@@ -854,8 +854,9 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   which hides the bar as every session screen does. Back returns to the chat.
 - **Task chips.** A link `[title](toastty://task/<id>)` in a chat, the
   user's message or the agent's, shows as a chip with the task's stage color,
-  its current title and its pull request number. This works for the tasks on
-  the Mac's task board and for its 200 most recently active Done and archived
+  its current title and its pull request number. A spinner replaces the dot
+  while the task's agent works, when the Mac shares its activity. This works
+  for the tasks on the Mac's task board and for its 200 most recently active Done and archived
   tasks, which the phone reads apart (see the finished tasks below). A Done
   task's chip is green; an archived task's is gray, as the Mac marks it
   quiet. A tap opens the task's space as its row in Task Spaces opens it:
@@ -883,7 +884,8 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   card. A quick entry message shows your text without Toastty's first line,
   then your choices and its files. A reply shows a line with the
   time and opening of the coordinator's message it answers; a tap shows that
-  message. The files stay on the Mac. When the Mac serves the images
+  message. Your answers to the coordinator's offers show as one line for
+  each answer (see **Offer cards** below). The files stay on the Mac. When the Mac serves the images
   (`coordinator_attachment_images`, described below), an attached image shows
   as a thumbnail, and a tap opens it full screen; any other file shows by its
   name. With an older Mac, or without read access, the phone shows the names
@@ -934,6 +936,20 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   **Edit** on a waiting reply brings it back as a reply. A message that
   starts with Toastty's line for another sender cannot become a reply.
   Digests, sender cards and other sessions' chats have neither button.
+- **Offer cards.** The coordinator's offers show as cards, as in the Mac's
+  chat (see [Offer cards](tasks.md#offer-cards)), with the same shared code.
+  A tap on an offer's line opens what the offer is. **Yes** and **Skip**
+  choose your answer, and **Send answers** sends your answers as one message
+  in the Mac's format, apart from the field: the message you are writing and
+  its reply stay. The answers steer or queue as a message from the field
+  would now, by the composer's **Steer** or **Queue** choice. **Ask…** makes
+  the message in the field a reply to that offer, and the field takes the
+  keyboard. A card shows your answer from the tap, also while its message
+  sends or waits in the phone's queue; **Remove** on that waiting message,
+  or a send that fails, gives the card its buttons back. Answers that wait
+  in the coordinator's own queue on the Mac, such as those sent from the
+  Mac's chat, show on the phone's cards when the coordinator has them. Other
+  sessions' chats show an offers block as its text.
 - **Mention a task.** As in the Mac's coordinator chat, type `@` at the
   start of the field, or after a space, an opening bracket or a quote, or
   choose **Mention a Task** in the paperclip menu, and a list of your tasks
@@ -1331,10 +1347,12 @@ not sure, and creates the task.
   Tasks tab, which show every project, and the Mac's selection says where you
   last worked on the Mac, not what you look at on the phone. Set Workspace to
   name a project.
-- **Create Task** under the pills makes the task directly, without the
-  coordinator, as the sheet does without one. A pill left on Auto uses the
-  value the sheet starts on without a coordinator, and the line under the
-  button names both.
+- **Create** takes the place of **Send** once you set both Workspace and
+  Agent: the coordinator has nothing left to choose, so the sheet, now titled
+  **New Task**, makes the task directly, as it does without a coordinator. A
+  line under the pills names the project and agent. Set either pill back to
+  Auto and the action is **Send** again. A value you did not choose is never
+  used for a create.
 - **The message waits on the Mac** until the coordinator's prompt takes it,
   and never goes into a running turn, as for quick entry on the Mac. When the
   coordinator is not running or is starting, the sheet says so before you

@@ -315,7 +315,16 @@ struct ToasttyInteractionCard: View {
                             .foregroundStyle(ConversationDesignTokens.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(([labels.joined(separator: ", "), answer.text]
+                    // Someone other than the user answered through Toastty,
+                    // which put a line that names them before the text.
+                    let fromSender = answer.text.flatMap(CoordinatorMessageHeader.senderParts(of:))
+                    if let fromSender {
+                        Label("Answered by \(fromSender.sender)", systemImage: "arrow.turn.down.right")
+                            .conversationFont(.caption, weight: .semibold)
+                            .foregroundStyle(ConversationDesignTokens.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(([labels.joined(separator: ", "), fromSender?.text ?? answer.text]
                         .compactMap { $0 }
                         .filter { $0.isEmpty == false }
                         .joined(separator: ", ")))

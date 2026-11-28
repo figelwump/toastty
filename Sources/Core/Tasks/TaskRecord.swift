@@ -62,6 +62,10 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// This task's requests to be told when other tasks reach a condition.
     /// Optional so records saved before watches existed still load.
     public var watches: [TaskWatch]?
+    /// Messages that `task send --queue` left for the task's agent, which
+    /// wait for its next open prompt, and the ones that left the queue in
+    /// the last day. Optional so records saved before it existed still load.
+    public var queuedMessages: [TaskQueuedMessage]?
     /// The workspace scope of the session that created the task, saved
     /// when it was created; `nil` when that session was unscoped. The
     /// task's agent gets this scope, plus its task space, even when setup
@@ -77,6 +81,8 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// clears when an agent in the task space starts new work, which is
     /// usually the user's reply.
     public var replyRequest: TaskReplyRequest?
+    public var fleetAnswerGrant: TaskFleetAnswerGrant?
+    public var lastApprovalAnswer: TaskApprovalAnswer?
     /// Set by an agent whose task waits on something outside Toastty, such
     /// as an email reply or a date (`task.waiting`). The task rests in Idle
     /// with the reason, and a task with child tasks does not finish through
@@ -276,13 +282,41 @@ public struct TaskExternalRef: Codable, Equatable, Sendable {
 /// An agent's mark that its turn ended with a question for the user
 /// (`task.needs-reply`).
 public struct TaskReplyRequest: Codable, Equatable, Sendable {
+    public struct Origin: Codable, Equatable, Sendable {
+        public let sessionID: String
+        public let conversationID: String?
+        public let provider: String
+
+        public init(sessionID: String, conversationID: String?, provider: String) {
+            self.sessionID = sessionID
+            self.conversationID = conversationID
+            self.provider = provider
+        }
+
+        public func matches(sessionID: String, conversationID: String?, provider: String) -> Bool {
+            guard self.provider == provider else { return false }
+            return self.sessionID == sessionID
+                || (self.conversationID != nil && self.conversationID == conversationID)
+        }
+    }
+
     public var askedAt: Date
     /// The question in a few words, which the task's row shows.
     public var question: String?
+    /// Only explicit approval questions take a checked Approve or Decline.
+    public var approvalID: UUID?
+    public var fleetChecks: TaskFleetChecks?
+    public var approvalOrigin: Origin?
 
-    public init(askedAt: Date, question: String? = nil) {
+    public init(
+        askedAt: Date, question: String? = nil, approvalID: UUID? = nil,
+        fleetChecks: TaskFleetChecks? = nil, approvalOrigin: Origin? = nil
+    ) {
         self.askedAt = askedAt
         self.question = question
+        self.approvalID = approvalID
+        self.fleetChecks = fleetChecks
+        self.approvalOrigin = approvalOrigin
     }
 }
 
@@ -373,6 +407,9 @@ public struct TaskRelease: Codable, Equatable, Sendable {
 
     /// The project's To ship tasks when the release started.
     public var childTaskIDs: [UUID]
+    /// The PR explicitly linked from a managed session in this release's task space.
+    /// Older saved annotations have no such confirmation.
+    public var preparationPullRequestURL: String?
     public var completion: Completion?
 
     public init(childTaskIDs: [UUID]) {

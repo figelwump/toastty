@@ -935,10 +935,13 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     sleep 0.2
   done
   if [[ "$CLEANUP_REMOTE_PREPARED" != "1" ]]; then
-    stop_remote_session cancel || true
+    local prepare_stopped=0
+    stop_remote_session cancel && prepare_stopped=1
     warn "Remote prepare failed"
     toastty_run_phase artifactCopy
-    copy_remote_artifacts_back "$remote_run_root" || true
+    if copy_remote_artifacts_back "$remote_run_root" && [[ "$prepare_stopped" == 1 && "$KEEP_REMOTE" != 1 ]]; then
+      toastty_remove_remote_run_caches "$remote_run_root" || true
+    fi
     local ended_at
     ended_at="$(timestamp_utc)"
     write_result_json \
@@ -1138,7 +1141,10 @@ toastty_remove_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$R
       TOASTTY_METADATA_REMOTE_REMOVED=true
       CLEANUP_REMOTE_REMOVED=1
     else
+      local removal_status=$?
       warn "Remote directory cleanup failed; inspect retained paths: $remote_run_root"
+      # 255 is an SSH failure: the run may be gone and its label reused.
+      [[ "$removal_status" == 255 ]] || toastty_remove_remote_run_caches "$remote_run_root" || true
       client_status=setup_error
       toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote directory cleanup failed; inspect retained paths" setup_error
     fi

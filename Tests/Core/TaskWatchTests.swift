@@ -21,6 +21,24 @@ struct TaskWatchTests {
     }
 
     @Test
+    func idleWaitsForTheTurnThatReadAQueuedMessage() {
+        let typed = made.addingTimeInterval(10)
+        let messageWaits = TaskWatchFacts(
+            activity: .idle, activityChangedAt: typed, turnEndedAt: typed.addingTimeInterval(5), messagesWaiting: true
+        )
+        // The hooks still report the turn before Toastty typed the message.
+        let turnBefore = TaskWatchFacts(
+            activity: .idle, activityChangedAt: typed, turnEndedAt: typed.addingTimeInterval(-1), messageTypedAt: typed
+        )
+        let turnAfter = TaskWatchFacts(
+            activity: .idle, activityChangedAt: typed, turnEndedAt: typed.addingTimeInterval(5), messageTypedAt: typed
+        )
+        #expect(TaskWatchEvaluation.holds(.idle, createdAt: made, facts: messageWaits) == false)
+        #expect(TaskWatchEvaluation.holds(.idle, createdAt: made, facts: turnBefore) == false)
+        #expect(TaskWatchEvaluation.holds(.idle, createdAt: made, facts: turnAfter))
+    }
+
+    @Test
     func waitingHoldsWhileTheAgentWaits() {
         // An approval that was already waiting is still actionable.
         let waiting = TaskWatchFacts(activity: .waiting, activityChangedAt: made.addingTimeInterval(-60))
@@ -141,5 +159,31 @@ struct TaskWatchTests {
         record.pruneFiredWatches(now: now, keep: 2)
         #expect(record.watches?.map(\.id) == [pending.id, undeliveredOld.id] + deliveredRecent.prefix(2).map(\.id))
         #expect(record.activeWatches.map(\.id) == [pending.id, undeliveredOld.id])
+    }
+
+    @Test
+    func pruningKeepsWaitingAndRecentQueuedMessages() throws {
+        var record = TaskRecord(createdAt: made, text: "t", title: "t", slug: "t", source: .cli)
+        let now = made.addingTimeInterval(48 * 3600)
+        let waitingOld = TaskQueuedMessage(text: "still waits", from: "a", queuedAt: made)
+        let sentOld = TaskQueuedMessage(text: "", from: "a", queuedAt: made, outcome: .init(kind: .sent, at: made))
+        let recent = (0..<3).map { index in
+            TaskQueuedMessage(
+                text: "", from: "a", queuedAt: made,
+                outcome: .init(kind: .dropped, at: now.addingTimeInterval(Double(-index)), reason: "the task merged")
+            )
+        }
+        record.queuedMessages = [waitingOld, sentOld] + recent
+        record.pruneSettledMessages(now: now, keep: 2)
+        #expect(record.queuedMessages?.map(\.id) == [waitingOld.id] + recent.prefix(2).map(\.id))
+        #expect(record.waitingMessages.map(\.id) == [waitingOld.id])
+
+        record.dropWaitingMessages(reason: "the task was archived", at: now)
+        let dropped = try #require(record.queuedMessages?.first)
+        #expect(dropped.outcome == .init(kind: .dropped, at: now, reason: "the task was archived"))
+        #expect(dropped.text.isEmpty)
+        // A saved record keeps its messages.
+        let decoded = try JSONDecoder().decode(TaskRecord.self, from: JSONEncoder().encode(record))
+        #expect(decoded.queuedMessages == record.queuedMessages)
     }
 }

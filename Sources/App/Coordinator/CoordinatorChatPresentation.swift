@@ -1,4 +1,5 @@
 import CoreState
+import ConversationUI
 import RemoteProtocol
 import Foundation
 
@@ -29,6 +30,10 @@ enum CoordinatorChatPresentation {
             "The coordinator's agent has not started yet. It may wait for your answer in the terminal, for example to a login or a folder-trust question."
         case .awaitingAnswerInTerminal:
             "The coordinator waits for your answer in the terminal."
+        case .directAgentStarting:
+            "The agent is starting."
+        case .awaitingAnswerOutsideChat:
+            "The coordinator asks for a permission, and this chat cannot give it yet. Answer on a paired iPhone, or stop the turn."
         case .terminalDraft:
 "You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there. If you only answered a question there, choose Send Anyway."
         case .deliveryNotConfirmed:
@@ -43,13 +48,23 @@ enum CoordinatorChatPresentation {
         }
     }
 
-    /// A spinner in place of a task chip's dot while the task's agent works,
-    /// as the Tasks view draws it.
-    static func chipShowsActivity(for item: TaskBoardItem) -> Bool {
-        switch item.stage {
-        case .running, .idle: item.agent == .working
-        default: false
+    /// Both desktop chats use the same chip content and activity rule. The
+    /// toolkit supplies its own stage colors.
+    static func taskChips(
+        _ items: [TaskBoardItem],
+        color: (TaskBoardItem) -> ConversationChipColor
+    ) -> [UUID: ConversationLinkChip] {
+        var chips: [UUID: ConversationLinkChip] = [:]
+        for item in items {
+            guard case .task(let taskID) = item.id else { continue }
+            chips[taskID] = ConversationLinkChip(
+                markColor: color(item),
+                title: ConversationLinkChip.taskTitle(item.title),
+                detail: item.pullRequest.map { "#\($0.number)" },
+                showsActivity: TaskBoardPresentation.showsAgentActivity(item)
+            )
         }
+        return chips
     }
 }
 

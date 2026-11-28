@@ -34,6 +34,9 @@ checklist in the release pull request or handoff:
    older phone shows a task alert's text, but a tap only opens the app, and
    while the app is open no banner shows.
 5. Release the Mac app: this skill, then `../toastty-publish/SKILL.md`.
+   Right before the release goes live, ask the user "publish now?" and wait
+   for a plain yes, as `../toastty-publish/SKILL.md` ("Publish now?")
+   describes. No release approval skips this question.
 6. Publish the website change: merge its pull request into `main` after the
    Mac release is live, then check toastty.dev. For `0.10.0` that is the
    website text change (#392) and the "Tasks and the Coordinator" section
@@ -73,6 +76,16 @@ then; the iPhone real-device check uses that build.
    - `sv exec -- scripts/remote/test.sh --`
    Use `./scripts/automation/check.sh` only when the user explicitly asks for a local gate, the remote path is unavailable, or you are intentionally validating local-only release workflow changes.
 5. Run `scripts/release/release.sh` with the recorded `TOASTTY_VERSION` and `TOASTTY_BUILD_NUMBER` (release order step 1) and the signing/notary secrets.
+   The script ends with the candidate check of the signed DMG on the Mac
+   mini (`scripts/release/verify-candidate.sh`; see "Build a signed release
+   DMG" in `docs/building-and-releasing.md`). It holds the mini's desktop for
+   about four minutes. Check `sv exec -- scripts/remote/status.sh` before you
+   start, so that no other run waits behind it. Do not give a candidate to
+   the user, or ask the user to try it, before its receipt passes. A failed
+   stage is a release blocker: read its evidence under
+   `artifacts/release/<version>-<build>/candidate-check/remote/use/`, get the
+   fault fixed, and build a new candidate. If only the mini or the connection
+   failed, rerun the check on the same DMG as the doc says.
 6. Verify that `artifacts/release/<version>-<build>/release-metadata.env`, `artifacts/release/<version>-<build>/ghostty-metadata.env`, `artifacts/release/<version>-<build>/sparkle-metadata.env`, and `artifacts/release/<version>-<build>/Toastty-<version>.dmg` all exist and are non-empty, then read the metadata files.
 7. Confirm `RELEASE_SOURCE_COMMIT` is available in the local clone before inspecting history or writing notes.
 8. Use `.agents/skills/toastty-release/assets/release-notes-template.md` as the starting structure for `RELEASE_NOTES_PATH`.
@@ -87,7 +100,7 @@ then; the iPhone real-device check uses that build.
    - `artifacts/release/<version>-<build>/sparkle-metadata.env`
    - `artifacts/release/<version>-<build>/release-notes.md`
    - `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
-14. If the user's release approval already covers publication, do not ask again: open `../toastty-publish/SKILL.md` and follow that workflow. If the approval did not cover publication, stop after the build-and-draft handoff, and continue into publication only when the user asks.
+14. If the user's release approval already covers publication, do not ask for that approval again: open `../toastty-publish/SKILL.md` and follow that workflow. It still stops right before the release goes live and asks the user "publish now?". If the approval did not cover publication, stop after the build-and-draft handoff, and continue into publication only when the user asks.
 
 ## Important invariants
 
@@ -99,6 +112,7 @@ then; the iPhone real-device check uses that build.
   - non-empty Ghostty commit and build-flags metadata
   - a Ghostty commit equal to the pin in `docs/ghostty-integration.md`
   - checked-in third-party notices that match the recorded and pinned dependencies
+- A candidate goes to the user only with a passing receipt at `artifacts/release/<version>-<build>/candidate-check/remote/result.json`. The publish script refuses a DMG without one.
 - Run automated validation before `scripts/release/release.sh`; prefer the remote smoke and test wrappers unless the user explicitly scopes the gate to a local run or the remote path is unavailable.
 - Draft release notes from the recorded metadata and git history, not from the current `HEAD`.
 - The generated release directory contains the handoff artifacts for the publish step:

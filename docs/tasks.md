@@ -469,6 +469,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--file <path>` | A file to attach. Repeat for more files. Toastty keeps its own copy. |
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--root <dir>` | The project's directory, instead of `--workspace`. Toastty uses the open workspace on it, or opens the project once every other check passed, so a request that fails opens nothing. |
+| `--new-project <dir>` | A new project, instead of `--root`: Toastty makes the folder in a parent folder that exists, an empty git repository and a first empty commit, then creates the task there. The folder must be missing or empty; Toastty never writes into a folder with files. A create that fails removes what it made. |
 | `--external-ref <id>`, `--external-url <url>` | The issue or report the task came from, such as `github:owner/repo#123`, and its http or https page. The Tasks view shows it as **Source**. |
 | `--agent`, `--model`, `--effort` | The agent profile from `agents.toml`, a provider model ID such as `gpt-6.2-sol`, and the effort. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
@@ -554,7 +555,9 @@ spawned it. A task
 created from an agent in another task's task space records that task as its
 parent (`parentTaskID`). The new task's first message names the parent as a
 link, `[title](toastty://task/<parent-id>)`, and says how to report to it with
-`toastty task send <parent-id>`.
+`toastty task send <parent-id>`. The parent's agent is often in a turn,
+and reads the report there. Toastty saves the report for the parent's
+next prompt when typing it now would join a draft or answer a prompt.
 
 ## Work in a git worktree
 
@@ -704,44 +707,116 @@ worktree.
   and plan or notes files, and uses the ID only where a command takes a task
   ID. GitHub drops the link, so a pull request names the task by its title.
   The shipped task skills say so.
-- `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it, whatever the agent does. Its first line names the
-  sender as `coordinator send` does, such as
+- `toastty task send <task-id> "<message>"` gives the message to the task's
+  agent as soon as the agent can read it. Its first
+  line names the sender as `coordinator send` does, such as
   `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
   the agent that reads it can name the task that sent it. A message from the
   coordinator's own session starts with
-  `[Toastty] From the coordinator: not from the user.` A busy agent queues it as typed
-  input, and the Return key can answer a permission prompt that is on screen. It
-  fails when the task has no running agent, and says so when the message was
-  typed but may not have been submitted; check that terminal before you send it
-  again.
-- `toastty task send <task-id> "<message>" --steer` checks the agent first, so
-  that the message can go to a busy agent. Toastty types nothing into a
-  permission prompt or a question. The result's `delivery` says what it did,
+  `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.`
+  Only that line approves or decides for you; see
+  [Approvals and decisions from the coordinator](#approvals-and-decisions-from-the-coordinator).
+
+  Toastty checks the agent first. It types at the agent's open prompt, or
+  into the running turn of an agent that reads during a turn. It waits for
+  the agent's next open prompt only when typing now would join or answer
+  what is at the agent's prompt. The result's `delivery` says what it did,
   and `message` says it in a sentence:
 
   | `delivery` | What Toastty did |
   | --- | --- |
   | `sent` | The agent was at its open prompt. Toastty typed the message there. |
   | `steered` | A Claude Code or Codex agent was in a turn. Toastty typed the message into that turn. Claude Code reads it after its active tool calls finish, or when the turn ends. |
-  | `queued` | Toastty holds the message and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt or a question is on screen. `queuePosition` counts from 1. |
+  | `queued` | Toastty saved the message on the task and types it at the agent's next open prompt. `queuePosition` counts from 1. The result also has the `messageID`. |
+  | `sentUnconfirmed` | Toastty saved the message, typed it at the open prompt at once, and the terminal did not confirm the Return key. Toastty does not type it again; check that terminal. |
 
-  Toastty holds at most 5 messages for an agent. It loses them when Toastty
-  quits or the agent restarts, and reports neither. The command fails, with
-  nothing typed, in these cases:
-  - Toastty cannot tell what the agent does: it does not follow that agent's
-    conversation, or the agent starts, ended or failed.
-  - Someone typed in the task's terminal since the agent's latest turn
-    started, at a time when Toastty did not follow that conversation. That
-    text can still be in the agent's prompt, and Toastty does not add to it.
+  Toastty cannot read the agent's input field, so it works out what can be
+  there. The message waits (`queued`) in these cases:
+  - A permission prompt, a question, or a dialog of Claude Code's own, such
+    as the compact offer, is on screen. Typed text and its Return could
+    answer it.
+  - Someone typed in the task's terminal, or sent from Toastty Mobile, since
+    the agent's latest turn started, and that text can still be in the
+    prompt: a draft at the open prompt, or text typed into the running turn.
+    A submitted prompt starts a turn, so older text is not in the prompt any
+    more. Keys that answer a permission prompt or a question do not count.
+    When Toastty followed the agent's conversation from before that turn
+    started, it also knows when an agent at its prompt recorded that text.
     Toastty follows every agent's conversation while Remote Access is on,
-    and otherwise from the first `--steer` send to the task.
-  - 5 messages already wait.
+    and otherwise from the first send to the task.
+  - An earlier message that Toastty typed there, for any sender, did not
+    get a confirmed Return, until a turn starts after it.
+  - The agent is in a turn and cannot read during it: an agent that is not
+    Claude Code or Codex.
+  - Toastty cannot tell within 5 seconds what the agent does: it does not
+    follow that agent's conversation, or the agent starts or failed. It then
+    goes by what the agent's hooks report. If they report the agent at its
+    prompt, Toastty types the saved message at once, and the result is
+    `sent`.
+
+  A message that waits is saved on the task as a `--queue` message is
+  (below), so it survives a restart of the agent and of Toastty, and goes to
+  the agent that works on the task then. `task get` lists it under
+  `queuedMessages` with `steer: true`. It goes before Toastty's other
+  messages: one for each open prompt, oldest first, and before a watch,
+  wake, merge or `--queue` message. A later send waits behind it. It waits
+  only for an open prompt that is free, also that of an agent that stopped
+  with an error: not for the task's question, a turn that a quit cut off, or
+  a task that merged or is Done. A send to an open prompt types at once in
+  those cases too. Toastty drops it, with the reason, only when the task is
+  archived. Up to 10 messages of both kinds wait for one task.
+
+  The command fails, with nothing typed, when the task has no running agent,
+  when the terminal does not take text that Toastty types now, and when the
+  message must wait but 10 messages already wait or the task was archived.
+  It also fails, and says so, when the message was typed but may not have
+  been submitted; check that terminal before you send it again. A saved
+  message that the terminal does not take stays `queued`, and Toastty tries
+  it again.
 
   The message is not your typing, so `lastUserInputAt` does not move. Toastty
   learns of a permission prompt from the agent's hooks, a short time after the
   prompt comes on screen. A message that arrives in that time can still
   reach the prompt.
+
+  `--steer` is an older name for this default. Toastty still accepts it, and
+  it changes nothing.
+- `toastty task send <task-id> "<message>" --queue` leaves a message that
+  Toastty types when the agent's turn ends. It never types into a running
+  turn. Use it for a message that should not reach the agent in the middle
+  of its work. Toastty saves the message on the task and
+  types it at the agent's next open prompt, by the rules that the watch
+  messages below follow:
+
+  | `delivery` | What Toastty did |
+  | --- | --- |
+  | `sent` | The agent was at its open prompt and no earlier message waited. Toastty typed the message there. |
+  | `sentUnconfirmed` | Toastty typed the message at the open prompt, but the terminal did not confirm the Return key. Toastty does not type it again; check that terminal. |
+  | `queued` | The message waits. `queuePosition` counts from 1. |
+
+  A queued message waits while the agent works, stopped with an error, or
+  has at its prompt what makes a send without `--queue` wait: a permission
+  prompt, a question, a dialog of Claude Code's own, or text that may still
+  be there. It also waits while the task's question waits for you
+  (`task needs-reply`), since a new turn clears that question, and while a
+  quit cut off the agent's turn, until that turn goes on. Toastty types one
+  message for each open prompt, oldest first, after its own watch, wake and
+  merge messages and after any message of a send without `--queue` that
+  waits. The message
+  survives a restart of the agent and of Toastty, and goes to the agent that
+  works on the task then.
+
+  The sender learns what happened from `toastty task get <task-id>`: each
+  message under `queuedMessages` has its `messageID`, `from`, `queuedAt`, and
+  `state`: `queued`, `sent`, `sentUnconfirmed` or `dropped`, with the time in
+  `at`. Toastty drops the waiting messages, with the reason, when the task
+  merges, ships, is marked Done, finishes through its child tasks or is
+  archived first, and lists a message
+  for 24 hours after it leaves the queue. To read the agent's answer, watch
+  the task `--until idle` after the send: that watch fires only once no
+  queued message waits, after the turn that read yours. Up to 10 messages
+  wait for one task. A queued send fails when the task has finished or has
+  no running agent.
 - `toastty task watch <task-id> --until <condition>` tells the calling agent's
   own task once, by a one-line message, when the other task reaches the
   condition. A waiting agent can then end its turn instead of polling in a
@@ -751,7 +826,7 @@ Watch conditions:
 
 | Condition | Holds when |
 | --- | --- |
-| `idle` | The agent finished a turn after the watch was made. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
+| `idle` | The agent finished a turn after the watch was made, and no message from `task send` waits for it, with `--queue` or without. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
 | `waiting` | The agent waits for an approval or an answer. |
 | `ready-for-review` | The task's pull request waits for review, or its agent marked work without a pull request ready. |
 | `merged` | Its pull request merged. |
@@ -778,9 +853,11 @@ it waits for something else, fires with that reason. So does a watch for
 `merged` or `to-ship` when Toastty's last merge of the task stopped without
 merging, until a new merge starts; see [Merge a task](#merge-a-task). A fired
 notification stays queued, including after a relaunch, until the receiving agent
-reports idle or ready at its prompt. Toastty waits while it detects a permission
-prompt, a question, or typing that may still be in the prompt. Watches, scheduled
-wakes, and merge messages share one automatic submission per prompt.
+reports idle or ready at its prompt. Toastty waits while it detects what makes
+a `task send` wait: a permission prompt, a question, a dialog of Claude
+Code's own, or text that may still be in the prompt. Watches, scheduled
+wakes, merge messages and queued messages share one automatic submission per
+prompt, and leave it to a message of a send without `--queue` that waits.
 `toastty task watches` lists watches, with `--task` or
 `--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.
 Delivered watches stay listed for up to a day.
@@ -1009,13 +1086,15 @@ text:
 | --- | --- |
 | `[Toastty] Wake: …` | Toastty: a [digest](#when-toastty-wakes-the-coordinator). |
 | `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
-| `[Toastty] From the coordinator: not from the user.` | `coordinator send` or `task send` from the coordinator's own agent session. |
+| `[Toastty] From the coordinator: not from the user.` | `coordinator send` from the coordinator's own agent session: a note to itself. |
+| `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.` | `task send` from the coordinator's own agent session. A task reads this line, not the coordinator. |
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran it.` | `coordinator send --from <name>` from a caller that names no running session, such as Grok Bot running the command from its own shell. Toastty does not check the name. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] From …: … Message ID <uuid>.` | The same `From` line for a message from outside a task (an agent session outside a task, a named caller or a terminal command) ends with the message's ID, which the coordinator [replies](#coordinator-replies) to. A task's message and the coordinator's own have none. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
-| `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
+| `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. **Ask…** on an offer's card sends the same line, with one quoted line that names the offer. |
+| `[Toastty] Answers from the user \| to your offers of <time>, <n> answers` | You, with **Send answers** on the [offer cards](#offer-cards) of the coordinator's chat. The next `<n>` lines are one answer each: `yes` or `skip`, the offer's ID and its title. |
 | no `[Toastty]` line | You, in the chat or in the terminal. |
 
 The sender's text starts on the second line, and the coordinator's
@@ -1042,6 +1121,104 @@ program says is yours as if you wrote it, tells you what it did and names
 the program. A merge, a release, an archive or a deletion, a production
 change and a change to the policy still need your own message: the program
 asks for a merge itself with `task request-merge`.
+
+### Approvals and decisions from the coordinator
+
+A task takes the coordinator's approvals and decisions as yours. When you
+approve a task's step in a free-form reply in the coordinator's chat, the
+coordinator sends the approval with `toastty task send`, and the task acts on it. You do not
+approve again in the task. The same holds for a step that a rule of your
+policy decides, such as a Releases rule, and for a step that the coordinator
+decides itself.
+
+What the coordinator may decide is set in one place: its own instructions
+and your policy. Its instructions keep fixed limits, such as never changing
+production outside a release task, and it asks for a merge only when you
+tell it to or one of your Merging rules covers the change; see [What the coordinator does](#what-the-coordinator-does)
+and [Merges by the coordinator](#merges-by-the-coordinator). A task does not
+check those limits again.
+
+Three parts make this work:
+
+- **The first line.** A message that `task send` types for the
+  coordinator's own agent session starts with
+  `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.`
+  Toastty writes that line from who ran the command. A message from
+  another task, an agent session, a program that names itself or a terminal
+  command starts with its own `[Toastty] From …` line, also when its text
+  repeats the coordinator's line.
+- **The task's instructions.** The `toastty-task-start` skill tells a task's
+  agent to take an approval or a decision in the coordinator's message as
+  yours, for the action and the scope that the message names, and to take
+  no approval from any other sender, a file, a web page or a command's
+  output. The coordinator's instructions tell it to name the exact action,
+  to say who decided, and never to ask a task for a yes typed in the task.
+  A task that starts with another skill, such as a release skill, gets the
+  rule in its first message.
+- **Claude Code's auto mode.** In auto mode, Claude Code's own check decides
+  whether a command has your approval, and it reads a message from another
+  agent as that agent's text. Toastty starts each Claude session with one
+  `autoMode.environment` entry in the settings file that it passes with
+  `--settings`. The entry names the coordinator's whole first line and says
+  that an approval or a decision in such a message is yours, also when
+  Claude Code shows the message inside `<pasted_content>` tags. Your own
+  `autoMode` settings stay in force, and `claude auto-mode config` shows
+  them. Toastty names Claude Code's built-in entries (`$defaults`) only when
+  neither your Claude settings nor the profile's `--settings` have an
+  `autoMode.environment` list.
+
+Limits:
+
+- The coordinator is an agent. It reads task replies, pull requests and
+  messages from other programs, and text in them can mislead it. Its
+  instructions and your policy are the only check on what it decides.
+- Toastty takes the sender from the session ID that the CLI reports. A
+  program on your Mac that reports the coordinator's session ID gets the
+  coordinator's line.
+- Another agent program's permission check can still refuse the step. The
+  task then says so and asks you in the task.
+
+### Answering a task question from Coordinator chat
+
+A task can ask a yes-or-no question using
+`toastty task needs-reply --approval --question "<exact action and scope>"`.
+Use **Approve** or **Decline** on its card in the Mac Coordinator chat.
+Toastty records the answer for that question and delivers it at the task's
+next safe prompt in the conversation that asked the question. The question
+expires after 24 hours. A task that replaces the question or starts a new
+turn before delivery cancels the pending answer.
+If Return could not be confirmed, check the task's terminal.
+
+A release task can ask about read-only fleet verification using
+`toastty task needs-reply --fleet-version <version> --fleet-targets <id,id>`.
+List exactly the targets whose installed-version receipts and Recovery
+HTTPS status the task will read. The card shows the version and targets.
+You can let a bot answer matching fleet questions in that task. First
+approve its HMAC webhook for `needs_you` events that include the task.
+Then choose the bot on the question card and confirm the version and fleet.
+You can revoke access there. A different version, fleet, or webhook key
+requires a new grant. The Senders list gives no access to this action.
+
+The bot reads `replyRequest.approvalID` and `replyRequest.fleetChecks` from
+`toastty task get --json <task-id>`. It shows the owner the version and
+targets, then keeps that question ID with the owner's answer. If the
+question changed, show the new question before accepting another answer.
+To relay an answer, the bot signs these five
+lines with HMAC-SHA256 using the webhook key, UTF-8 with no trailing newline.
+Use uppercase UUIDs and the exact lowercase decision.
+
+```text
+toastty-task-answer-v1
+<webhook-id>
+<task-id>
+<question-id>
+<approve|decline>
+```
+
+Pass the hex signature on standard input to
+`toastty task answer <task-id> <question-id> <approve|decline> --webhook <id>`.
+Toastty checks the signature and the current grant before recording the
+answer. The task applies its own tool permission checks when it acts.
 
 ### Quick entry with the coordinator
 
@@ -1110,9 +1287,11 @@ you when it is not sure, and creates the task.
   The terminal shows the message as typed.
 - **From the iPhone**, **+** in Home or the Tasks tab, and content shared to
   Toastty, open the New Task sheet as **To Coordinator** while the coordinator's
-  workspace exists. It works as this panel does: **Send**, Auto pills,
-  **Create Task**, and a note when the coordinator is not running or is
-  starting. The phone sends no project hint; set Workspace to name a project.
+  workspace exists. It works as this panel does: **Send**, Auto pills, and a
+  note when the coordinator is not running or is starting. It has one action:
+  once you set both Workspace and Agent, **Send** becomes **Create** and makes
+  the task directly, with only the values you chose. The phone sends no
+  project hint; set Workspace to name a project.
   See [To the coordinator](remote-access.md#to-the-coordinator).
 
 A message looks like this in the coordinator's terminal:
@@ -1226,6 +1405,23 @@ relaunch resumes does not show it.
   **Submit answer** in the full chat and the dock. Complete each question in
   the form, then submit. The card shows the answer when Claude confirms it.
   **Show Terminal** opens Claude's own prompt and gives it the keyboard.
+- <a id="offer-cards"></a>**Offer cards.** The offers of the coordinator's
+  [daily list](#how-the-coordinator-keeps-work-moving) show as one group of
+  cards, not as text. A click on an offer's line opens it: what it does,
+  when it helps, why the coordinator offers it now, and what a yes starts.
+  **Yes** and **Skip** choose your answer, and the coordinator's suggestion
+  has the outline. A second click takes the choice back. Your choices
+  collect, and **Send answers** sends them as one message, so many answers
+  start one turn. **Ask…** makes the message in the field a question about
+  that offer, as Reply does for a whole message; the card stays open for
+  your answer. The group shows the first 5 offers that the coordinator
+  suggests. The others are behind one line, and the offers that it would
+  skip are behind another line with **Skip all**. A card shows your answer
+  from the click, also while its message waits; **Remove** on that waiting
+  message gives the card its buttons back. When a newer list comes, the
+  cards of the older list take no answer. You can still answer an offer in
+  your own words. The coordinator's chat on a paired iPhone shows the same
+  cards (see [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - **Terminal.** The **Terminal** button in the full view's panel header
   shows the terminal in place of the chat, and **Chat** switches back. Use the
   terminal for logins, folder trust, permissions, and unsupported questions.
@@ -1303,6 +1499,91 @@ relaunch resumes does not show it.
   dock. A link to a task that does not exist, and any other
   `toastty:` link, is plain text. Other links open only `http` and `https`
   pages, in your browser.
+
+### A direct session for a Claude coordinator (prototype)
+
+Off by default. With it on, Toastty starts the coordinator's Claude Code
+agent as a process of its own and exchanges JSON messages with it
+(`claude -p --input-format stream-json --output-format stream-json`). No
+agent runs in the coordinator's terminal, and Toastty types nothing there.
+The chat, quick entry, `coordinator send`, the digests and a paired iPhone
+work as before. This is a prototype for your own use. The terminal stays the
+default, and Codex and the other agents always use it.
+
+Turn it on, then restart the coordinator:
+
+```bash
+defaults write com.GiantThings.toastty toastty.coordinator.claudeDirectSession -bool YES
+```
+
+`TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1` in the app's environment does
+the same for one run, and `0` forces the terminal. To go back, turn the
+setting off and relaunch Toastty: the same conversation then resumes in the
+terminal.
+
+What is different from the terminal:
+
+- **A message is given as data.** Each message has its own ID, and Claude
+  Code returns that ID when it takes the message. Toastty does not compare
+  text to learn whether a message arrived, and does not wait for a prompt
+  to settle.
+- **A turn's end is a fact.** Claude Code reports each turn's end and the
+  messages that the turn answered. The next message can go at once. A Stop
+  is a request: the turn runs until Claude Code reports its end. A message
+  that Claude Code already held when you stopped starts its own turn.
+- **Compaction is a state.** Claude Code says when it compacts. The
+  summary it writes is not a message, and the next message starts one
+  turn.
+- **A permission request or a question is a request with an ID.** It takes
+  one answer: the first that fits, from the Mac or a paired iPhone. An
+  iPhone that may approve requests answers with the card it has today.
+  The Mac's chat has no buttons for a permission request yet, and says so
+  while one waits. Until it has, set the coordinator's rules so that it
+  does not ask, or answer from the iPhone. The coordinator's row shows
+  that a request waits, and shows the agent as working again from the
+  moment of the answer.
+- **The terminal of the coordinator's panel is a plain shell.** Keys typed
+  there are not a draft and do not reach the agent.
+
+Before the first message, Toastty checks three things and fails the start
+with the reason when one does not hold:
+
+1. Claude Code uses your Claude plan sign-in. Toastty removes
+   `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the process's
+   environment, and stops a turn that would bill an API key.
+2. Claude Code offers Toastty's coordinator skill, when Toastty delivered
+   its skills to this launch.
+3. Claude Code's start reached Toastty through the hooks.
+
+No message from any sender reaches the agent before all three hold.
+
+A Claude Code that reads no sign-in, hooks or skills, as `--bare` does,
+fails these checks. An agent profile whose arguments ask for such a mode
+is refused.
+
+After a relaunch, Toastty goes on with the same conversation: it shows the
+history from Claude Code's transcript file and starts the process with
+`--resume`. When the process ends by itself, the coordinator's row shows
+why, and Open Coordinator goes on with the conversation. Restart
+Coordinator starts a new one. Quitting Toastty ends the process. A crash
+of Toastty ends it too, within a few seconds: a small guard process waits
+for the end of the app and then stops Claude Code, so a turn does not go on
+with nobody to read it. The message of a turn that a crash cut off is not
+sent again.
+
+Limits of the prototype:
+
+- Toastty denies a request that nobody could answer well, and tells
+  Claude Code why: a request whose preview does not fit in full (more
+  than 16 KB), a question that the answer form cannot show, and a tool
+  that needs a form of its own. A plan's approval works as Allow.
+- Text appears one whole message at a time, as with the terminal.
+- A Claude Code command that answers with text works as a message, for
+  example `/model`, `/model opus`, `/context`, `/compact` and `/mcp` (a
+  summary). `/login` and `/permissions` open a screen of Claude Code's
+  own, and Claude Code refuses them here. To sign in, run `claude` in any
+  terminal and sign in there, then open the coordinator again.
+- The usage-limit recovery of a terminal coordinator does not run.
 
 ### The coordinator's dock
 
@@ -1423,6 +1704,12 @@ How it works with your tasks:
   (`lastUserInputAt`).
 - It sends a task one message for each condition. If the condition comes
   back, it tells you.
+- It never stops a busy agent's session, closes its terminal, or types into
+  a prompt on screen. Its messages to a busy task go with `task send`, as
+  your own words do: an agent that reads during a turn gets the message in
+  that turn, and Toastty types nothing into a permission prompt, a question
+  or a draft. It uses `task send --queue` only for a message that should
+  wait for the end of the turn.
 - It names a task by its title as a link, `[title](toastty://task/<task-id>)`,
   in its answers, in its messages to tasks and in its ledger. It uses the ID
   alone only in commands.
@@ -1562,8 +1849,9 @@ approval.
 
 **The daily list.** Once a day, at 09:00 by default, the coordinator brings
 one list of everything that waits for you, as one message in its chat. Each
-item is one line, with its number, its task as a link and the answer the
-coordinator suggests. Items that waited longest come first. The list marks
+item that blocks work or closes by default is one line, with its number, its
+task as a link and the answer the
+coordinator suggests. The offers show as [cards](#offer-cards). Items that waited longest come first. The list marks
 an item that was on 2 lists or more, or a task in which you typed nothing
 since it began to wait. The groups:
 
@@ -1571,7 +1859,10 @@ since it began to wait. The groups:
   tasks that wait for a release. Such an item stays on the list until you
   answer.
 - **Offers:** a task or a rule that the coordinator offered. An offer is on
-  at most 3 lists, then the coordinator drops it and says so.
+  at most 3 lists, then the coordinator drops it and says so. Each offer is
+  a card that says what it is, gives a case in which it helps, and takes
+  Yes, Skip or a question. The coordinator writes the offers as one
+  `toastty-offers` block of JSON in its message, which the chat draws.
 - **Closes by default:** a question with a default, such as the first-run
   question. It is on one list, which names the default. A finished task with
   no pull request is such an item: an answer, an investigation, or a parent
@@ -1582,7 +1873,8 @@ since it began to wait. The groups:
   section of your policy can close such tasks sooner.
 - **Moving:** work that it follows after a merge, one line each.
 
-Answer in the chat with the number, such as "2 yes". Ask "what waits for
+Answer a numbered item in the chat with its number, such as "2 yes", and an
+offer on its card. Ask "what waits for
 me?" for the list at any time. Outside the list, the coordinator tells you
 each thing once. The Talking section of [your policy](#the-policy-file)
 changes the time, turns the list off, or changes its form, such as
@@ -1873,6 +2165,17 @@ stuck, and a digest holds no judgment. It says which tasks changed; the
 coordinator reads `task list`, with
 [how long each task has been in its state](#how-long-a-task-has-been-in-its-state),
 and decides by your policy.
+
+When Claude Code reports that Fable's own quota ended its turn, the
+coordinator can ask Toastty to resume the task's saved conversation in its
+existing workspace on Opus 5.5 at high effort. Recovery requires an empty
+prompt with a recognized permission indicator. It keeps Plan mode and
+otherwise resumes in Manual mode, where Claude can ask for approval. Toastty
+leaves busy agents, occupied prompts, and drafts alone. If the
+coordinator itself hits that limit, Toastty handles its recovery and holds
+wake digests until it can receive them again. Once the reported reset is due,
+Toastty can return the coordinator to Fable between turns. A shared account
+limit can block Opus too.
 
 A digest looks like this:
 
@@ -2629,6 +2932,13 @@ when GitHub merged it: the cleanup waits for its turn to end, and a new turn
 or a link to another pull request keeps the task space open. The worktree
 must be clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
+
+A release task's own managed agent can link its preparation pull request
+with an explicit task-space workspace ID, then run `toastty task merge --head
+<commit>` from that space. The release checkout must be on the preparation
+branch at the checked commit. This merge leaves the release active and keeps
+its task space, checkout, and branches available for the rest of the release.
+Use **Cancel Merge** to end a wait for checks on a preparation merge.
 When the task's recorded worktree is on another branch than the pull request,
 Toastty can remove that clean checkout after the same wait. It keeps the
 pull request's local branch and both branches on GitHub. It removes the
@@ -2636,8 +2946,12 @@ local task branch only if it can verify that its commits are on origin.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved
-documents or terminals in another worktree. A recreated directory or a remaining
+documents. A recreated directory or a remaining
 Git worktree registration stops recovery; Toastty does not remove either one.
+A terminal in the task space whose folder is in another checkout, such as the
+session the task started in the project's main checkout, does not stop a
+cleanup that uses the task's recorded worktree. Closing the task space ends
+that terminal like the others, and the other checkout and its files stay.
 
 This includes older task spaces tracked with `task adopt`. Without a saved
 checkout path, cleanup requires the worktree to be gone; an existing checkout

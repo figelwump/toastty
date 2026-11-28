@@ -176,6 +176,15 @@ final class SessionRuntimeStore: ObservableObject {
         var shellShowedPrompt: Bool
     }
     private var pendingManagedLaunchCommandsBySessionID: [String: PendingManagedLaunchCommand] = [:]
+    /// The sessions whose agent Toastty runs as its own process, not in the
+    /// session's terminal (`DirectConversationSession`). That terminal stays
+    /// at its shell prompt for the whole session, so its prompt, its
+    /// commands and its keys say nothing about the agent.
+    private var directSessionIDs: Set<String> = []
+    /// The sessions whose agent reported its start through Toastty's
+    /// hooks. A session file found on disk confirms the same binding, and
+    /// says nothing about the hooks.
+    private var sessionIDsWithStartReportFromHook: Set<String> = []
     /// How long a typed launch command may wait for its shell to start it.
     /// The longest wait seen on a loaded machine was 2 s. The limit leaves a
     /// wide margin, and still ends a launch whose command never starts.
@@ -186,6 +195,10 @@ final class SessionRuntimeStore: ObservableObject {
     /// Unlike `lastLocalInputAtByPanelID`, text that Toastty or the CLI
     /// typed does not count.
     private var lastUserInputAtByPanelID: [UUID: Date] = [:]
+    /// The same, without the keys a person pressed while the panel's agent
+    /// waited for an approval or an answer: they answer that prompt and
+    /// leave nothing in the agent's own prompt.
+    private var lastPromptInputAtByPanelID: [UUID: Date] = [:]
     /// When each panel's input last asked the task system to save its time.
     private var userInputSaveRequestedAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
@@ -415,6 +428,8 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
         pendingManagedLaunchCommandsBySessionID = [:]
+        directSessionIDs = []
+        sessionIDsWithStartReportFromHook = []
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -558,6 +573,9 @@ final class SessionRuntimeStore: ObservableObject {
     func noteUserInput(panelID: UUID) {
         let now = Date()
         lastUserInputAtByPanelID[panelID] = now
+        if sessionRegistry.activeSession(for: panelID)?.status?.kind != .needsApproval {
+            lastPromptInputAtByPanelID[panelID] = now
+        }
         // Typing changes nothing else that the task system follows, so ask
         // it to save the time: once per save interval for each panel, and
         // outside the key event.
@@ -573,6 +591,13 @@ final class SessionRuntimeStore: ObservableObject {
     /// When a person last typed, pasted or dropped a file into `panelID`.
     func lastUserInputAt(panelID: UUID) -> Date? {
         lastUserInputAtByPanelID[panelID]
+    }
+
+    /// When a person last typed, pasted or dropped a file into the prompt of
+    /// `panelID`'s agent: their input while the agent waited for an approval
+    /// or an answer does not count.
+    func lastPromptInputAt(panelID: UUID) -> Date? {
+        lastPromptInputAtByPanelID[panelID]
     }
 
     /// A remote user released the Mac draft lock: they say the composer holds
@@ -3373,6 +3398,8 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
         pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
+        directSessionIDs.remove(sessionID)
+        sessionIDsWithStartReportFromHook.remove(sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
@@ -3635,6 +3662,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
         if lastUserInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
             lastUserInputAtByPanelID = lastUserInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+            lastPromptInputAtByPanelID = lastPromptInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
             userInputSaveRequestedAtByPanelID = userInputSaveRequestedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         }
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
@@ -6257,13 +6285,97 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         }
     }
 
+    /// Says that the session's agent is a process of Toastty's own. Call it
+    /// right after the launch is planned, before the terminal is looked at
+    /// again.
+    func markDirectSession(sessionID: String) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
+        directSessionIDs.insert(sessionID)
+    }
+
+    func isDirectSession(sessionID: String) -> Bool {
+        directSessionIDs.contains(sessionID)
+    }
+
+    /// The status of a direct session while a request waits for the user's
+    /// answer, with the texts that a terminal session's request has.
+    static func directSessionWaitingStatus(permissionSummary: String?) -> SessionStatus {
+        permissionSummary.map {
+            SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: $0)
+        } ?? SessionStatus(kind: .needsApproval, summary: "Needs input",
+                           detail: "Claude Code is waiting for your answers")
+    }
+
+    /// The agent of a direct session asks for a permission or an answer
+    /// (`waiting`), or no request of its waits any more (`nil`). The
+    /// agent's process is the one source of this for a direct session: it
+    /// also says when a request has its answer, which no hook reports, so
+    /// the status does not stay at "needs approval" until the agent's next
+    /// tool call. A hook's report of the same request is dropped; see
+    /// `takesWaitingRequestsFromItsProcess`.
+    func noteDirectSessionWaitingRequest(sessionID: String, waiting status: SessionStatus?, at now: Date) {
+        guard directSessionIDs.contains(sessionID),
+              let record = sessionRegistry.activeSession(sessionID: sessionID) else { return }
+        if let status {
+            updateStatus(sessionID: sessionID, status: status, at: now)
+            return
+        }
+        // The turn goes on after the answer. A turn that ended has its own
+        // status already, which stays.
+        guard record.status?.kind == .needsApproval else { return }
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Working inside Claude Code"),
+            at: now
+        )
+    }
+
+    /// A direct session reports its waiting requests itself
+    /// (`noteDirectSessionWaitingRequest`), so a hook's "needs approval"
+    /// report for it is not taken.
+    func takesWaitingRequestsFromItsProcess(sessionID: String) -> Bool {
+        directSessionIDs.contains(sessionID)
+    }
+
+    /// A hook of the session's agent reported the agent's own session.
+    func noteStartReportFromHook(sessionID: String) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
+        sessionIDsWithStartReportFromHook.insert(sessionID)
+    }
+
+    func hasStartReportFromHook(sessionID: String) -> Bool {
+        sessionIDsWithStartReportFromHook.contains(sessionID)
+    }
+
+    /// The agent of a direct session reported that an interrupt ended its
+    /// turn. No hook reports that end.
+    @discardableResult
+    func noteDirectSessionTurnInterrupted(sessionID: String, at now: Date) -> Bool {
+        guard directSessionIDs.contains(sessionID),
+              let record = sessionRegistry.activeSession(sessionID: sessionID) else { return false }
+        return handleLocalInterrupt(record: record, kind: .escape, at: now)
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(for: panelID),
-              let currentStatus = record.status,
+              // A key in the terminal of a direct session does not reach
+              // its agent.
+              directSessionIDs.contains(record.sessionID) == false else {
+            return false
+        }
+        return handleLocalInterrupt(record: record, kind: kind, at: now)
+    }
+
+    private func handleLocalInterrupt(
+        record: SessionRecord,
+        kind: TerminalLocalInterruptKind,
+        at now: Date
+    ) -> Bool {
+        guard let currentStatus = record.status,
               currentStatus.kind == .working || currentStatus.kind == .needsApproval else {
             return false
         }
@@ -6318,7 +6430,8 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     }
 
     func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool {
-        guard let record = sessionRegistry.activeSession(for: panelID) else {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              directSessionIDs.contains(record.sessionID) == false else {
             return false
         }
 
@@ -6352,6 +6465,11 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(for: panelID),
               now.timeIntervalSince(record.startedAt) >= minimumRuntime else {
+            return false
+        }
+        // The agent of a direct session never ran in this terminal, so the
+        // shell's prompt is not the agent's end.
+        if reason == .idleAtPrompt, directSessionIDs.contains(record.sessionID) {
             return false
         }
 
@@ -6519,6 +6637,12 @@ extension SessionRuntimeStore {
     }
 
     func handleClaudeQuestion(_ request: ClaudeQuestionHookRequest, at now: Date = Date()) -> ClaudeQuestionHookReply {
+        // A direct session gets each question and permission request from
+        // its process and answers it there. The hook must not wait for an
+        // answer of its own: Claude asks its host once the hook returns.
+        guard directSessionIDs.contains(request.sessionID) == false else {
+            return .init(status: .unavailable)
+        }
         guard let identity = claudeQuestionIdentity(sessionID: request.sessionID, panelID: request.panelID) else {
             return .init(status: .unavailable)
         }

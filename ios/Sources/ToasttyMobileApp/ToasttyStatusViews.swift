@@ -177,6 +177,67 @@ struct ToasttySessionStatusLabel: View {
     }
 }
 
+/// A chat header's status: the session's status while the chat is live,
+/// "reconnecting…" in its place while the chat reconnects, and the last
+/// status the Mac reported once the chat is offline. It changes in place,
+/// so the chat never moves for the connection.
+struct ToasttyChatConnectionStatusLabel: View {
+    let bucket: MobileSessionBucket
+    let connection: ToasttyChatConnection
+
+    var body: some View {
+        switch connection {
+        case .live:
+            ToasttySessionStatusLabel(bucket: bucket, freshness: .live)
+        case .reconnecting:
+            HStack(spacing: 5) {
+                ToasttySpinner(color: ToasttyDesignTokens.mutedText)
+                Text("reconnecting…")
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Reconnecting to your Mac")
+        case .offline:
+            ToasttySessionStatusLabel(bucket: bucket, freshness: .stale)
+        }
+    }
+}
+
+/// Floats over a chat that has been offline for a while, with Retry.
+struct ToasttyChatOfflineNotice: View {
+    let retry: () async -> Void
+
+    @State private var isRetrying = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label("Can\u{2019}t reach your Mac", systemImage: "wifi.slash")
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .accessibilityIdentifier("toastty-mobile-chat-offline-notice")
+            Button("Retry") {
+                guard isRetrying == false else { return }
+                isRetrying = true
+                Task { @MainActor in
+                    await retry()
+                    isRetrying = false
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(ToasttyDesignTokens.amberText)
+            .frame(minHeight: 44)
+            .disabled(isRetrying)
+            .accessibilityLabel("Retry connection")
+            .accessibilityIdentifier("toastty-mobile-chat-offline-retry")
+        }
+        .font(.caption)
+        .padding(.horizontal, 14)
+        .background(ToasttyDesignTokens.elevatedSurface.opacity(0.97), in: Capsule())
+        .overlay { Capsule().strokeBorder(ToasttyDesignTokens.border, lineWidth: 1) }
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+    }
+}
+
 struct ToasttySectionTitle: View {
     let title: String
 

@@ -67,7 +67,7 @@ final class TerminalStoreActionCoordinator {
         nextState: AppState
     ) {
         switch action {
-        case .splitPanel(let workspaceID, let tabID, let panelID, _, let profileBinding, _):
+        case .splitPanel(let workspaceID, let tabID, let panelID, _, let profileBinding, _, _):
             guard profileBinding == nil,
                   previousState.workspacesByID[workspaceID]?.tabID(containingPanelID: panelID) == tabID,
                   nextState.workspacesByID[workspaceID]?.tabID(containingPanelID: panelID) == tabID else {
@@ -118,7 +118,7 @@ final class TerminalStoreActionCoordinator {
     ) {
         guard let workspace = state.workspacesByID[workspaceID] else { return }
         let sourcePanelID: UUID
-        if case .splitPanel(let actionWorkspaceID, let tabID, let panelID, _, _, _) = action {
+        if case .splitPanel(let actionWorkspaceID, let tabID, let panelID, _, _, _, _) = action {
             guard actionWorkspaceID == workspaceID,
                   workspace.tabID(containingPanelID: panelID) == tabID else {
                 return

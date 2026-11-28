@@ -45,6 +45,42 @@ struct CoordinatorWakeStateTests {
 
     private func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
 
+    @Test func fableResetMustBeInTheReportedWeeklyWindow() throws {
+        let formatter = ISO8601DateFormatter()
+        let reported = try #require(formatter.date(from: "2026-11-26T03:00:00Z"))
+        let reset = try #require(formatter.date(from: "2026-11-28T23:45:00Z"))
+        let prefix = "You've hit your Fable limit · resets "
+        #expect(ClaudeFableQuota.resetDate(from: prefix + "Nov 28 at 3:45pm (America/Los_Angeles)", at: reported) == reset)
+        #expect(ClaudeFableQuota.resetDate(from: prefix + "2026-11-28T23:45:00Z", at: reported) == reset)
+        #expect(ClaudeFableQuota.resetDate(from: prefix + "2026-12-28T23:45:00Z", at: reported) == nil)
+        #expect(ClaudeFableQuota.resetDate(from: prefix + "Nov 25 at 3:45pm (America/Los_Angeles)", at: reported) == nil)
+        #expect(ClaudeFableQuota.resetDate(from: prefix + "Nov 28 at 3:45pm (unknown)", at: reported) == nil)
+    }
+
+    @Test func fableFallbackAndPendingWakeSurviveAnOutboxReload() throws {
+        var state = wake()
+        let nativeID = UUID()
+        state.fableFallback = .init(nativeSessionID: nativeID, returnAt: at(600), preferredEffort: "xhigh")
+        state.setRequestedWake(at(60))
+        let loaded = try JSONDecoder().decode(CoordinatorWakeState.self, from: JSONEncoder().encode(state))
+        #expect(loaded.fableFallback == state.fableFallback)
+        #expect(loaded.digest(now: at(60)) == state.digest(now: at(60)))
+    }
+
+    @Test func fableWakeWithUnknownOutcomeAsksTheCoordinatorToReconcile() throws {
+        var state = wake()
+        state.fableFallback = .init(nativeSessionID: UUID(), returnAt: at(600), preferredEffort: "xhigh")
+        state.setRequestedWake(at(60))
+        state.markDelivered(try #require(state.digest(now: at(60))), at: at(60))
+        state = try JSONDecoder().decode(CoordinatorWakeState.self, from: JSONEncoder().encode(state))
+        state.recoverUnconfirmedFableWake(at: at(70))
+        #expect(state.fableWakeInFlight == nil)
+        #expect(state.requestedWakeAt == at(60))
+        let digest = try #require(state.digest(now: at(131)))
+        #expect(digest.contains("Check current task state before acting"))
+        #expect(digest.contains("Scheduled check"))
+    }
+
     // MARK: - Digest
 
     @Test func nothingWaitsAtFirst() {

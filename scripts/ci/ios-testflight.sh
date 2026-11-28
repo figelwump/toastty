@@ -604,10 +604,11 @@ write_release_metadata() {
     ci_run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
   fi
   {
-    printf 'SCHEMA_VERSION=3\n'
+    printf 'SCHEMA_VERSION=4\n'
     printf 'STATUS=%s\n' "$status"
     printf 'GIT_SHA=%s\n' "$SOURCE_COMMIT_SHA"
     printf 'CI_EVENT_SHA=%s\n' "${GITHUB_SHA:-unknown}"
+    printf 'CI_GATE=%s\n' "${TOASTTY_IOS_CI_GATE:-none}"
     printf 'XCODE_VERSION=%s\n' "$XCODE_VERSION"
     printf 'SWIFT_VERSION=%s\n' "$SWIFT_VERSION"
     printf 'IOS_SDK_VERSION=%s\n' "$IOS_SDK_VERSION"
@@ -662,8 +663,10 @@ assert_verified_source() {
   if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
     [[ -n "${TOASTTY_IOS_VERIFIED_SHA:-}" && "$SOURCE_COMMIT_SHA" == "$TOASTTY_IOS_VERIFIED_SHA" \
       && "$(git -C "$ROOT_DIR" rev-parse HEAD)" == "$SOURCE_COMMIT_SHA" \
-      && "$SOURCE_COMMIT_SHA" == "${GITHUB_SHA:-}" ]] \
-      || fail "archive source must match the verified CI SHA and GitHub event SHA"
+      && "$SOURCE_COMMIT_SHA" == "${TOASTTY_IOS_SOURCE_SHA:-}" ]] \
+      || fail "archive source must match the verified CI SHA and the requested release source"
+    [[ "${TOASTTY_IOS_CI_GATE:-}" == "full-ci" || "${TOASTTY_IOS_CI_GATE:-}" == "override" ]] \
+      || fail "TOASTTY_IOS_CI_GATE must be full-ci or override"
     git -C "$ROOT_DIR" diff --quiet HEAD \
       || fail "tracked source modified after checkout"
   fi

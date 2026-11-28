@@ -1,3 +1,4 @@
+import RemoteProtocol
 import SwiftUI
 
 struct ToasttyMarkdownText: View {
@@ -5,6 +6,8 @@ struct ToasttyMarkdownText: View {
     var preparedBlocks: [ToasttyMarkdownBlock]?
     var textColor: Color = ConversationDesignTokens.primaryText
     @Environment(\.conversationLinkPresenter) private var linkPresenter
+    @Environment(\.toasttyDrawsOfferCards) private var drawsOfferCards
+    @Environment(\.toasttyOfferRow) private var offerRow
 
     var body: some View {
         // Matches the transcript stack spacing so the seams between chunks of
@@ -61,7 +64,7 @@ struct ToasttyMarkdownText: View {
                 text: content, textColor: ConversationDesignTokens.secondaryText,
                 spacingBefore: 12, decoration: .quote
             )
-        case .paragraph, .code, .table:
+        case .paragraph, .code, .table, .offers:
             return ToasttySelectableParagraph(text: content, textColor: textColor, spacingBefore: 12)
         }
     }
@@ -100,37 +103,52 @@ struct ToasttyMarkdownText: View {
             }
         case .table(let table):
             ToasttyMarkdownTableView(table: table)
-        case .code(let language):
-            VStack(alignment: .leading, spacing: 0) {
-                if let language, language.isEmpty == false {
-                    Text(language)
-                        .conversationFont(.caption2, monospaced: true)
-                        .foregroundStyle(ConversationDesignTokens.mutedText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ConversationDesignTokens.codeHeaderSurface)
-                    Divider()
-                        .overlay(ConversationDesignTokens.border)
+        case .offers(let group):
+            if drawsOfferCards, offerRow != nil {
+                // A block with no offers only closes the cards before it.
+                if group.offers.isEmpty == false {
+                    ToasttyOfferGroupView(group: group)
                 }
-                ToasttySelectableText(block.content, monospaced: true,
-                                      textColor: textColor, lineSpacing: 4)
-                    .padding(12)
+            } else {
+                codeBlock(block.content, language: CoordinatorOfferGroup.codeLanguage)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ConversationDesignTokens.raisedSurface)
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: ConversationDesignTokens.controlCornerRadius,
-                    style: .continuous
-                )
-                .stroke(ConversationDesignTokens.border, lineWidth: 1)
+        case .code(let language):
+            codeBlock(block.content, language: language)
+        }
+    }
+
+    /// A code block, also the text of an offers block in a chat that draws
+    /// no offer cards.
+    private func codeBlock(_ content: AttributedString, language: String?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let language, language.isEmpty == false {
+                Text(language)
+                    .conversationFont(.caption2, monospaced: true)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ConversationDesignTokens.codeHeaderSurface)
+                Divider()
+                    .overlay(ConversationDesignTokens.border)
             }
-            .clipShape(RoundedRectangle(
+            ToasttySelectableText(content, monospaced: true,
+                                  textColor: textColor, lineSpacing: 4)
+                .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ConversationDesignTokens.raisedSurface)
+        .overlay {
+            RoundedRectangle(
                 cornerRadius: ConversationDesignTokens.controlCornerRadius,
                 style: .continuous
-            ))
+            )
+            .stroke(ConversationDesignTokens.border, lineWidth: 1)
         }
+        .clipShape(RoundedRectangle(
+            cornerRadius: ConversationDesignTokens.controlCornerRadius,
+            style: .continuous
+        ))
     }
 
     /// The host's presenter decides how each link is drawn. It runs when the
@@ -158,7 +176,7 @@ struct ToasttyMarkdownText: View {
         if let cached = parsedBlockCache.object(forKey: key) {
             return cached.blocks
         }
-        let parsed = styledBlocks(ToasttyMarkdownParser.parse(text))
+        let parsed = styledBlocks(ToasttyMarkdownParser.cachedBlocks(text))
         parsedBlockCache.setObject(ParsedMarkdownBlocks(parsed), forKey: key)
         return parsed
     }
@@ -176,15 +194,16 @@ struct ToasttyMarkdownText: View {
                     isContinuation: block.isContinuation
                 )
             }
-            guard case .code = block.style else {
-                return ToasttyMarkdownBlock(
-                    id: block.id,
-                    content: stylingInlineContent(block.content),
-                    style: block.style,
-                    isContinuation: block.isContinuation
-                )
+            switch block.style {
+            case .code, .offers: return block
+            default: break
             }
-            return block
+            return ToasttyMarkdownBlock(
+                id: block.id,
+                content: stylingInlineContent(block.content),
+                style: block.style,
+                isContinuation: block.isContinuation
+            )
         }
     }
 
@@ -220,4 +239,3 @@ struct ToasttyMarkdownText: View {
     }
 
 }
-

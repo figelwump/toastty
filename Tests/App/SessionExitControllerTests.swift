@@ -99,6 +99,18 @@ final class SessionExitControllerTests: XCTestCase {
         try await settle()
         XCTAssertTrue(phone.sent.isEmpty)
         XCTAssertEqual(probe.askedSince, [phone.turnStart])
+
+        // Claude Code's own dialog, such as the compact offer, came up after
+        // the turn: its Return would pick a choice.
+        let dialog = try makeFixture()
+        dialog.startAgent(.claude)
+        dialog.setStatus(.working, at: dialog.turnStart)
+        try dialog.controller.armExitAfterTurn(panelID: dialog.agentPanelID, expectedSessionID: dialog.sessionID)
+        dialog.claudeDialogShown = true
+        dialog.setStatus(.ready)
+        try await settle()
+        XCTAssertTrue(dialog.sent.isEmpty)
+        XCTAssertTrue(dialog.controller.armedExitsBySessionID.isEmpty)
     }
 
     func testATurnThatDoesNotCompleteOrAStopDisarms() async throws {
@@ -503,6 +515,7 @@ final class SessionExitControllerTests: XCTestCase {
         let turnStart = Date().addingTimeInterval(-30)
         var sent: [(text: String, panelID: UUID)] = []
         var deliverySucceeds = true
+        var claudeDialogShown = false
 
         init(store: AppStore, sessionRuntimeStore: SessionRuntimeStore, workspaceID: UUID, agentTabID: UUID, agentPanelID: UUID) {
             self.store = store
@@ -616,6 +629,7 @@ final class SessionExitControllerTests: XCTestCase {
                 fixture?.sent.append((text, panelID))
                 return fixture?.deliverySucceeds == true
             },
+            claudeHasNativeDialog: { [weak fixture] _ in fixture?.claudeDialogShown == true },
             promptSettleDelay: .zero
         )
         sessionRuntimeStore.sessionExitController = fixture.controller

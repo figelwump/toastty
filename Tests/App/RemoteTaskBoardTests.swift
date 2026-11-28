@@ -188,6 +188,48 @@ struct RemoteTaskBoardTests {
         #expect(harness.server.sessionListSnapshots.isEmpty)
     }
 
+    @Test func agentActivityUpdatesTheLinkedTaskInTheSessionList() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let harness = try Harness(fixture)
+        defer { harness.removeRuntimeFiles() }
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Check the build",
+            workspaceID: fixture.workspaceID,
+            agent: "codex",
+            model: "gpt-6.1-sol",
+            effort: "high",
+            prompt: "Check the build."
+        ))
+        await fixture.waitForSetup(created.id)
+        let sessionID = try #require(fixture.record(created.id)?.currentSessionID)
+
+        // A task starts with its first prompt. Until the agent reports that
+        // turn, an idle report can still be from the launch prompt.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .working, summary: "First prompt"), at: Date()
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
+        )
+        _ = try await harness.waitForSnapshot { snapshot in
+            snapshot.tasks?.tasks.first { $0.id == created.id }?.showsAgentActivity == false
+        }
+
+        // The phone needs a new snapshot for both edges of the agent's turn.
+        for (kind, showsActivity) in [(SessionStatusKind.working, true), (.idle, false)] {
+            harness.server.removeAllBroadcasts()
+            fixture.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+            _ = try await harness.waitForSnapshot { snapshot in
+                snapshot.tasks?.tasks.first { $0.id == created.id }?.showsAgentActivity == showsActivity
+            }
+            let item = try #require(harness.board.items().first { $0.taskID == created.id })
+            let chips = CoordinatorChatPresentation.taskChips([item]) { _ in .init(red: 0, green: 0, blue: 0) }
+            #expect(chips[created.id]?.showsActivity == showsActivity)
+        }
+    }
+
     /// Done and archived tasks leave the board, so a device reads them
     /// apart, for the chips of links to them: each with its title, stage
     /// and pull request. The board names their revision, which changes

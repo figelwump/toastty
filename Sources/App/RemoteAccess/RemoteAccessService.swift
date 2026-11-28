@@ -486,6 +486,32 @@ struct RemotePendingSendCorrelator: Sendable {
         }
     }
 
+    /// Settles the send that a provider returned under the send's own ID. A
+    /// provider that Toastty gives each message as data names the message in
+    /// its receipt, so no text is compared and no other send is touched.
+    mutating func stampReceipt(
+        _ observation: ProviderTranscriptObservation,
+        for conversationID: RemoteConversationID
+    ) -> ProviderTranscriptObservation {
+        guard case .transcript(.userMessage(var payload)) = observation.payload,
+              let clientRequestID = payload.clientRequestID,
+              var pending = pendingSendsByConversationID[conversationID],
+              let index = pending.firstIndex(where: { $0.clientRequestID == clientRequestID }) else {
+            return observation
+        }
+        let send = pending.remove(at: index)
+        store(pending, for: conversationID)
+        if let displayText = send.displayText {
+            payload.attachmentPaths = CoordinatorMessageHeader.attachedFiles(in: payload.text)?.paths
+            payload.text = displayText
+        }
+        payload.origin = .remote
+        payload.deliveryMode = send.deliveryMode == .prompt ? nil : send.deliveryMode
+        var stamped = observation
+        stamped.payload = .transcript(.userMessage(payload))
+        return stamped
+    }
+
     /// Delivery and provider logs are ordered, so normally only the oldest
     /// eligible send can confirm against the next user message; a mismatch
     /// expires it rather than misattributing a later identical local message.
@@ -642,6 +668,9 @@ final class RemoteAccessService: ObservableObject {
     /// Toastty's action and does not move it. An in-app send that no person
     /// made does not move it either.
     private var lastRemoteUserInputAtByPanelID: [UUID: Date] = [:]
+    /// When Toastty last typed a message into each panel without a
+    /// confirmed Return, for any sender.
+    private var lastUnconfirmedDeliveryAtByPanelID: [UUID: Date] = [:]
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
@@ -775,6 +804,14 @@ final class RemoteAccessService: ObservableObject {
     /// Conversations whose replay from the start changed the projection
     /// without broadcasting it; each gets one resnapshot when it catches up.
     private var conversationIDsAwaitingReplayResnapshot: Set<RemoteConversationID> = []
+    /// The agents that Toastty runs as its own processes, by the panel that
+    /// holds each one's conversation. See `DirectConversationSession`.
+    private var directSessionsByPanelID: [UUID: any DirectConversationSession] = [:]
+    /// For each conversation of a direct session, the runtime binding whose
+    /// projector got the session's state, and the moment it got it. The
+    /// transcript file gives the conversation's history up to that moment.
+    /// The session gives everything after it.
+    private var directSessionSyncByConversationID: [RemoteConversationID: (bindingID: UUID, at: Date)] = [:]
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
     private var panelIDByConversationID: [RemoteConversationID: UUID] = [:]
     private var conversationIDByPanelID: [UUID: RemoteConversationID] = [:]
@@ -1480,6 +1517,7 @@ final class RemoteAccessService: ObservableObject {
             removeConversationState(conversationID)
         }
         tailersByConversationID.removeAll()
+        conversationIDsAwaitingReplayResnapshot.removeAll()
         activeSessionIDByConversationID.removeAll()
         panelIDByConversationID.removeAll()
         conversationIDByPanelID.removeAll()
@@ -2935,7 +2973,10 @@ final class RemoteAccessService: ObservableObject {
                 listChanged = true
             }
 
-            if syncProviderFeed(candidate) {
+            let directSession = self.directSession(forPanel: candidate.panelID)
+            // A direct session reports its own turns and requests. The
+            // hooks of its process report the same things a second time.
+            if directSession == nil, syncProviderFeed(candidate) {
                 listChanged = true
             }
 
@@ -3006,6 +3047,7 @@ final class RemoteAccessService: ObservableObject {
             let opensAsLocalDraft = candidate.nativeBindingConfirmation
                 .map(sessionRuntimeStore.nativeSessionBindingHasOnlyLocalInputAgainstIt) ?? false
             if candidate.provider != .cursor,
+               directSession == nil,
                let activeSessionID = candidate.activeSessionID,
                let confirmation = candidate.nativeBindingConfirmation,
                candidate.registryState == .ready,
@@ -3041,6 +3083,15 @@ final class RemoteAccessService: ObservableObject {
                     broadcastEvents(emitted, for: candidate.conversationID)
                     listChanged = true
                 }
+            }
+
+            if let directSession, candidate.activeSessionID != nil {
+                if syncDirectSessionState(directSession, for: candidate.conversationID) {
+                    listChanged = true
+                }
+            } else {
+                directSessionSyncByConversationID.removeValue(forKey: candidate.conversationID)
+                projectionStore.setHostReadsTurnState(false, for: candidate.conversationID)
             }
 
             // Keep the coordinator's authoritative availability in step with
@@ -3376,6 +3427,7 @@ final class RemoteAccessService: ObservableObject {
             publishResnapshotRequired(for: conversationID)
         }
         tailersByConversationID.removeValue(forKey: conversationID)?.stop(reason: "conversation_removed")
+        conversationIDsAwaitingReplayResnapshot.remove(conversationID)
         projectionStore.removeConversation(conversationID)
         coordinator.removeConversation(conversationID)
         controlCPromptEpochByConversationID.removeValue(forKey: conversationID)
@@ -3383,6 +3435,7 @@ final class RemoteAccessService: ObservableObject {
         bootstrappedPromptAuthorityByConversationID.removeValue(forKey: conversationID)
         providerFeedIdentityByConversationID.removeValue(forKey: conversationID)
         providerFeedLastFingerprintByConversationID.removeValue(forKey: conversationID)
+        directSessionSyncByConversationID.removeValue(forKey: conversationID)
         pendingSendCorrelator.discard(for: conversationID)
         discardQueuedEntries(sendQueue.removeAll(for: conversationID))
         sendQueue.removeConversation(conversationID)
@@ -3687,6 +3740,10 @@ final class RemoteAccessService: ObservableObject {
         guard isTrackingConversations, generation == conversationTrackingGeneration else { return }
         switch event {
         case .observations(let observations, let linkedFileReferences):
+            if let panelID = panelIDByConversationID[conversationID], directSession(forPanel: panelID) != nil {
+                ingestDirectSessionHistory(observations, linkedFileReferences: linkedFileReferences, for: conversationID)
+                return
+            }
             // Stamp the confirming user message for any pending remote send
             // before it enters the projection, so the sending device can tell
             // its own send apart from another device's identical text.
@@ -3705,17 +3762,7 @@ final class RemoteAccessService: ObservableObject {
             // Publish them through the session list even when nothing else
             // changed, so an in-session model switch reaches subscribers.
             let profileChanged = previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
-            if tailersByConversationID[conversationID]?.isReadingInitialContent == true {
-                // A long transcript replays as hundreds of pages. A phone that
-                // opened the conversation mid-replay overflows its live buffer
-                // and stops on a partial history, so send one resnapshot when
-                // the replay catches up instead.
-                if emitted.isEmpty == false || profileChanged {
-                    conversationIDsAwaitingReplayResnapshot.insert(conversationID)
-                }
-            } else {
-                broadcastEvents(emitted, for: conversationID, sessionListChanged: profileChanged)
-            }
+            publishTailerEvents(emitted, for: conversationID, sessionListChanged: profileChanged)
             drainSendQueue(for: conversationID)
 
         case .initialReadStarted, .initialReadUnavailable:
@@ -3745,6 +3792,171 @@ final class RemoteAccessService: ObservableObject {
             startTailer(for: conversationID, provider: provider, path: path)
             broadcastSessionList()
         }
+    }
+
+    // MARK: - Direct sessions
+
+    /// Makes `session` the way in and out of the conversation in its panel.
+    /// From now on Toastty types nothing into that panel's terminal for the
+    /// conversation, and the terminal's own input does not count as a draft.
+    func attachDirectSession(_ session: any DirectConversationSession) {
+        directSessionsByPanelID[session.panelID] = session
+        syncConversations()
+    }
+
+    /// Ends what `attachDirectSession` began, for this session only: a
+    /// later session of the same panel stays attached.
+    func detachDirectSession(_ session: any DirectConversationSession) {
+        guard directSessionsByPanelID[session.panelID] === session else { return }
+        directSessionsByPanelID.removeValue(forKey: session.panelID)
+        if let conversationID = conversationIDByPanelID[session.panelID] {
+            directSessionSyncByConversationID.removeValue(forKey: conversationID)
+        }
+        syncConversations()
+    }
+
+    /// The panel's direct session, while the managed session that it runs
+    /// for is the panel's active one. Another agent that starts in the
+    /// panel's terminal replaces that managed session, and then nothing of
+    /// the new agent's conversation goes to the old agent's process.
+    private func directSession(forPanel panelID: UUID) -> (any DirectConversationSession)? {
+        guard let session = directSessionsByPanelID[panelID],
+              sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.sessionID == session.sessionID else {
+            return nil
+        }
+        return session
+    }
+
+    /// Takes what a direct session observed. The observations go into the
+    /// projection as the transcript file's do. A user message that carries
+    /// the ID of a send is that send's receipt.
+    func ingestDirectSessionObservations(
+        _ observations: [ProviderTranscriptObservation],
+        from session: any DirectConversationSession
+    ) {
+        guard isTrackingConversations,
+              directSession(forPanel: session.panelID) === session,
+              let conversationID = conversationIDByPanelID[session.panelID],
+              activeSessionIDByConversationID[conversationID] != nil,
+              let projector = projectionStore.projectorState(for: conversationID) else {
+            // No projection follows the session yet. The next sync asks it
+            // for its state.
+            return
+        }
+        if directSessionSyncByConversationID[conversationID]?.bindingID != projector.bindingID {
+            directSessionSyncByConversationID[conversationID] = (projector.bindingID, Date())
+            projectionStore.setHostReadsTurnState(true, for: conversationID)
+        }
+        let stamped = observations.map { observation -> ProviderTranscriptObservation in
+            guard case .transcript(.userMessage(let payload)) = observation.payload,
+                  let clientRequestID = payload.clientRequestID else { return observation }
+            let stamped = pendingSendCorrelator.stampReceipt(observation, for: conversationID)
+            _ = confirmPendingSend(conversationID: conversationID, clientRequestID: clientRequestID)
+            return stamped
+        }
+        let previousProfile = projector.executionProfile
+        let emitted = projectionStore.ingest(stamped, for: conversationID)
+        projectionStore.noteLinkedFileReferences(
+            RemoteConversationProjectionStore.linkedFileReferences(in: stamped),
+            for: conversationID
+        )
+        syncCoordinatorAvailability(for: conversationID)
+        broadcastEvents(
+            emitted,
+            for: conversationID,
+            sessionListChanged: previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
+        )
+        drainSendQueue(for: conversationID)
+    }
+
+    /// Gives the projector of the conversation's current runtime binding
+    /// the session's turn state and waiting requests, once for each
+    /// binding. Returns whether the projection changed.
+    private func syncDirectSessionState(
+        _ session: any DirectConversationSession,
+        for conversationID: RemoteConversationID
+    ) -> Bool {
+        guard let projector = projectionStore.projectorState(for: conversationID),
+              directSessionSyncByConversationID[conversationID]?.bindingID != projector.bindingID else {
+            return false
+        }
+        projectionStore.setHostReadsTurnState(true, for: conversationID)
+        let observations = session.currentStateObservations()
+        guard observations.isEmpty == false else {
+            // The agent's process is not up yet. Its first report comes
+            // through `ingestDirectSessionObservations`.
+            return false
+        }
+        directSessionSyncByConversationID[conversationID] = (projector.bindingID, Date())
+        let emitted = projectionStore.ingest(observations, for: conversationID)
+        syncCoordinatorAvailability(for: conversationID)
+        broadcastEvents(emitted, for: conversationID)
+        return emitted.isEmpty == false
+    }
+
+    /// The transcript file of a direct session gives the conversation's
+    /// history: what an earlier process of the conversation wrote, from
+    /// before this app run or before the projection was built again. It has
+    /// no say over the prompt, and a record from after the session began to
+    /// report is left to the session, which gives it with its receipt.
+    private func ingestDirectSessionHistory(
+        _ observations: [ProviderTranscriptObservation],
+        linkedFileReferences: [String],
+        for conversationID: RemoteConversationID
+    ) {
+        let reportsSince = directSessionSyncByConversationID[conversationID]?.at
+        let history = observations.compactMap { observation -> ProviderTranscriptObservation? in
+            if let reportsSince, observation.timestamp > reportsSince { return nil }
+            var observation = observation
+            observation.mayAuthorizeCurrentRuntime = false
+            return observation
+        }
+        let emitted = projectionStore.ingest(history, for: conversationID)
+        // A file reference counts only with a record that the projection
+        // took. The reader's list covers the whole batch.
+        projectionStore.noteLinkedFileReferences(
+            history.count == observations.count
+                ? linkedFileReferences
+                : RemoteConversationProjectionStore.linkedFileReferences(in: history),
+            for: conversationID
+        )
+        publishTailerEvents(emitted, for: conversationID)
+    }
+
+    private func publishTailerEvents(
+        _ events: [ConversationEvent],
+        for conversationID: RemoteConversationID,
+        sessionListChanged: Bool = false
+    ) {
+        // A long replay can overflow the live buffer of a phone that opens
+        // the conversation mid-replay. Send one resnapshot when the file
+        // catches up, whether it is the whole transcript or direct-session history.
+        if tailersByConversationID[conversationID]?.isReadingInitialContent == true {
+            if events.isEmpty == false || sessionListChanged {
+                conversationIDsAwaitingReplayResnapshot.insert(conversationID)
+            }
+        } else {
+            broadcastEvents(events, for: conversationID, sessionListChanged: sessionListChanged)
+        }
+    }
+
+    /// Types `text` plus Return into the panel's terminal, or gives it to
+    /// the panel's direct session.
+    private func deliverInput(
+        _ text: String,
+        clientRequestID: String,
+        deliveryMode: RemoteMessageDeliveryMode,
+        panelID: UUID
+    ) -> TerminalInputDeliveryResult {
+        if let session = directSession(forPanel: panelID) {
+            return session.send(text: text, clientRequestID: clientRequestID, deliveryMode: deliveryMode)
+        }
+        return terminalRuntimeRegistry.sendRemoteText(
+            text,
+            submit: true,
+            panelID: panelID,
+            focusPolicy: .preserveFirstResponder
+        )
     }
 
     // MARK: - Broadcasting
@@ -3926,7 +4138,15 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .approvalsDisabled)
             }
         case .local:
-            guard interaction.kind == .question else { return .rejected(reason: .unsupported) }
+            // A terminal's permission prompt is answered in the terminal. A
+            // direct session has no such prompt: its request takes the
+            // answer from here.
+            guard interaction.kind == .question || directSession(forPanel: panelID) != nil else {
+                return .rejected(reason: .unsupported)
+            }
+        }
+        if let session = directSession(forPanel: panelID) {
+            return session.answer(responseID: request.responseID, answers: request.answers)
         }
         return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
     }
@@ -4010,7 +4230,13 @@ final class RemoteAccessService: ObservableObject {
         panelID: UUID,
         origin: InputOrigin
     ) -> RemoteInputCoordinator.DeliveryContext {
-        let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
+        let isSurfaceReadyForInput: Bool
+        if let session = directSession(forPanel: panelID) {
+            isSurfaceReadyForInput = session.acceptsInput
+        } else {
+            let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
+            isSurfaceReadyForInput = promptState != .unavailable && promptState != .exited
+        }
         // Send scope and the per-session write policy limit remote devices.
         // The Mac has neither.
         let deviceHasSendScope: Bool
@@ -4031,7 +4257,7 @@ final class RemoteAccessService: ObservableObject {
             deviceHasSendScope: deviceHasSendScope,
             sessionWritesEnabled: sessionWritesEnabled,
             isBoundToLiveSurface: activeSessionIDByConversationID[conversationID] != nil,
-            isSurfaceReadyForInput: promptState != .unavailable && promptState != .exited
+            isSurfaceReadyForInput: isSurfaceReadyForInput
         )
     }
 
@@ -4129,17 +4355,18 @@ final class RemoteAccessService: ObservableObject {
             recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
             let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
             let deliveryStartedAt = Date()
-            let delivery = terminalRuntimeRegistry.sendRemoteText(
+            let delivery = deliverInput(
                 typedText,
-                submit: true,
-                panelID: panelID,
-                focusPolicy: .preserveFirstResponder
+                clientRequestID: request.clientRequestID,
+                deliveryMode: .steer,
+                panelID: panelID
             )
             switch delivery {
             case .unavailable:
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
+                recordUnconfirmedDelivery(panelID: panelID)
                 recordPendingSend(
                     request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
                     confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer
@@ -4244,7 +4471,8 @@ final class RemoteAccessService: ObservableObject {
             result = .rejected(reason: reason)
         case .accept:
             recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
-            let delivery = terminalRuntimeRegistry.sendRemoteInterrupt(
+            let directSession = self.directSession(forPanel: panelID)
+            let delivery = directSession?.interrupt() ?? terminalRuntimeRegistry.sendRemoteInterrupt(
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
             )
@@ -4257,12 +4485,16 @@ final class RemoteAccessService: ObservableObject {
                     .compactMap(\.onStop)
                 for handler in stopHandlers { handler() }
                 // Direct surface input bypasses the local key callback. Pause
-                // queued sends before the shared status can become idle.
-                _ = sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
-                    panelID: panelID,
-                    kind: .escape,
-                    at: Date()
-                )
+                // queued sends before the shared status can become idle. A
+                // direct session's turn runs until the agent reports its
+                // end; the session's owner sets the status then.
+                if directSession == nil {
+                    _ = sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
+                        panelID: panelID,
+                        kind: .escape,
+                        at: Date()
+                    )
+                }
                 result = .accepted
             } else {
                 result = .rejected(reason: .surfaceUnavailable)
@@ -4592,11 +4824,11 @@ final class RemoteAccessService: ObservableObject {
             // conversation then echoes the text as typed.
             let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
             let deliveryStartedAt = Date()
-            let delivery = terminalRuntimeRegistry.sendRemoteText(
+            let delivery = deliverInput(
                 typedText,
-                submit: true,
-                panelID: panelID,
-                focusPolicy: .preserveFirstResponder
+                clientRequestID: request.clientRequestID,
+                deliveryMode: .prompt,
+                panelID: panelID
             )
             switch delivery {
             case .unavailable:
@@ -4604,6 +4836,7 @@ final class RemoteAccessService: ObservableObject {
             case .uncertain:
                 let previous = coordinator.availability(for: conversationID)
                 coordinator.markUncertain(request)
+                recordUnconfirmedDelivery(panelID: panelID)
                 logCoordinatorAvailabilityTransition(
                     for: conversationID,
                     source: "remote_delivery_uncertain",
@@ -4683,6 +4916,9 @@ final class RemoteAccessService: ObservableObject {
     /// and JSON encoding never run inside the terminal input call stack.
     @discardableResult
     func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .key) -> Bool {
+        // The agent of a direct session does not read this terminal, so
+        // nothing typed here is a draft of a message for it.
+        guard directSession(forPanel: panelID) == nil else { return false }
         let conversationID = conversationIDByPanelID[panelID]
         // Arrow, Return and Escape keys that Claude uses to operate a known
         // Coordinator dialog are not edits to its composer. Leave any
@@ -5395,6 +5631,10 @@ extension RemoteAccessService: LocalConversationAccess {
 
     fileprivate func localFollowedSince(subscriptionID: UUID) -> Date? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID else { return nil }
+        return followedSince(panelID: panelID)
+    }
+
+    func followedSince(panelID: UUID) -> Date? {
         let subscribed = localSubscriptions.values.filter { $0.panelID == panelID }.map(\.since)
         return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
     }
@@ -5646,5 +5886,18 @@ extension RemoteAccessService: SessionRemoteInputProbe {
 
     func lastRemoteUserInputAt(panelID: UUID) -> Date? {
         lastRemoteUserInputAtByPanelID[panelID]
+    }
+
+    /// A delivery whose Return was not confirmed. Rare, so each write also
+    /// drops panels that are gone.
+    private func recordUnconfirmedDelivery(panelID: UUID) {
+        lastUnconfirmedDeliveryAtByPanelID = lastUnconfirmedDeliveryAtByPanelID.filter {
+            store.state.workspaceSelection(containingPanelID: $0.key) != nil
+        }
+        lastUnconfirmedDeliveryAtByPanelID[panelID] = Date()
+    }
+
+    func lastUnconfirmedRemoteDeliveryAt(panelID: UUID) -> Date? {
+        lastUnconfirmedDeliveryAtByPanelID[panelID]
     }
 }

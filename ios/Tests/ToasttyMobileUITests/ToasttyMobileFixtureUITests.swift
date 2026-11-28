@@ -144,10 +144,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "toastty-mobile-conversation-status"
         ]
         XCTAssertTrue(conversationStatus.waitForExistence(timeout: 5))
-        XCTAssertEqual(
-            conversationStatus.label,
-            "Last seen working. Updates paused."
-        )
+        // The chat's header says it reconnects, in place of the status.
+        XCTAssertEqual(conversationStatus.label, "Reconnecting to your Mac")
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(notice.waitForExistence(timeout: 5))
 
@@ -1332,7 +1330,9 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(latest.exists)
         app.buttons["toastty-mobile-fixture-entry-load-0"].tap()
         XCTAssertTrue(latest.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-resyncing"].exists)
+        // The phone shows no banner while it catches up, so the chat does
+        // not move.
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-transcript-resyncing"].exists)
         app.buttons["toastty-mobile-fixture-entry-load-1"].tap()
         assertReadyMessageStartsWithContext(in: app, sequence: 4)
         attachScreenshot(named: "entry-catch-up-latest-response", of: app)
@@ -1825,21 +1825,27 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "fixture-transcript-5000", of: app)
     }
 
-    func testTranscriptRecoveryFixturesExposeResyncStaleAndTruncatedHistoryUX() {
+    func testTranscriptRecoveryFixturesKeepTheChatStillAndShowTruncatedHistory() {
+        // The phone's header shows the connection: a paused or resyncing
+        // transcript draws no banner above the messages, which would move
+        // them. Truncated history keeps its banner.
         let scenarios = [
             (
                 name: "transcript-resyncing",
                 identifier: "toastty-mobile-transcript-resyncing",
+                showsBanner: false,
                 screenshot: "fixture-transcript-resyncing"
             ),
             (
                 name: "transcript-stale",
                 identifier: "toastty-mobile-transcript-stale",
+                showsBanner: false,
                 screenshot: "fixture-transcript-stale"
             ),
             (
                 name: "transcript-truncated",
                 identifier: "toastty-mobile-transcript-history-truncated",
+                showsBanner: true,
                 screenshot: "fixture-transcript-history-truncated"
             ),
         ]
@@ -1852,8 +1858,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
 
             let banner = app.descendants(matching: .any)[scenario.identifier]
             XCTAssertTrue(
-                banner.waitForExistence(timeout: 5),
-                "Fixture scenario \(scenario.name) must expose \(scenario.identifier)"
+                app.descendants(matching: .any)["toastty-mobile-transcript-row-13"].waitForExistence(timeout: 5)
+            )
+            XCTAssertEqual(
+                banner.exists, scenario.showsBanner,
+                "Fixture scenario \(scenario.name): banner \(scenario.identifier)"
             )
             XCTAssertTrue(
                 app.descendants(matching: .any)["toastty-mobile-transcript-row-13"].exists,
@@ -3031,16 +3040,26 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         attachScreenshot(named: "tab-only-composer-row", of: app)
     }
 
-    func testDisconnectedExecutionProfileIsLastReported() {
+    func testReconnectingKeepsExecutionProfileAndWorkspaceTabLabels() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"]
         )
         openFixtureConversation(in: app)
+
+        let status = app.descendants(matching: .any)["toastty-mobile-conversation-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertEqual(status.label, "Reconnecting to your Mac")
+
         let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
         XCTAssertTrue(profile.waitForExistence(timeout: 5))
-        XCTAssertTrue(profile.label.hasPrefix("Last reported. Model: "))
-        XCTAssertTrue(app.staticTexts["toastty-mobile-workspace-tab"].label.hasPrefix("Last reported. Mac tab: "))
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+        XCTAssertEqual(
+            profile.label,
+            "Model: claude-opus-long-provider-model-identifier-for-accessibility-layout. Reasoning: high"
+        )
+        XCTAssertEqual(
+            app.staticTexts["toastty-mobile-workspace-tab"].label,
+            "Mac tab: Release preparation — changelog, signing, and TestFlight verification"
+        )
     }
 
     private func topOfKeyboardObstruction(_ keyboard: XCUIElement) -> CGFloat {

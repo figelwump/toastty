@@ -375,7 +375,12 @@ visual order.
 
 `workspace.set-annotation` sets or updates one structured `key -> (text, url?)`
 chip rendered under the workspace name in the sidebar, and
-`workspace.clear-annotation` removes one by key. The caller chooses the key;
+`workspace.clear-annotation` removes one by key. Set and clear require
+`--workspace` for the `github-pr` key. A managed session in a release task's
+own space can set this key to its preparation pull request. A link saved by
+an earlier version stays visible. To enable its merge controls, the release
+agent sets the annotation again with the verified URL.
+The caller chooses the key;
 Toastty never derives it from the displayed text. Use a stable semantic identity
 for the annotation kind rather than copying its current value into the key. For
 example:
@@ -867,7 +872,7 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 `~/.toastty/tasks.toml`.
 
 ```
-toastty task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+toastty task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir> | --new-project <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
@@ -875,7 +880,7 @@ toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root 
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>] [--name <project>]
-toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer] [--from <name>]
+toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--queue] [--from <name>]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
@@ -885,7 +890,9 @@ toastty task request-merge <task-id>
 toastty task cancel-merge [<task-id>]
 toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
-toastty task needs-reply [<task-id>] [--question <text>]
+toastty task needs-reply [<task-id>] [--question <text>] [--approval]
+toastty task needs-reply --fleet-version <version> --fleet-targets <id,id>
+toastty task answer <task-id> <question-id> <approve|decline> --webhook <id> < signature.txt
 toastty task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
@@ -907,6 +914,13 @@ cannot be used with it. See
 `--root <dir>` names the project by its directory instead of `--workspace`:
 Toastty uses the open workspace on it, or opens the project once every other
 check passed. A relative path resolves against the current directory.
+`--new-project <dir>` is `--root` for a project that does not exist yet:
+Toastty makes the folder, in a parent folder that exists, with an empty git
+repository and a first empty commit, so that `--start-work` can make a
+worktree. The folder must be missing or empty. Toastty never writes into a
+folder with files, and refuses a folder that is already a git repository;
+pass such a folder with `--root`. If the create then fails, Toastty removes
+what it made.
 `--external-ref` names the issue or report the task came from, such as
 `github:owner/repo#123` (printable ASCII, no spaces, at most 128
 characters), and `--external-url` gives its page; `task get` and `task list`
@@ -958,10 +972,22 @@ and talk to other tasks by task ID; see
 `coordinator send` take the message in exactly one way: as one argument, with
 `--text`, or from a UTF-8 file with `--text-file`. Both put a first line
 before the message that names the sender; see `send` under
-[`coordinator`](#coordinator). `task send` types its message
-whatever the agent does. With `--steer`, it checks the agent first: the message
-goes to the agent's open prompt or into its running turn, or Toastty holds it
-for the next open prompt, and nothing is typed into a permission prompt.
+[`coordinator`](#coordinator). The coordinator's own `task send` gets a line
+that makes its approvals and decisions count as yours in the task; see
+[Approvals and decisions from the coordinator](tasks.md#approvals-and-decisions-from-the-coordinator).
+`task send` gives its message to the agent as soon as the agent can read it:
+at the agent's open prompt, or into the running turn of a Claude Code or
+Codex agent. It types nothing while a permission prompt, a question or a
+dialog waits there, while text that someone typed since the agent's latest
+turn started can still be in the prompt, or while Toastty cannot tell what
+the agent does. Toastty then saves the message on the task and types it at
+the agent's next open prompt, also after a relaunch. The result's `delivery`
+is `sent`, `steered` or `queued`; see
+[Coordinate tasks](tasks.md#coordinate-tasks). `--steer` is an older name
+for this default: Toastty accepts it, and it changes nothing.
+With `--queue`, Toastty never types into a running turn: it saves the message
+on the task and types it at the agent's next open prompt, also after a
+relaunch. `task get` lists it under `queuedMessages` with its outcome.
 `task watch` tells the calling
 agent's own task, or the `--notify` task, once with a one-line message when the
 condition holds. With `--wait`, it blocks instead and exits 0 when the condition

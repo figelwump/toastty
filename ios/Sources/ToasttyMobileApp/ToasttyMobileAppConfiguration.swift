@@ -152,7 +152,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             quietTurns: ["1", "unsupported"].contains(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS"] ?? "")
                 ? .shared : .none,
             attachedImages: ["1", "unsupported"].contains(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES"] ?? ""),
-            wakeTurns: Int(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? "") ?? 0
+            wakeTurns: Int(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? "") ?? 0,
+            offers: environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_OFFERS"] == "1"
         )
         // A negative value counts from the chat's end.
         if sequence < 0 { sequence += events.count }

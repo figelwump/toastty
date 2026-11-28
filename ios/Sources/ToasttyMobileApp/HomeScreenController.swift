@@ -154,6 +154,9 @@ final class HomeScreenController {
     private(set) var subspaceDoneNotice: SubspaceDoneNotice?
     var connectionState: MobileConnectionState
     var freshness: LiveProjectionFreshness
+    /// What a chat shows about the connection. The live controller drives
+    /// it from its own timeline, so a short reconnect shows nothing.
+    var chatConnection: ToasttyChatConnection
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
@@ -242,7 +245,9 @@ final class HomeScreenController {
         hostSupportsTaskActions = runtimeMode == .fixture
         finishedTasks = runtimeMode == .fixture ? Self.fixtureFinishedTasks : ToasttyFinishedTasks()
         self.connectionState = connectionState
-        self.freshness = freshness ?? Self.freshness(for: connectionState)
+        let initialFreshness = freshness ?? Self.freshness(for: connectionState)
+        self.freshness = initialFreshness
+        chatConnection = ToasttyChatConnection(freshness: initialFreshness)
         self.latestTransportFailure = latestTransportFailure
     }
 

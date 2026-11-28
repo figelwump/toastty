@@ -59,6 +59,13 @@ final class CoordinatorChatModel: ObservableObject {
         /// The agent asked a question or for a permission. The chat cannot
         /// answer it.
         case awaitingAnswerInTerminal
+        /// The agent of a direct session starts. Its start passes Toastty's
+        /// checks or fails with a reason; nothing of it waits in a terminal.
+        case directAgentStarting
+        /// The agent of a direct session asks for something that the chat
+        /// has no form for, such as a permission. The terminal cannot
+        /// answer it either: a paired iPhone can, and Stop withdraws it.
+        case awaitingAnswerOutsideChat
         /// Text typed in the terminal may be in the agent's prompt. Messages
         /// and Toastty's digests wait for it. Keys that answered a question
         /// of the agent's start, before the agent reported its session, look
@@ -81,12 +88,21 @@ final class CoordinatorChatModel: ObservableObject {
     /// The conversation's summary, or `nil` while Toastty reads none.
     @Published private(set) var summary: RemoteConversationSummary?
     @Published private(set) var interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
+    /// The waiting requests that the chat has no form for: a permission
+    /// request, or a question that the answer form cannot show.
+    @Published private(set) var pendingRequestsWithoutForm: Set<RemotePendingInteraction.ID> = []
     /// The composer's text. It is kept here so that it survives a switch to
     /// the terminal and back.
     @Published var draft = ""
     /// The coordinator's message that the composer's message answers, set
     /// by Reply on that message. It is kept with the text.
     @Published private(set) var replyTarget: CoordinatorReplyTarget?
+    /// The user's answers to the coordinator's offers, for the offer cards:
+    /// those in the conversation and those of the messages that wait.
+    @Published private(set) var offerAnswers = ToasttyOfferAnswers()
+    /// The answers in the conversation alone, as of the last change of its
+    /// events.
+    private var conversationOfferAnswers = ToasttyOfferAnswers()
     /// The files attached to the composer's message, kept here with the
     /// text. Their changes are the model's changes.
     let attachmentDraft: DraftAttachments
@@ -347,9 +363,17 @@ final class CoordinatorChatModel: ObservableObject {
 
     private func reconcileQuestionAnswers(_ pending: [RemotePendingInteraction]) {
         var updated: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
-        for interaction in pending where interaction.kind == .question && interaction.state == .pending {
-            guard let responseID = interaction.responseID, !responseID.isEmpty,
-                  let questions = interaction.questions, RemoteQuestionAnswerValidation.supports(questions) else { continue }
+        var withoutForm: Set<RemotePendingInteraction.ID> = []
+        defer {
+            if withoutForm != pendingRequestsWithoutForm { pendingRequestsWithoutForm = withoutForm }
+        }
+        for interaction in pending where interaction.state == .pending {
+            guard interaction.kind == .question,
+                  let responseID = interaction.responseID, !responseID.isEmpty,
+                  let questions = interaction.questions, RemoteQuestionAnswerValidation.supports(questions) else {
+                withoutForm.insert(interaction.id)
+                continue
+            }
             let key = ToasttyInteractionAnswerKey(
                 interactionID: interaction.id, responseID: responseID, inputEpoch: interaction.inputEpoch
             )
@@ -493,6 +517,8 @@ final class CoordinatorChatModel: ObservableObject {
         } else {
             rows = []
         }
+        conversationOfferAnswers = ToasttyOfferAnswers(events: loaded == nil ? [] : events)
+        updateOfferAnswers()
         presentation = ToasttyConversationPresentationState(
             rows: rows,
             sendItems: sendItems(),
@@ -518,6 +544,21 @@ final class CoordinatorChatModel: ObservableObject {
             prependAnchorID: nil
         )
         if next != presentation { presentation = next }
+        updateOfferAnswers()
+    }
+
+    /// An answer counts from the click on Send answers: its message can
+    /// wait for the coordinator's prompt, and the conversation shows it
+    /// only after Toastty typed it. A waiting message that the user removes
+    /// gives the card its buttons back.
+    private func updateOfferAnswers() {
+        var waiting = pendingSends.map(\.text)
+        if let controller {
+            waiting += (controller.pausedEntries + controller.queuedEntries).map(\.text)
+        }
+        waiting += summary?.inputControl?.queuedMessages.map(\.text) ?? []
+        let next = conversationOfferAnswers.adding(waitingMessages: waiting)
+        if next != offerAnswers { offerAnswers = next }
     }
 
     /// How the chat shows a time, such as a digest line's.
@@ -663,9 +704,14 @@ final class CoordinatorChatModel: ObservableObject {
         case .notRunning:
             return .agentNotRunning(reason: status.startFailure)
         case .starting:
-            return .agentStarting
+            return status.agentIsDirectSession ? .directAgentStarting : .agentStarting
         case .running:
             break
+        }
+        // The terminal of a direct session is a plain shell. Each notice
+        // that sends the user there is wrong for it.
+        if status.agentIsDirectSession {
+            return directSessionNotice(controller: controller)
         }
         if status.hold == .terminalDialog { return .awaitingAnswerInTerminal }
         if status.session?.status?.kind == .needsApproval {
@@ -693,6 +739,21 @@ final class CoordinatorChatModel: ObservableObject {
             if controller.hasInterruptedEntry { return .typingInterrupted }
             return controller.mayReadPartOfItsInstructions ? .instructionsMayBeCut : nil
         }
+    }
+
+    /// What the chat says while the agent is a direct session and runs.
+    /// The session's process says what waits, so the notice reads only the
+    /// conversation: a request with a form in the chat needs no notice.
+    private func directSessionNotice(controller: CoordinatorController) -> Notice? {
+        guard let summary else { return .directAgentStarting }
+        if summary.state == .starting, ProviderTranscriptSupport.isManagedProvider(summary.provider) {
+            return .directAgentStarting
+        }
+        if case .pendingInteraction(let ids) = summary.inputAvailability {
+            return ids.contains(where: pendingRequestsWithoutForm.contains) ? .awaitingAnswerOutsideChat : nil
+        }
+        if controller.hasInterruptedEntry { return .typingInterrupted }
+        return nil
     }
 
     private var needsTerminalForPendingAnswer: Bool {
@@ -882,6 +943,37 @@ final class CoordinatorChatModel: ObservableObject {
     static let otherHeaderReplyRefusal =
         "The message you are writing starts with Toastty's line for another sender, so it cannot be a reply. "
             + "Send or clear it first."
+
+    /// Send answers on the offer cards: the user's choices go to the
+    /// coordinator as one message, with Toastty's first line for answers.
+    /// It steers or waits as a message from the composer does. The
+    /// composer's own text and reply stay as they are. False when nothing
+    /// was sent.
+    func sendOfferAnswers(_ answers: [CoordinatorOfferAnswer], offeredAt: Date) -> Bool {
+        guard answers.isEmpty == false, let controller else { return false }
+        let text = CoordinatorMessageHeader.answersMessage(answers, time: Self.timeText(offeredAt))
+        defer { publishMetadata() }
+        do {
+            try controller.sendUserText(text, steering: queueSelected == false)
+            didSend()
+            return true
+        } catch {
+            transientNotice = .failure(error.localizedDescription)
+            return false
+        }
+    }
+
+    /// Ask on an offer card: the composer's message answers that offer, as
+    /// Reply does for a whole message, and the composer takes the keyboard.
+    func ask(about offer: CoordinatorOffer, offeredAt: Date) {
+        guard isSendingFiles == false else { return }
+        guard CoordinatorMessageHeader.hasOtherHeader(draft) == false else {
+            transientNotice = .failure(Self.otherHeaderReplyRefusal)
+            return
+        }
+        replyTarget = CoordinatorReplyTarget(offer: offer, offeredAt: offeredAt)
+        requestComposerFocus()
+    }
 
     /// The composer's message answers no message anymore.
     func cancelReply() {

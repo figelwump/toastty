@@ -6,6 +6,58 @@ import RemoteProtocol
 extension TaskCoordinator {
     static let releaseCheckInterval: Duration = .seconds(15 * 60)
 
+    /// Save the release agent's explicit choice before applying its annotation.
+    @discardableResult
+    func setReleasePreparationPullRequest(_ link: WorkspacePullRequestLink?, for record: TaskRecord) throws -> Bool {
+        guard record.release?.preparationPullRequestURL != link?.url || record.pullRequestURL != link?.url else {
+            return false
+        }
+        try saveMergeState(taskID: record.id) {
+            $0.release?.preparationPullRequestURL = link?.url
+            $0.pullRequestURL = link?.url
+            Self.resetReleaseMerge(&$0)
+        }
+        return true
+    }
+
+    /// A saved cleanup from a release preparation merge used the ordinary
+    /// task path. End that request before it can act on the release checkout.
+    /// Keep the link so the release agent can confirm it again.
+    func reconcileReleaseMerges() {
+        for record in records.records where record.release != nil {
+            guard let workspaceID = record.taskSpaceWorkspaceID,
+                  let workspace = store.state.workspacesByID[workspaceID],
+                  workspace.taskID == record.id else { continue }
+            let droppedOldRequest = merges?.discardReleaseMergeCleanup(workspaceID: workspaceID) == true
+            if let doneAt = record.doneAt {
+                // The merge coordinator can drop a stale wait before the
+                // task coordinator starts. Keep separately saved manual Done.
+                if workspace.doneAt == nil {
+                    _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: doneAt))
+                }
+            } else if droppedOldRequest || record.cleanup?.kind == .merge {
+                _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
+            }
+        }
+        records.updateEach { record in
+            guard record.release != nil else { return }
+            if record.release?.preparationPullRequestURL == nil {
+                Self.resetReleaseMerge(&record)
+            }
+            if record.cleanup?.kind == .merge { record.cleanup = nil }
+        }
+    }
+
+    private static func resetReleaseMerge(_ record: inout TaskRecord) {
+        record.mergedAt = nil
+        record.mergeCommit = nil
+        record.mergeTarget = nil
+        record.mergeRequestedAt = nil
+        record.mergeCancelledAt = nil
+        record.mergeFailure = nil
+        record.droppedMergeCleanupPullRequestURL = nil
+    }
+
     // MARK: - Release
 
     /// `task.release`: makes a release task for a project. Its agent starts

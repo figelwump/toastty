@@ -313,6 +313,9 @@ exists, omit color or repeat the claim; attempting to replace it fails. Examples
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
   `url=<verified GitHub pull URL>` when available. Use `PR #<number>` for all
   pull request chips, including primary annotations in task space rows.
+  Pass the exact `--workspace` ID to set or clear this key. For a release's
+  preparation pull request, set the key from a managed session in that
+  release task's own space.
   Toastty reads a task's pull request only from a `github-pr` URL of the form
   `https://github.com/<owner>/<repo>/pull/<number>`. For a pull or merge
   request on another host, use another key, such as `merge-request`; Toastty

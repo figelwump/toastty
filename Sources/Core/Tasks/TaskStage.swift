@@ -157,7 +157,7 @@ public enum TaskStage: Equatable, Sendable {
         children: () -> TaskChildrenOutcome? = { nil }
     ) -> (stage: TaskStage, finishedThroughChildren: Bool) {
         let own = ownStage(facts, live: live, releaseTagsConfigured: releaseTagsConfigured)
-        guard facts.hasWorktree == false, live.hasPullRequestLink == false, live.pullRequest == nil,
+        guard facts.isRelease == false, facts.hasWorktree == false, live.hasPullRequestLink == false, live.pullRequest == nil,
               facts.waitsOutside == false else {
             return (own, false)
         }
@@ -284,6 +284,7 @@ public struct TaskStageFacts: Equatable, Sendable {
     public var hasTaskSpace: Bool
     /// Whether the task has, or is making, a worktree of its own.
     public var hasWorktree: Bool
+    /// A preparation PR can merge while the release still has work to do.
     public var isRelease: Bool
     public var readyForReviewAt: Date?
     /// When the agent marked that it waits for the user's reply.

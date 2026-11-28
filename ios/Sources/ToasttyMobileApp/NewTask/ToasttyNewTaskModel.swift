@@ -48,11 +48,12 @@ extension HomeScreenController: ToasttyNewTaskHost {}
 /// as soon as the Mac answers.
 ///
 /// While the Mac has a coordinator and takes messages for it, the sheet
-/// sends to it, as the Mac's panel does: Send is the main action, the
+/// sends to it, as the Mac's panel does: Send is the action, the
 /// Workspace and Agent pills start as Auto and leave the choice to the
 /// coordinator, and a pill the user sets goes with the message as their
-/// choice. Create still makes the task directly, with the values the pills
-/// start on for a pill left on Auto.
+/// choice. Once the user sets both pills, the action becomes Create, which
+/// makes the task directly. A value the user did not choose is never used
+/// for a create.
 @MainActor
 @Observable
 final class ToasttyNewTaskModel: Identifiable {
@@ -77,8 +78,8 @@ final class ToasttyNewTaskModel: Identifiable {
     static let unrecognizedSendAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the coordinator on the Mac before you send again, and update Toastty Mobile."
     static let autoTitle = "Auto"
     static let unrecognizedAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the Mac before you try again, and update Toastty Mobile."
-    static let textTooLongMessage = "That task is too long to send. Shorten it and tap Create again."
-    static let attachmentsTooLargeMessage = "That task and its attachments are too large to send. Shorten the task or remove a file, then tap Create again."
+    static let textTooLongMessage = "That task is too long to send. Shorten it and try again."
+    static let attachmentsTooLargeMessage = "That task and its attachments are too large to send. Shorten the task or remove a file, then try again."
     static let attachmentsUnsupportedMessage = "Update Toastty on your Mac to attach files."
     static let invalidModelMessage = "That isn't a model ID the Mac can use. Use one word with no spaces that doesn't start with a dash."
 
@@ -118,7 +119,7 @@ final class ToasttyNewTaskModel: Identifiable {
     /// result and sends nothing new.
     @ObservationIgnored private var unconfirmedSendRequestID: String?
     /// The workspace and preset the pills started on. A pill set back to
-    /// Auto goes back to them, for a direct create.
+    /// Auto goes back to them.
     @ObservationIgnored private var startingWorkspaceID: UUID?
     @ObservationIgnored private var startingPreset: RemoteTaskPreset?
     /// Late import or options answers must not restore a canceled draft.
@@ -142,9 +143,17 @@ final class ToasttyNewTaskModel: Identifiable {
 
     // MARK: - Derived presentation
 
-    /// The sheet sends to the coordinator; Create is the second action.
+    /// The Mac has a coordinator that takes this sheet's messages.
     var sendsToCoordinator: Bool {
         coordinator != nil
+    }
+
+    /// The sheet's one action makes the task on the Mac, without the
+    /// coordinator: there is no coordinator, or the user set both the
+    /// Workspace and the Agent pill. While a pill shows Auto, the action
+    /// is Send and the coordinator chooses.
+    var createsDirectly: Bool {
+        sendsToCoordinator == false || (choseWorkspace && chosePreset)
     }
 
     /// The coordinator chooses the project: the user has not set the
@@ -177,7 +186,8 @@ final class ToasttyNewTaskModel: Identifiable {
     /// One line before a send when the message will wait, as the Mac's
     /// panel says it in its header.
     var coordinatorNote: String? {
-        guard let coordinator else { return nil }
+        // Create makes the task on the Mac; nothing waits for the coordinator.
+        guard let coordinator, createsDirectly == false else { return nil }
         switch coordinator.agent {
         case .notRunning:
             return "The coordinator is not running. Your message waits on your Mac until it starts."
@@ -271,13 +281,14 @@ final class ToasttyNewTaskModel: Identifiable {
     }
 
     var canCreate: Bool {
-        canSubmitDraft
+        createsDirectly
+            && canSubmitDraft
             && workspaces.contains { $0.id == workspaceID }
             && selectedAgent != nil
     }
 
     var canSend: Bool {
-        sendsToCoordinator && canSubmitDraft
+        sendsToCoordinator && createsDirectly == false && canSubmitDraft
     }
 
     /// The draft and the options allow a send or a create.
@@ -342,9 +353,12 @@ final class ToasttyNewTaskModel: Identifiable {
         switch outcome {
         case .loaded(let response):
             apply(response)
-            if errorMessage == Self.unreachableMessage { errorMessage = nil }
+            if errorMessage == Self.unreachableMessage || errorMessage == Self.sendUnreachableMessage {
+                errorMessage = nil
+            }
         case .unreachable:
-            errorMessage = Self.unreachableMessage
+            // Name the button the sheet shows now.
+            errorMessage = createsDirectly ? Self.unreachableMessage : Self.sendUnreachableMessage
         }
     }
 
@@ -380,8 +394,8 @@ final class ToasttyNewTaskModel: Identifiable {
         draftDidChange()
     }
 
-    /// Leaves the project to the coordinator. A direct create uses the
-    /// workspace the sheet started on.
+    /// Leaves the project to the coordinator. The pill's menu marks the
+    /// workspace the sheet started on again.
     func selectAutoWorkspace() {
         guard allowsEditing, sendsToCoordinator, choseWorkspace else { return }
         choseWorkspace = false
@@ -397,8 +411,8 @@ final class ToasttyNewTaskModel: Identifiable {
         draftDidChange()
     }
 
-    /// Leaves the agent, model and effort to the coordinator. A direct
-    /// create uses the preset the sheet started on.
+    /// Leaves the agent, model and effort to the coordinator. The pills
+    /// go back to the preset the sheet started on.
     func selectAutoAgent() {
         guard allowsEditing, sendsToCoordinator, chosePreset else { return }
         chosePreset = false

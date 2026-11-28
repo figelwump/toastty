@@ -21,7 +21,7 @@ enum ToasttyMarkdownSegment: Identifiable, Equatable {
             switch block.style {
             case .paragraph, .heading, .list, .blockQuote:
                 run.append(block)
-            case .code, .table:
+            case .code, .table, .offers:
                 if !run.isEmpty { segments.append(.text(run)) }
                 run = []
                 segments.append(.other(block))

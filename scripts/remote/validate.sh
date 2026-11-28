@@ -598,7 +598,7 @@ run_local_mode() {
     [[ -z "$SMOKE_TEST" ]] || smoke_env_identity="$(build_smoke_env_script "$SMOKE_TEST")"
     request_key="$(toastty_request_key validate "$ROOT_DIR" "$VALIDATION_SCOPE" "$source_identity" \
       "$(toastty_controller_identity)" "$REMOTE_REPO_ROOT" "$REMOTE_GUI_ROOT" "${TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS:-3600}" \
-      "$SMOKE_TEST" "$VALIDATION_COMMAND" "$SYNC_GHOSTTY_ARTIFACTS" "$smoke_env_identity")"
+      "$SMOKE_TEST" "$VALIDATION_COMMAND" "$SYNC_GHOSTTY_ARTIFACTS" "$smoke_env_identity" "$FULL_ARTIFACTS" "$KEEP_REMOTE")"
     if reattach_label="$(toastty_find_reattachable_run "$ROOT_DIR/artifacts/remote-gui" "$request_key" "$EXPLICIT_RUN_LABEL")" \
       && toastty_remote_run_reattachable "$REMOTE_GUI_ROOT/runs/$reattach_label"; then
       RUN_LABEL="$reattach_label"
@@ -688,6 +688,7 @@ REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
 $(declare -f toastty_mkdir_exclusive toastty_allocate_remote_run)
 toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$REMOTE_RUN_ROOT\"
+$(toastty_emit_cache_policy)
 "
   TOASTTY_METADATA_REMOTE_ALLOCATED=true
 
@@ -818,12 +819,19 @@ toastty_remove_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$R
 "; then
       TOASTTY_METADATA_REMOTE_REMOVED=true
     else
+      local removal_status=$?
       warn "Remote directory cleanup failed; inspect retained paths: $remote_run_root"
+      # 255 is an SSH failure: the run may be gone and its label reused.
+      [[ "$removal_status" == 255 ]] || toastty_remove_remote_run_caches "$remote_run_root" || true
       remote_validation_exit_code=1
       toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote directory cleanup failed; inspect retained paths" fail
     fi
   else
     warn "Retaining remote evidence: $remote_run_root"
+    if [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == "1" ]] \
+      && [[ -e "$LOCAL_ARTIFACTS_DIR/remote/EXECUTION_FINISHED" || -e "$LOCAL_ARTIFACTS_DIR/remote/detached-exit.json" ]]; then
+      toastty_remove_remote_run_caches "$remote_run_root" || true
+    fi
   fi
 
   if [[ "$remote_validation_exit_code" != "0" ]]; then

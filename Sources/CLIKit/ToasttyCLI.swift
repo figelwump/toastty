@@ -96,7 +96,10 @@ enum CLICommand: Equatable {
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case setup(SetupCommand)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
-    case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
+    case sessionStatus(
+        sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?,
+        claudeFableQuotaSessionID: String? = nil
+    )
     case sessionBackgroundActivity(
         sessionID: String,
         panelID: UUID?,
@@ -264,13 +267,16 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
-        case .sessionStatus(let sessionID, let panelID, let kind, let summary, let detail):
+        case .sessionStatus(let sessionID, let panelID, let kind, let summary, let detail, let quotaSessionID):
             var payload: [String: AutomationJSONValue] = [
                 "kind": .string(kind.rawValue),
                 "summary": .string(summary),
             ]
             if let detail {
                 payload["detail"] = .string(detail)
+            }
+            if let quotaSessionID {
+                payload["claudeFableQuotaSessionID"] = .string(quotaSessionID)
             }
             return AutomationEventEnvelope(
                 eventType: "session.status",
@@ -675,7 +681,7 @@ enum CLICommand: Equatable {
         case .sessionStart(let sessionID, _, _, _, _):
             let resolvedSessionID = response.result?.string("sessionID") ?? sessionID
             return resolvedSessionID
-        case .sessionStatus(let sessionID, _, let kind, let summary, _):
+        case .sessionStatus(let sessionID, _, let kind, let summary, _, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
         case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _, _):
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
@@ -1176,10 +1182,11 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir> | --new-project <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
+      toastty [--json] [--socket-path <path>] task recover-fable <task-id> --session <session-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
       toastty [--json] [--socket-path <path>] task set-release [<task-id>] (--after-merge | --clear)
       toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
@@ -1188,14 +1195,16 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
-      toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>]
+      toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>] [--approval]
+      toastty [--json] [--socket-path <path>] task needs-reply --fleet-version <version> --fleet-targets <id,id>
+      toastty [--json] [--socket-path <path>] task answer <task-id> <question-id> <approve|decline> --webhook <id> < signature.txt
       toastty [--json] [--socket-path <path>] task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
       toastty [--json] [--socket-path <path>] task release-complete --text-file <report.json>
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>] [--name <project>]
-      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer] [--from <name>]
+      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--queue] [--from <name>]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
@@ -2337,7 +2346,7 @@ public enum ToasttyCLI {
                 valueOptions: [
                     "--text", "--file", "--workspace", "--agent", "--model", "--effort",
                     "--prompt", "--prompt-file", "--title", "--slug", "--request-id", "--timeout",
-                    "--base", "--branch-prefix", "--root", "--external-ref", "--external-url",
+                    "--base", "--branch-prefix", "--root", "--new-project", "--external-ref", "--external-url",
                 ],
                 flagOptions: ["--wait", "--start-work", "--fork"]
             )
@@ -2379,6 +2388,13 @@ public enum ToasttyCLI {
                     throw ToasttyCLIError.usage("pass --workspace or --root, not both\n\n\(usage)")
                 }
                 args["rootDirectory"] = .string(absolutePath(root))
+            }
+            if let folder = parsed.singleValue("--new-project") {
+                guard parsed.singleValue("--workspace") == nil, parsed.singleValue("--root") == nil else {
+                    throw ToasttyCLIError.usage("pass one of --workspace, --root or --new-project\n\n\(usage)")
+                }
+                args["rootDirectory"] = .string(absolutePath(folder))
+                args["newProject"] = .bool(true)
             }
             if parsed.singleValue("--external-url") != nil, parsed.singleValue("--external-ref") == nil {
                 throw ToasttyCLIError.usage("--external-url needs --external-ref\n\n\(usage)")
@@ -2454,6 +2470,17 @@ public enum ToasttyCLI {
         case "get" where remaining.isEmpty:
             // A task's agent reads its own task.
             return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.get", args: [:]))
+
+        case "recover-fable":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--session"])
+            guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil,
+                  let sessionID = parsed.singleValue("--session"), !sessionID.isEmpty else {
+                throw ToasttyCLIError.usage("task recover-fable requires a task ID and --session <session-id>\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.recover-fable", args: [
+                "taskID": .string(taskID),
+                "expectedSessionID": .string(sessionID),
+            ]))
 
         case "get", "retry", "delete":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
@@ -2607,10 +2634,12 @@ public enum ToasttyCLI {
         case "merge", "cancel-merge", "ready-for-review", "needs-reply":
             let valueOptions: Set<String> = switch verb {
             case "merge": ["--head"]
-            case "needs-reply": ["--question"]
+            case "needs-reply": ["--question", "--fleet-version", "--fleet-targets"]
             default: []
             }
-            let parsed = try parseCommandArguments(remaining, valueOptions: valueOptions)
+            let parsed = try parseCommandArguments(
+                remaining, valueOptions: valueOptions, flagOptions: verb == "needs-reply" ? ["--approval"] : []
+            )
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task \(verb) takes at most one task ID\n\n\(usage)")
             }
@@ -2627,7 +2656,28 @@ public enum ToasttyCLI {
             if let question = parsed.singleValue("--question") {
                 args["question"] = .string(question)
             }
+            if parsed.hasFlag("--approval") { args["approval"] = .bool(true) }
+            if let version = parsed.singleValue("--fleet-version") { args["fleetVersion"] = .string(version) }
+            if let targets = parsed.singleValue("--fleet-targets") { args["fleetTargets"] = .string(targets) }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
+
+        case "answer":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--webhook"])
+            guard parsed.positionals.count == 3,
+                  UUID(uuidString: parsed.positionals[0]) != nil, UUID(uuidString: parsed.positionals[1]) != nil,
+                  ["approve", "decline"].contains(parsed.positionals[2]),
+                  let webhook = parsed.singleValue("--webhook"), UUID(uuidString: webhook) != nil else {
+                throw ToasttyCLIError.usage("task answer requires a task ID, question ID, approve or decline, --webhook, and a signature on stdin\n\n\(usage)")
+            }
+            let data = FileHandle.standardInput.readDataToEndOfFile()
+            guard data.count <= 66, let signature = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .newlines), signature.utf8.count == 64 else {
+                throw ToasttyCLIError.usage("task answer requires a 64-character hex signature on stdin")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.answer", args: [
+                "taskID": .string(parsed.positionals[0]), "questionID": .string(parsed.positionals[1]),
+                "decision": .string(parsed.positionals[2]), "webhookID": .string(webhook), "signature": .string(signature),
+            ]))
 
         case "clean-up", "mark-done", "request-merge":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])
@@ -2682,7 +2732,9 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release-complete", args: ["report": .string(report)]))
 
         case "send":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file", "--from"], flagOptions: ["--steer"])
+            let parsed = try parseCommandArguments(
+                remaining, valueOptions: ["--text", "--text-file", "--from"], flagOptions: ["--steer", "--queue"]
+            )
             guard let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
                 throw ToasttyCLIError.usage("task send requires a task ID\n\n\(usage)")
             }
@@ -2698,8 +2750,16 @@ public enum ToasttyCLI {
                 text = try textFileContents(file, environment: environment)
             }
             var args: [String: AutomationJSONValue] = ["taskID": .string(taskID), "text": .string(text)]
+            guard parsed.hasFlag("--steer") == false || parsed.hasFlag("--queue") == false else {
+                throw ToasttyCLIError.usage("task send takes --steer or --queue, not both\n\n\(usage)")
+            }
+            // `--steer` names the default. It is still passed on, so that an
+            // older app checks the agent before it types.
             if parsed.hasFlag("--steer") {
                 args["steer"] = .bool(true)
+            }
+            if parsed.hasFlag("--queue") {
+                args["queue"] = .bool(true)
             }
             if let from = parsed.singleValue("--from") {
                 args["from"] = .string(from)

@@ -44,7 +44,12 @@ final class LiveConversationController {
     let conversationID: UUID
 
     private(set) var events: [CompatibleConversationEvent] = []
-    private(set) var phase: LiveConversationPhase = .idle
+    private(set) var phase: LiveConversationPhase = .idle {
+        didSet { if phase != oldValue { onPhaseChange() } }
+    }
+    /// The chat's header shows the connection from this phase too.
+    @ObservationIgnored
+    var onPhaseChange: @MainActor () -> Void = {}
     private(set) var runtimePhase: ConversationRuntimePhase = .idle
     private(set) var change: LiveConversationChange = .initial
     private(set) var cursor: ConversationEventCursor?
@@ -101,6 +106,13 @@ final class LiveConversationController {
     /// The entries of the coordinator's own queue whose last Remove the
     /// Mac answered `failed`: their rows say that they still wait.
     private(set) var coordinatorRemoveFailures: Set<String> = []
+    /// The user's answers to the coordinator's offers, for the offer cards
+    /// of the coordinator's chat: those in the conversation and those of
+    /// the messages that wait. Empty in other chats.
+    private(set) var offerAnswers = ToasttyOfferAnswers()
+    /// The answers in the conversation alone, as of the last change of its
+    /// events.
+    private var conversationOfferAnswers = ToasttyOfferAnswers()
     /// The app is active. The chat is on screen while this controller
     /// exists: it closes when another screen covers it.
     private var isSceneActive = true
@@ -785,9 +797,14 @@ final class LiveConversationController {
                 isLoadingOlder: isLoadingOlder,
                 prependAnchorID: prependAnchorID
             )
+            updateOfferAnswers()
             updateChatReading()
             return
         }
+        conversationOfferAnswers = isCoordinatorChat
+            ? ToasttyConversationPresentationAdapter.offerAnswers(events: events)
+            : ToasttyOfferAnswers()
+        updateOfferAnswers()
         transcriptPresentation = ToasttyConversationPresentationAdapter.makeState(
             events: events,
             projectionRunID: projectionRunID,
@@ -805,6 +822,28 @@ final class LiveConversationController {
                 : nil
         )
         updateChatReading()
+    }
+
+    /// An answer counts from the tap on Send answers, as on the Mac. Its
+    /// message waits among this phone's sends, and in the conversation's
+    /// queue on the Mac while the coordinator works; both hold the text as
+    /// sent. A send that failed, and a waiting message that the user
+    /// removed, give the cards their buttons back. The coordinator's own
+    /// queue holds display text only, so answers sent from the Mac count
+    /// here once the conversation shows them.
+    private func updateOfferAnswers() {
+        var waiting: [String] = []
+        if isCoordinatorChat {
+            waiting = sendReconciliationForPresentation.records.compactMap { record in
+                switch record.deliveryState {
+                case .pending, .confirmed: record.text
+                case .rejected, .uncertain, .operationFailed, .deliveryUnconfirmed: nil
+                }
+            }
+            waiting += inputControl?.queuedMessages.map(\.text) ?? []
+        }
+        let next = conversationOfferAnswers.adding(waitingMessages: waiting)
+        if next != offerAnswers { offerAnswers = next }
     }
 
     // MARK: - The coordinator chat's read point

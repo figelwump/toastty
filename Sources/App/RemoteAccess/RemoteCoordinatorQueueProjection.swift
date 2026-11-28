@@ -37,7 +37,7 @@ enum RemoteCoordinatorQueueProjection {
             quote = replyQuote
             quoteTime = time
             text = CoordinatorMessageHeader.displayText(of: entry.text)
-        case .digest, .quickEntry, .plain:
+        case .digest, .quickEntry, .answers, .plain:
             text = CoordinatorMessageHeader.displayText(of: entry.text)
         }
         // Toastty's list of attached files names each copy by its path. A

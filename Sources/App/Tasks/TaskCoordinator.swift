@@ -92,6 +92,62 @@ struct TaskSessionInfo: Equatable {
     var turnStartedAt: Date? = nil
     /// The provider transcript Toastty confirmed for the session.
     var transcriptPath: String? = nil
+    /// When the agent's latest turn started: the running turn, or the last
+    /// one that ended. When the session started, if it had no turn since
+    /// Toastty started. A turn starts when the prompt is submitted, so text
+    /// typed before this time is not in the prompt any more.
+    var latestTurnStartedAt: Date? = nil
+}
+
+/// What Toastty sees at a task agent's prompt, apart from the status that
+/// the agent's hooks report.
+struct TaskPromptView: Equatable {
+    /// A permission prompt, a question or a dialog of the agent waits for
+    /// an answer. Typed text and its Return could answer it.
+    var showsInteraction = false
+    /// Set when the conversation that Toastty follows shows the prompt open
+    /// with nothing typed at it: the time since when Toastty followed the
+    /// panel. For a turn that started after that time, the conversation saw
+    /// the typing, and it opens the prompt again only when the agent
+    /// recorded the typed text.
+    var openPromptFollowedSince: Date? = nil
+}
+
+/// What can be at a task agent's prompt that a message Toastty types, and
+/// its Return, would join or answer.
+enum TaskPromptOccupant: Equatable {
+    /// A permission prompt, a question or a dialog of the agent.
+    case interaction
+    /// Text that a person typed, or sent from Toastty Mobile, after the
+    /// agent's latest turn started.
+    case typedText
+    /// A message that Toastty typed without a confirmed Return.
+    case unconfirmedMessage
+}
+
+/// What shows that a task's agent rests at its prompt, for a message that
+/// Toastty types there (`TaskCoordinator.automaticPromptTurnEnd`).
+enum TaskPromptRest {
+    /// The agent's hooks report idle or ready. For Toastty's own lines and
+    /// `--queue` messages, which Toastty types on that report alone.
+    case reported
+    /// The same, or the hooks report that an error ended the turn. For a
+    /// `task send` message that waited, which also reaches an agent that
+    /// stopped.
+    case reportedOrStopped
+    /// The conversation that Toastty follows shows the prompt open, and the
+    /// hooks report no turn. For a `task send` that types through that
+    /// conversation. A session that reported no status yet counts, such as
+    /// one that Toastty restored after a relaunch.
+    case shownByConversation
+
+    func holds(for kind: SessionStatusKind?) -> Bool {
+        switch self {
+        case .reported: kind == .idle || kind == .ready
+        case .reportedOrStopped: kind == .idle || kind == .ready || kind == .error
+        case .shownByConversation: kind != .working && kind != .needsApproval
+        }
+    }
 }
 
 /// The session side of moving a task into its worktree. A protocol so tests
@@ -111,13 +167,21 @@ protocol TaskSessionProviding: AnyObject {
     /// The managed agent sessions running in a workspace now.
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo]
     /// Types `text` into the panel and submits it, as `terminal.send-text`
-    /// does. A busy agent queues it as typed input.
+    /// does, with no check of the agent's state: for a prompt that the
+    /// caller found open (`TaskCoordinator.automaticPromptTurnEnd`).
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
     /// Gives `text` to the agent in the panel under Toastty's input checks,
-    /// for `task send --steer`: typed at an open prompt, typed into a
-    /// running turn that can read it, or held for the next open prompt.
-    /// Nothing is typed into a permission prompt or a question.
-    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure>
+    /// for `task send`: typed at an open prompt, typed into a running turn
+    /// that can read it, or not typed (`.mustWait`), for the next open
+    /// prompt. Nothing is typed into a permission prompt or a question.
+    /// `mayType`: see `TaskSteerSender.send`.
+    func deliverSteering(
+        _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
+    ) async -> Result<TaskSteerDelivery, TaskSteerFailure>
+    /// When `deliverSteering` last typed into the panel. A prompt that it
+    /// typed at after the turn ended is taken, also while the agent's hooks
+    /// still report it open.
+    func lastSteerTypedAt(panelID: UUID) -> Date?
     /// The session's latest agent message, read from its transcript.
     func lastReply(sessionID: String) -> TaskAgentReply?
     /// The managed session's workspace scope; `nil` when it is unscoped or
@@ -131,21 +195,31 @@ protocol TaskSessionProviding: AnyObject {
     /// or sent it a message from Toastty Mobile. Text that Toastty or the
     /// CLI typed, such as `task send`, does not count.
     func lastUserInputAt(panelID: UUID) -> Date?
-    /// Whether the tracked conversation reports an interaction or a user draft.
-    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool
+    /// When text last went into the agent's prompt in the panel from
+    /// outside the task system, and can still be there: a person's typing
+    /// while the agent did not wait for an approval or an answer, a phone
+    /// message, or a delivery without a confirmed Return.
+    func lastPromptInputAt(panelID: UUID) -> Date?
+    /// What the agent's dialogs and its followed conversation show at its
+    /// prompt now.
+    func promptView(in session: TaskSessionInfo) -> TaskPromptView
 }
 
 extension TaskSessionProviding {
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
-    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
-        .failure(.stateUnknown)
+    func deliverSteering(
+        _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
+    ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+        .success(.mustWait)
     }
+    func lastSteerTypedAt(panelID: UUID) -> Date? { nil }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
     func lastUserInputAt(panelID: UUID) -> Date? { nil }
-    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool { false }
+    func lastPromptInputAt(panelID: UUID) -> Date? { nil }
+    func promptView(in session: TaskSessionInfo) -> TaskPromptView { TaskPromptView() }
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -166,6 +240,9 @@ struct TaskCreateRequest: Equatable {
     /// workspace on it, or a new one that Toastty opens once every other
     /// check passed.
     var rootDirectory: String?
+    /// `rootDirectory` names a folder that is missing or empty, which
+    /// Toastty makes into a new git repository before it creates the task.
+    var newProject = false
     /// The issue or report the task came from. Its URL needs its ID.
     var externalRefID: String?
     var externalRefURL: String?
@@ -281,6 +358,8 @@ final class TaskCoordinator {
     /// The same for moves into a worktree.
     var startWorkAttempts: [UUID: UUID] = [:]
     var startWorkTasks: [UUID: Task<Void, Never>] = [:]
+    /// The folders that creates are making into new projects now.
+    var newProjectsInProgress: Set<String> = []
 
     /// Saves the workspace layout at once. Setup calls it after it makes or
     /// unlinks a task space, so the layout on disk never lags a record that
@@ -308,6 +387,8 @@ final class TaskCoordinator {
     var closeFinishedTaskSpace: ((_ workspaceID: UUID, _ previousStage: TaskStage?) -> Bool)?
     /// Merge prompts waiting for an agent's input to be ready.
     var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
+    var recoveringFableTasks: Set<UUID> = []
+    var recoveringFableTaskPanels: [UUID: UUID] = [:]
     /// Archives and release cleanups running in the background.
     var cleanupTasks: [UUID: Task<Void, Never>] = [:]
     var isCheckingReleases = false
@@ -317,6 +398,9 @@ final class TaskCoordinator {
     /// By session ID, the completed turn whose prompt an automatic message
     /// or uncertain send used. Automatic messages wait for a new prompt.
     var automaticPromptDeliveryTurnEnds: [String: Date] = [:]
+    /// By session ID, when Toastty last typed a message without a confirmed
+    /// Return. Its text can be in the prompt until a turn starts after it.
+    var unconfirmedDeliveryTimes: [String: Date] = [:]
     /// Sends the wakes of `task waiting` marks when their time comes.
     var wakeMonitor: Task<Void, Never>?
     /// When to try a due wake again after its agent could not take it.
@@ -381,11 +465,22 @@ final class TaskCoordinator {
         caller: TaskCaller = .unmanaged,
         beforeSave: (@MainActor () throws -> Void)? = nil
     ) async throws -> TaskRecord {
-        try await finishCreate(try prepareCreate(request, caller: caller), beforeSave: beforeSave)
+        let (request, made) = try await makeNewProjectIfRequested(request, caller: caller)
+        let preparation: TaskCreatePreparation
+        do {
+            preparation = try prepareCreate(request, caller: caller)
+        } catch {
+            removeNewProject(made)
+            throw error
+        }
+        return try await finishCreate(preparation, beforeSave: beforeSave)
     }
 
     /// Every check that needs app state, done before any file is copied.
     func prepareCreate(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) throws -> TaskCreatePreparation {
+        guard request.newProject == false else {
+            throw TaskError("Make the new project with makeNewProjectIfRequested before the other checks.")
+        }
         let source = caller.source
         let clientRequestID = try validatedClientRequestID(request.clientRequestID)
         // Request IDs belong to their caller, so one caller cannot read
@@ -1152,6 +1247,7 @@ final class TaskCoordinator {
             }
         }
         relinkTaskSpaces()
+        reconcileReleaseMerges()
         for workspace in store.state.workspacesByID.values {
             guard let taskID = workspace.taskID, records.record(id: taskID) == nil else { continue }
             let parent = workspace.parentWorkspaceID.flatMap { store.state.workspacesByID[$0] }

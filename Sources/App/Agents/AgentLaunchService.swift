@@ -146,6 +146,8 @@ struct AgentLaunchProfileSummary: Equatable, Sendable {
 
 @MainActor
 final class AgentLaunchService: ManagedAgentLaunchPlanning {
+    weak var quotaRecoveryConversationAccess: (any LocalConversationAccess)?
+
     private static let asyncPromptReadinessTimeout: Duration = .seconds(1)
     private static let asyncPromptReadinessPollInterval: Duration = .milliseconds(25)
 
@@ -363,6 +365,255 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             }
         }
         return try completeLaunch(preparation, plan: plan)
+    }
+
+    /// Plans a managed launch of the profile in the panel as `launchAsync`
+    /// does, and types nothing: the caller runs the planned command itself,
+    /// as a process of Toastty's own (`DirectConversationSession`). The
+    /// session exists when this returns. A caller that does not run the
+    /// command discards the plan with `discardManagedLaunch`.
+    ///
+    /// With `resumeNativeSessionID`, the plan is the one of a restored
+    /// launch that goes on with that conversation: the panel keeps its
+    /// conversation, and the session gets `scopedWorkspaceIDs` as its
+    /// workspace scope, as the saved conversation had it.
+    func planLaunchWithoutTerminal(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        environment: [String: String],
+        model: String?,
+        reasoningEffort: String?,
+        resumeNativeSessionID: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil
+    ) async throws -> ManagedAgentLaunchPlan {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            initialPrompt: nil,
+            initialCommands: [],
+            forkFromSessionID: nil,
+            additionalDirectories: [],
+            parentSessionID: nil,
+            focusPolicy: .preserveFirstResponder,
+            validatePromptState: false
+        )
+        guard let resumeNativeSessionID else {
+            return try await managedLaunchPlanner.prepareManagedLaunchAsync(
+                preparation.request,
+                inheritedScopedWorkspaceIDs: nil
+            )
+        }
+        var argv = preparation.request.argv
+        argv.insert(
+            contentsOf: ["--resume", resumeNativeSessionID],
+            at: min(argv.count, ManagedAgentCommandResolver.launchInsertionIndex(for: preparation.agent, argv: argv) + 1)
+        )
+        return try managedLaunchPlanner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: preparation.request.agent,
+                panelID: preparation.request.panelID,
+                argv: argv,
+                cwd: preparation.request.cwd,
+                environment: preparation.request.environment
+            ),
+            inheritedScopedWorkspaceIDs: scopedWorkspaceIDs
+        )
+    }
+
+    /// Prepare the new CLI before retiring the old process. Recheck the
+    /// caller's turn and input facts after the last suspension. No input
+    /// goes to the Claude process that is being replaced.
+    func resumeClaudeAfterQuota(
+        source: SessionRecord,
+        nativeID: UUID,
+        model: String,
+        effort: String?,
+        environment: [String: String] = [:],
+        isStillEligible: @MainActor () -> Bool,
+        adoptPanel: @MainActor (UUID, String) throws -> Void
+    ) async throws -> AgentLaunchResult {
+        guard let store, let terminalCommandRouter,
+              let workspace = store.state.workspacesByID[source.workspaceID],
+              let tabID = workspace.tabID(containingPanelID: source.panelID),
+              let tab = workspace.tab(id: tabID),
+              case .terminal(let previous)? = tab.panels[source.panelID],
+              let resumeRecord = previous.resumeRecord,
+              resumeRecord.agent == .claude, UUID(uuidString: resumeRecord.nativeSessionID) == nativeID,
+              let binding = sessionRuntimeStore?.nativeSessionBindingConfirmation(for: source.sessionID),
+              binding.panelID == source.panelID, binding.sessionFilePath == resumeRecord.sessionFilePath,
+              let cwd = try normalizedExplicitWorkingDirectory(resumeRecord.cwd),
+              FileManager.default.fileExists(atPath: resumeRecord.sessionFilePath),
+              let permissionMode = claudeRecoveryPermissionMode(source: source),
+              isStillEligible() else {
+            throw TaskError("Claude's stopped conversation is not ready for model recovery.")
+        }
+        guard store.send(.splitPanel(
+            workspaceID: source.workspaceID, tabID: tabID, panelID: source.panelID,
+            direction: .right, profileBinding: nil, activate: false, useDefaultProfile: false
+        )), let currentTab = store.state.workspacesByID[source.workspaceID]?.tab(id: tabID),
+            let panelID = currentTab.panels.keys.first(where: { tab.panels[$0] == nil }) else {
+            throw AgentLaunchError.workspaceHasNoTerminalPanel
+        }
+        var preparedSessionID: String?
+        var adopted = false
+        defer {
+            if !adopted {
+                if let preparedSessionID { managedLaunchPlanner.discardManagedLaunch(sessionID: preparedSessionID) }
+                if sessionRuntimeStore?.lastLocalInputAt(panelID: panelID) == nil,
+                   sessionRuntimeStore?.sessionRegistry.activeSession(for: panelID) == nil,
+                   terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt {
+                    _ = store.send(.closePanel(panelID: panelID, preservesTabSelection: true))
+                }
+            }
+        }
+        var launchEnvironment = environment
+        if model == ClaudeFableQuota.fallbackModel {
+            // Claude Code reads this ahead of --effort. Keep the override
+            // local to the fallback process, including when the shell has
+            // a different default.
+            launchEnvironment["CLAUDE_CODE_EFFORT_LEVEL"] = ClaudeFableQuota.fallbackEffort
+        }
+        var preparation = try makeLaunchPreparation(
+            profileID: AgentKind.claude.rawValue, workspaceID: source.workspaceID, panelID: panelID,
+            cwd: cwd, environment: launchEnvironment, model: model, reasoningEffort: effort,
+            initialPrompt: nil, initialCommands: [], forkFromSessionID: nil, additionalDirectories: [],
+            parentSessionID: source.parentSessionID, focusPolicy: .preserveFirstResponder,
+            validatePromptState: false
+        )
+        let request = preparation.request
+        preparation.request = ManagedAgentLaunchRequest(
+            agent: request.agent, panelID: request.panelID,
+            argv: try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
+                nativeID: nativeID, permissionMode: permissionMode, to: request.argv
+            ),
+            cwd: request.cwd, environment: request.environment, parentSessionID: request.parentSessionID
+        )
+        try await ensurePanelBecomesInteractive(panelID: panelID, terminalCommandRouter: terminalCommandRouter)
+        let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
+            preparation.request, inheritedScopedWorkspaceIDs: source.scopedWorkspaceIDs
+        )
+        preparedSessionID = plan.sessionID
+        try Task.checkCancellation()
+        try ensurePanelAppearsInteractive(panelID: panelID, terminalCommandRouter: terminalCommandRouter)
+        guard let currentSource = sessionRuntimeStore?.sessionRegistry.activeSession(for: source.panelID),
+              currentSource.sessionID == source.sessionID, currentSource.scopedWorkspaceIDs == source.scopedWorkspaceIDs,
+              sessionRuntimeStore?.lastLocalInputAt(panelID: panelID) == nil,
+              sessionRuntimeStore?.sessionRegistry.activeSession(for: panelID)?.sessionID == plan.sessionID,
+              sessionRuntimeStore?.nativeSessionBindingConfirmation(for: source.sessionID) == binding,
+              let currentTab = store.state.workspacesByID[source.workspaceID]?.tab(id: tabID),
+              case .terminal(let latest)? = currentTab.panels[source.panelID],
+              latest.resumeRecord == resumeRecord, currentTab.panels[panelID] != nil,
+              claudeRecoveryPermissionMode(source: source) == permissionMode,
+              isStillEligible() else {
+            throw TaskError("Claude's session or prompt changed while preparing model recovery.")
+        }
+        try adoptPanel(panelID, plan.sessionID)
+        adopted = true
+        guard store.send(.closePanel(panelID: source.panelID, preservesTabSelection: true)) else {
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw TaskError("Toastty could not retire the original Claude terminal.")
+        }
+        _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord))
+        _ = store.send(.updateTerminalPanelRemoteConversationID(panelID: panelID, remoteConversationID: latest.remoteConversationID))
+        // Keep the adopted pane and resume record even if launch fails.
+        return try completeLaunch(preparation, plan: plan)
+    }
+
+    func claudeRecoverySource(sessionID: String) -> SessionRecord? {
+        guard let source = sessionRuntimeStore?.sessionRegistry.activeSession(sessionID: sessionID),
+              source.agent == .claude else { return nil }
+        return source
+    }
+
+    /// A failed turn can be followed by a Claude dialog. Require the
+    /// conversation and the terminal to agree that the composer is empty.
+    func claudeRecoveryPromptIsFree(source: SessionRecord) -> Bool {
+        claudeRecoveryPermissionMode(source: source) != nil
+    }
+
+    private func claudeRecoveryPermissionMode(
+        source: SessionRecord
+    ) -> AgentLaunchArgumentOverrideAdapter.ClaudeQuotaRecoveryMode? {
+        guard let runtime = sessionRuntimeStore,
+              let session = runtime.sessionRegistry.activeSession(for: source.panelID),
+              session.sessionID == source.sessionID,
+              session.lastTurnEndedAt == source.lastTurnEndedAt,
+              session.turnStartedAt == nil,
+              session.status == source.status,
+              session.backgroundActivitiesByID.isEmpty, session.pendingBackgroundTaskCount == 0,
+              runtime.panelStatus(for: source.panelID)?.projection == SessionStatusProjection.none,
+              let turnEnd = session.lastTurnEndedAt,
+              (runtime.lastPromptInputAt(panelID: source.panelID) ?? .distantPast) <= turnEnd,
+              case .openPrompt? = quotaRecoveryConversationAccess?.inputAvailability(
+                  panelID: source.panelID, sessionID: source.sessionID
+              ),
+              let screen = terminalCommandRouter?.readVisibleText(panelID: source.panelID) else { return nil }
+        return Self.claudeRecoveryPermissionMode(screen: screen)
+    }
+
+    nonisolated static func claudeRecoveryPermissionMode(
+        screen: String
+    ) -> AgentLaunchArgumentOverrideAdapter.ClaudeQuotaRecoveryMode? {
+        let lines = TerminalVisibleTextSanitizer.sanitizedLines(screen)
+        guard let index = lines.lastIndex(where: { $0 == "❯" || $0 == ">" }),
+              lines.count - index <= 5, index > 0, index + 2 < lines.count else { return nil }
+        let top = lines[index - 1], bottom = lines[index + 1]
+        guard top.count >= 4, bottom.count >= 4,
+              top.allSatisfy({ $0 == "─" || $0 == "━" }),
+              bottom.allSatisfy({ $0 == "─" || $0 == "━" }) else { return nil }
+        guard lines.dropFirst(index + 2).allSatisfy({
+            !$0.localizedCaseInsensitiveContains("enter")
+                && !$0.localizedCaseInsensitiveContains("esc to")
+                && !$0.localizedCaseInsensitiveContains("background")
+                && !$0.localizedCaseInsensitiveContains("jump to bottom")
+        }) else { return nil }
+        // Hook payloads cannot select permissions. The live composer tells
+        // us when Plan must be carried forward. Every supported editing
+        // mode resumes in Manual, where Claude can still ask for approval.
+        let footer = lines[index + 2]
+        if footer.hasPrefix("⏸ plan mode on") { return .plan }
+        let manualOrEditingModes = ["⏸ manual mode on", "⏵⏵ accept edits on", "⏵⏵ auto mode on", "⏵⏵ don't ask on"]
+        return manualOrEditingModes.contains(where: { footer.hasPrefix($0) }) ? .manual : nil
+    }
+
+    func waitForRecoveredClaude(
+        _ launch: AgentLaunchResult, nativeID: UUID, model: String
+    ) async throws -> (any LocalConversationSubscription, RemoteConversationSummary) {
+        guard let subscription = quotaRecoveryConversationAccess?.subscribeToConversation(inPanel: launch.panelID) else {
+            throw TaskError("Toastty cannot follow Claude's recovered conversation.")
+        }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(25))
+        var confirmed = false
+        defer { if !confirmed { subscription.cancel() } }
+        while clock.now < deadline {
+            try Task.checkCancellation()
+            guard let current = claudeRecoverySource(sessionID: launch.sessionID) else { break }
+            if current.status?.kind == .error { break }
+            if let binding = sessionRuntimeStore?.nativeSessionBindingConfirmation(for: launch.sessionID),
+               binding.panelID == launch.panelID, UUID(uuidString: binding.nativeSessionID) == nativeID,
+               let feed = sessionRuntimeStore?.providerConversationFeed(managedSessionID: launch.sessionID),
+               feed.observations.contains(where: { observation in
+                   guard observation.fingerprint.hasPrefix("managed:claude:session-model:"),
+                         case .executionProfileReported(let profile) = observation.payload else { return false }
+                   return profile.modelIdentifier == model
+               }),
+               let summary = subscription.snapshot(at: nowProvider())?.summary,
+               summary.executionProfile?.modelIdentifier == model,
+               case .openPrompt = summary.inputAvailability {
+                confirmed = true
+                return (subscription, summary)
+            }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        throw TaskError("Claude did not confirm the resumed conversation, model and open prompt.")
     }
 
     private func makeLaunchPreparation(
@@ -1161,5 +1412,5 @@ private struct AgentLaunchPreparation {
     let focusPolicy: TerminalInputFocusPolicy
     let forkFromSessionID: String?
     let forkRecord: ManagedAgentResumeRecord?
-    let request: ManagedAgentLaunchRequest
+    var request: ManagedAgentLaunchRequest
 }

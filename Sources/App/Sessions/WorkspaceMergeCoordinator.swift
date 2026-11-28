@@ -213,7 +213,7 @@ final class WorkspaceMergeCoordinator {
         /// `head` is the commit that was to merge and `base` its target
         /// branch, when they are known.
         case mergeFailed(reason: String, cause: TaskMergeFailure.Cause, head: String?, base: String?)
-        /// GitHub reported the merge; cleanup starts next. Sent before
+        /// GitHub reported the merge. Sent before
         /// anything is closed, so the merge is recorded first.
         case merged(TaskPullRequestState?)
         case cleaned(detail: String)
@@ -318,7 +318,7 @@ final class WorkspaceMergeCoordinator {
     // MARK: - Requests
 
     /// Merges the pull request, or turns on auto-merge, and marks the
-    /// workspace done. With `thenCleanUp`, the request then waits for the
+    /// workspace done, except for release preparation. With `thenCleanUp`, the request then waits for the
     /// merge and cleans up after it. A refusal changes nothing; it is
     /// reported to the task through `cleanupObserver` and as a notification.
     /// With `expectedHead`, the merge is refused unless the checkout's
@@ -330,10 +330,13 @@ final class WorkspaceMergeCoordinator {
         pullRequest: WorkspacePullRequestLink,
         repoPath: String,
         thenCleanUp: Bool,
+        releasePreparation: Bool = false,
         expectedHead: String? = nil
     ) -> Task<MergeAnswer, Never>? {
         guard requests[workspaceID]?.isRunning != true else { return nil }
-        let request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .merging(thenCleanUp: thenCleanUp))
+        let thenCleanUp = thenCleanUp && !releasePreparation
+        var request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .merging(thenCleanUp: thenCleanUp))
+        if releasePreparation { request.releasePreparation = true }
         update(workspaceID, request)
         return Task { [weak self] in
             await self?.runMerge(
@@ -380,6 +383,13 @@ final class WorkspaceMergeCoordinator {
 
     func request(workspaceID: UUID) -> WorkspaceMergeRequest? {
         requests[workspaceID]
+    }
+
+    /// Prevent a release's pre-upgrade request from acting on its checkout.
+    func discardReleaseMergeCleanup(workspaceID: UUID) -> Bool {
+        guard let request = requests[workspaceID], request.releasePreparation != true else { return false }
+        update(workspaceID, nil)
+        return true
     }
 
     /// Whether the pull request script runs for the workspace now. A waiting
@@ -507,7 +517,7 @@ final class WorkspaceMergeCoordinator {
         // would read as finished work once the task no longer shows a merge,
         // so it goes first, as when a waiting merge stops. A mark set again
         // after new work cleared it is the user's own.
-        if reason == .pullRequestChanged {
+        if reason == .pullRequestChanged, request.releasePreparation != true {
             store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
         }
         reportUnmergedWait(
@@ -655,7 +665,9 @@ final class WorkspaceMergeCoordinator {
         // it by hand ends a waiting merge. New work clears it only after the
         // merge, which ends a pending cleanup; while the merge waits, the
         // script checks the accepted commit instead.
-        store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        if request.releasePreparation != true {
+            store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        }
         var next = request
         if isWaiting {
             next.acceptedBase = outcome.base
@@ -680,6 +692,7 @@ final class WorkspaceMergeCoordinator {
             update(workspaceID, next)
         } else {
             update(workspaceID, nil)
+            recordReleasePreparationMerge(workspaceID, request: request, outcome: outcome)
         }
         return .merged
     }
@@ -729,7 +742,11 @@ final class WorkspaceMergeCoordinator {
             return await checkPullRequest(workspaceID: workspaceID)
         case "merged":
             pollTasks[workspaceID] = nil
+            let replaced = pendingDrops[workspaceID] != nil
             update(workspaceID, nil)
+            if !replaced {
+                recordReleasePreparationMerge(workspaceID, request: request, outcome: outcome)
+            }
             notify("Merged \(pullRequest)", outcome.detail)
             return false
         case "refused":
@@ -776,11 +793,25 @@ final class WorkspaceMergeCoordinator {
         _ workspaceID: UUID, pullRequest: String, reason: String, cause: TaskMergeFailure.Cause,
         head: String, base: String?
     ) {
+        let releasePreparation = requests[workspaceID]?.releasePreparation == true
         pollTasks[workspaceID] = nil
         update(workspaceID, nil)
-        store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
+        if !releasePreparation {
+            store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
+        }
         report(workspaceID, .mergeFailed(reason: reason, cause: cause, head: head, base: base))
         notify("\(pullRequest) was not merged", reason)
+    }
+
+    private func recordReleasePreparationMerge(
+        _ workspaceID: UUID, request: WorkspaceMergeRequest, outcome: ScriptOutcome
+    ) {
+        guard request.releasePreparation == true else { return }
+        let state = TaskPullRequestState(
+            state: .merged, headSHA: outcome.head, mergeCommit: outcome.mergeCommit, mergeTarget: outcome.mergeTarget
+        )
+        pullRequestStateCache?.store(state, for: request.pullRequest, observedAt: Date())
+        report(workspaceID, .merged(state))
     }
 
     /// Ends a merge the script refused, before anything changed. The task
@@ -1034,6 +1065,7 @@ final class WorkspaceMergeCoordinator {
             guard let context else {
                 return ScriptOutcome(status: nil, detail: "The task's recorded worktree metadata is unavailable. Cleanup stopped.")
             }
+            let releasePreparationArguments = request.releasePreparation == true ? ["--release-preparation"] : []
             let result = await runner.run(
                 arguments: [
                     "python3", scriptPath, action,
@@ -1041,7 +1073,7 @@ final class WorkspaceMergeCoordinator {
                     "--pr-url", request.pullRequest.url,
                     "--workspace", workspaceID.uuidString,
                     "--repo", context.directory,
-                ] + context.arguments + extraArguments,
+                ] + context.arguments + releasePreparationArguments + extraArguments,
                 directory: context.directory,
                 timeout: Self.scriptTimeout
             )
@@ -1073,6 +1105,8 @@ final class WorkspaceMergeCoordinator {
         var head: String?
         /// For a merge, the target branch accepted with that commit.
         var base: String?
+        var mergeCommit: String?
+        var mergeTarget: TaskMergeTarget?
         /// The script exited with an error, did not finish in time, or did
         /// not start, for example because `gh` could not reach GitHub.
         var endedWithoutReport = false
@@ -1088,9 +1122,15 @@ final class WorkspaceMergeCoordinator {
               let status = object["status"] as? String else {
             return ScriptOutcome(status: nil, detail: "The pull request script printed no report.")
         }
+        let mergeTarget: TaskMergeTarget? = if let base = object["base"] as? String, let releaseBranch = object["releaseBranch"] as? String {
+            TaskMergeTarget(baseBranch: base, releaseBranch: releaseBranch)
+        } else {
+            nil
+        }
         return ScriptOutcome(
             status: status, detail: object["detail"] as? String ?? status,
-            head: object["head"] as? String, base: object["base"] as? String
+            head: object["head"] as? String, base: object["base"] as? String,
+            mergeCommit: object["mergeCommit"] as? String, mergeTarget: mergeTarget
         )
     }
 
