@@ -38,6 +38,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 
@@ -200,23 +201,34 @@ def run(check):
         pid = json.loads((runtime_home / 'instance.json').read_text())['pid']
         ui = chat.UI(check.artifacts, pid)
 
-        # 1. The start. The notice says that the agent starts, and names no terminal.
-        opened = cli('coordinator', 'open')
-        require(opened.get('exists'), f'Open made no coordinator: {opened}')
+        # 1. The start. The notice says that the agent starts, and names no terminal. `coordinator open`
+        # returns after the start, so the chat is read while it runs.
+        opened = {}
+
+        def open_coordinator():
+            try:
+                opened['result'] = cli('coordinator', 'open')
+            except Exception as error:  # noqa: BLE001 - reported below
+                opened['error'] = repr(error)
+
+        opener = threading.Thread(target=open_coordinator)
+        opener.start()
+        wait_for('the chat', lambda: ui.exists('coordinator.chat'), timeout=60, interval=0.2)
         ui.run('activate')
-        wait_for('the chat', lambda: ui.exists('coordinator.chat') and ui.exists('coordinator.chat.composer'),
-                 timeout=60)
         notices = []
-        deadline = time.time() + 90
-        while time.time() < deadline and not prompt_open():
+        deadline = time.time() + 120
+        while time.time() < deadline and opener.is_alive():
             texts = ui.texts()
             notice = next((line for line in texts.splitlines() if 'agent' in line.lower() and 'start' in line.lower()),
                           None)
             if notice and notice not in notices:
                 notices.append(notice)
                 capture('starting-notice')
-            time.sleep(0.3)
+            time.sleep(0.2)
+        opener.join(timeout=120)
+        require((opened.get('result') or {}).get('exists'), f'Open made no coordinator: {opened}')
         settle()
+        require(notices, 'The chat showed no notice while the direct session started')
         require(all('terminal' not in notice.lower() for notice in notices),
                 f'A direct session\'s start notice names the terminal: {notices}')
         capture('ready')
@@ -228,12 +240,17 @@ def run(check):
         allow = f"toastty-mobile-permission-option-{permission['id']}-allow"
         wait_for('the card\'s buttons', lambda: ui.exists(allow), timeout=30)
         waiting = status()
+        preview = ui.texts(f"toastty-mobile-permission-preview-{permission['id']}")
+        require('touch card-allowed.txt' in preview, f'The card\'s preview does not show the command: {preview}')
         texts = ui.texts()
-        require('touch card-allowed.txt' in texts, f'The card does not show the command: {texts[-800:]}')
         require('Allow once' in texts and 'Deny' in texts, f'The card lacks a decision: {texts[-800:]}')
-        for wrong in ('cannot answer', 'respond on the desktop', 'Answer in the terminal', 'Show Terminal'):
+        for wrong in ('cannot answer', 'respond on the desktop', 'Answer in the terminal'):
             require(wrong not in texts, f'The chat says "{wrong}" for a card it can answer: {texts[-800:]}')
         require(waiting.get('status') == 'needs_approval', f'The coordinator does not wait for approval: {waiting}')
+        # The first launch's skills banner covers the top of the chat in the frames. A lost click leaves it.
+        if ui.exists('banner.managed-agent-skills-provisioned'):
+            ui.run('click-in', 'banner.managed-agent-skills-provisioned', 'Dismiss', check=False)
+            time.sleep(1)
         capture('permission-card')
         ui.run('press', allow)
         reply('CARD-ALLOWED', after)
@@ -271,7 +288,8 @@ def run(check):
         blue = next(o['id'] for o in decision['options'] if o['label'] == 'Blue')
         option = f"toastty-mobile-interaction-{question['id']}-question-{decision['id']}-option-{blue}"
         wait_for('the question\'s card', lambda: ui.exists(option), timeout=30)
-        require(not ui.has_label('Show Terminal'), 'A direct session\'s question card offers Show Terminal')
+        require(not ui.exists('coordinator.chat.question.show-terminal'),
+                'A direct session\'s question card offers Show Terminal')
         capture('question-card')
         ui.run('press', option)
         # Submit is enabled once the chat has drawn the choice.

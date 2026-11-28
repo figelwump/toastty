@@ -545,8 +545,8 @@ struct CoordinatorChatSendPathTests {
         conversations.service.attachDirectSession(session)
         let start = #"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#
         let end = #"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"}"#
-        func request(_ id: String, command: String) -> String {
-            #"{"type":"control_request","request_id":"\#(id)","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_\#(id)","input":{"command":"\#(command)"}}}"#
+        func request(_ id: String, command: String, call: String? = nil) -> String {
+            #"{"type":"control_request","request_id":"\#(id)","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_\#(call ?? id)","input":{"command":"\#(command)"}}}"#
         }
         let decision = ClaudePermissionDecision.questionID
 
@@ -612,6 +612,33 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.chat.interactionAnswerStates[denied.key]?.sentOptionID == ClaudePermissionDecision.deny.optionID)
         #expect(fixture.chat.interactionAnswerStates[allowed.key]?.sentOptionID
             == ClaudePermissionDecision.allowOnce.optionID)
+
+        // Claude asks again for one tool call. The newer request replaces
+        // the older, whose card no longer takes an answer; the answer goes
+        // to the newer one.
+        session.agentWrites(request("req-3", command: "make", call: "again"))
+        session.agentWrites(request("req-4", command: "make", call: "again"))
+        func cards() -> [RemotePendingInteraction] {
+            fixture.chat.presentation.rows.compactMap { row in
+                guard case .interaction(let card) = row.content, card.interaction.providerCallID == "toolu_again" else {
+                    return nil
+                }
+                return card.interaction
+            }
+        }
+        try await fixture.waitUntil("the newer card and the replaced one") {
+            cards().map(\.state) == [.superseded, .pending]
+        }
+        let again = try #require(cards().last?.id)
+        try await fixture.waitUntil("the newer request's form") {
+            fixture.chat.interactionAnswerStates[again]?.key.responseID == "req-4"
+        }
+        fixture.chat.editQuestionAnswer(again, .selectOnly(
+            questionID: decision, optionID: ClaudePermissionDecision.allowOnce.optionID
+        ))
+        fixture.chat.submitQuestionAnswer(again)
+        #expect(session.written.last?.contains(#""request_id":"req-4""#) == true)
+        #expect(session.written.contains { $0.contains(#""request_id":"req-3""#) } == false)
         session.agentWrites(end)
     }
 
