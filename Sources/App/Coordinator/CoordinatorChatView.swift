@@ -210,6 +210,9 @@ struct CoordinatorChatView: View {
                 }
             case .agentStarting, .startWaitsInTerminal, .awaitingAnswerInTerminal:
                 showTerminalButton
+            case .directAgentStarting, .awaitingAnswerOutsideChat:
+                // Nothing of a direct session waits in its terminal.
+                EmptyView()
             case .terminalDraft:
                 showTerminalButton
                 noticeButton("Send Anyway", identifier: "coordinator.chat.notice.send-anyway") {
@@ -287,6 +290,10 @@ struct CoordinatorChatView: View {
             "The coordinator's agent has not started yet. It may wait for your answer in the terminal, for example to a login or a folder-trust question."
         case .awaitingAnswerInTerminal:
             "The coordinator waits for your answer in the terminal."
+        case .directAgentStarting:
+            "The agent is starting."
+        case .awaitingAnswerOutsideChat:
+            "The coordinator asks for a permission, and this chat cannot give it yet. Answer on a paired iPhone, or stop the turn."
         case .terminalDraft:
 "You typed in the coordinator's terminal, and that text may still be in its prompt. Messages wait until you send it there. If you only answered a question there, choose Send Anyway."
         case .deliveryNotConfirmed:

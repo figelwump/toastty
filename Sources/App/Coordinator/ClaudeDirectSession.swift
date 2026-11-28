@@ -54,6 +54,11 @@ final class ClaudeDirectSession: DirectConversationSession {
     private var process: ClaudeStreamProcess?
     private weak var host: (any DirectConversationSessionHost)?
     private let onTurnEnd: @MainActor (ClaudeStreamSession.TurnEnd) -> Void
+    /// Called when the request that waits for the user's answer changes:
+    /// with the request when one starts to wait, and with `nil` when the
+    /// last one has its answer or Claude withdrew it.
+    private let onWaitingRequestChange: @MainActor (ClaudeStreamSession.WaitingRequest?) -> Void
+    private var reportedWaitingRequest: ClaudeStreamSession.WaitingRequest?
     /// Called once when the session ends by itself, with the reason. Not
     /// called after `stop`.
     private let onEnd: @MainActor (String) -> Void
@@ -73,6 +78,7 @@ final class ClaudeDirectSession: DirectConversationSession {
         host: (any DirectConversationSessionHost)?,
         now: @escaping () -> Date = Date.init,
         onTurnEnd: @escaping @MainActor (ClaudeStreamSession.TurnEnd) -> Void,
+        onWaitingRequestChange: @escaping @MainActor (ClaudeStreamSession.WaitingRequest?) -> Void = { _ in },
         onEnd: @escaping @MainActor (String) -> Void
     ) {
         self.panelID = panelID
@@ -81,6 +87,7 @@ final class ClaudeDirectSession: DirectConversationSession {
         self.host = host
         self.now = now
         self.onTurnEnd = onTurnEnd
+        self.onWaitingRequestChange = onWaitingRequestChange
         self.onEnd = onEnd
     }
 
@@ -183,6 +190,7 @@ final class ClaudeDirectSession: DirectConversationSession {
         case .submitted(let line, let observations):
             guard process.write(line: line) else { return .rejected(reason: .notBound) }
             host?.ingestDirectSessionObservations(observations, from: self)
+            reportWaitingRequest()
             return .submitted
         }
     }
@@ -190,6 +198,13 @@ final class ClaudeDirectSession: DirectConversationSession {
     func currentStateObservations() -> [ProviderTranscriptObservation] {
         guard acceptsInput else { return [] }
         return model.currentStateObservations(at: now())
+    }
+
+    private func reportWaitingRequest() {
+        let waiting = model.waitingRequest
+        guard waiting != reportedWaitingRequest else { return }
+        reportedWaitingRequest = waiting
+        onWaitingRequestChange(waiting)
     }
 
     // MARK: - The process
@@ -223,6 +238,7 @@ final class ClaudeDirectSession: DirectConversationSession {
                     return
                 }
             }
+            reportWaitingRequest()
         case .exited(let status, let errorOutput):
             Self.runningProcesses.removeValue(forKey: ObjectIdentifier(self))
             guard isStopped == false else { return }

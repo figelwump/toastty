@@ -1504,9 +1504,11 @@ What is different from the terminal:
 - **A permission request or a question is a request with an ID.** It takes
   one answer: the first that fits, from the Mac or a paired iPhone. An
   iPhone that may approve requests answers with the card it has today.
-  The Mac's chat has no buttons for a permission request yet. Until it
-  has, set the coordinator's rules so that it does not ask, or answer from
-  the iPhone.
+  The Mac's chat has no buttons for a permission request yet, and says so
+  while one waits. Until it has, set the coordinator's rules so that it
+  does not ask, or answer from the iPhone. The coordinator's row shows
+  that a request waits, and shows the agent as working again from the
+  moment of the answer.
 - **The terminal of the coordinator's panel is a plain shell.** Keys typed
   there are not a draft and do not reach the agent.
 
@@ -1543,8 +1545,11 @@ Limits of the prototype:
   than 16 KB), a question that the answer form cannot show, and a tool
   that needs a form of its own. A plan's approval works as Allow.
 - Text appears one whole message at a time, as with the terminal.
-- A sign-in, and Claude Code commands that open a dialog, need a terminal:
-  turn the setting off for them.
+- A Claude Code command that answers with text works as a message, for
+  example `/model`, `/model opus`, `/context`, `/compact` and `/mcp` (a
+  summary). `/login` and `/permissions` open a screen of Claude Code's
+  own, and Claude Code refuses them here. To sign in, run `claude` in any
+  terminal and sign in there, then open the coordinator again.
 - The usage-limit recovery of a terminal coordinator does not run.
 
 ### The coordinator's dock

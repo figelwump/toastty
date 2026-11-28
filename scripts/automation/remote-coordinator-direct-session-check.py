@@ -513,6 +513,12 @@ def run(check):
         require(len(taken) == 1 and sorted(r.get('status') for r in (allow, deny)) == ['rejected', 'submitted'],
                 f'Expected exactly one answer to be taken: allow {allow}, deny {deny}')
         allowed = allow == dict(status='submitted')
+        # The answer ends the wait at once. Claude Code's hooks report the
+        # request and not its answer, so only the session's own report can.
+        answered = status()
+        require(waiting.get('status') == 'needs_approval' and answered.get('status') != 'needs_approval',
+                f'The status did not follow the request and its answer: {waiting.get("status")}, then '
+                f'{answered.get("status")}')
         late = phone_answer(permission, 'decision', 'deny' if allowed else 'allow')
         require(late.get('status') == 'rejected', f'A late answer was taken: {late}')
         if allowed:
@@ -524,8 +530,8 @@ def run(check):
                                    and e['sequence'] > asked['sequence'] for e in events()),
                 'Claude reported a refused command as run')
         step('one of two answers to a permission request was taken, and the turn followed it',
-             preview=permission['permission']['preview'], macStatus=waiting.get('status'), allow=allow, deny=deny,
-             late=late)
+             preview=permission['permission']['preview'], macStatus=waiting.get('status'),
+             macStatusAfterAnswer=answered.get('status'), allow=allow, deny=deny, late=late)
 
     # 9. A question. The phone and the Mac answer at the same moment with different choices.
     def question():
@@ -544,13 +550,29 @@ def run(check):
                 id='coordinator.answer-question', args=dict(card=card, option='Blue')))
             return dict(status='submitted') if response.get('ok') else dict(status='rejected', reason=str(response)[:300])
 
+        waiting = status()
         phone, mac = race(lambda: phone_answer(question, question['questions'][0]['id'], options['Red']), mac_answer)
         require(sorted(r.get('status') for r in (phone, mac)) == ['rejected', 'submitted'],
                 f'Expected exactly one answer to be taken: phone {phone}, Mac {mac}')
+        answered = status()
+        require(waiting.get('status') == 'needs_approval' and answered.get('status') != 'needs_approval',
+                f'The status did not follow the question and its answer: {waiting.get("status")}, then '
+                f'{answered.get("status")}')
         winner = 'COLOR-RED' if phone.get('status') == 'submitted' else 'COLOR-BLUE'
         reply(winner, after=asked)
         wait_for('the prompt to open again', prompt_open, timeout=120)
-        step('one of the phone\'s and the Mac\'s answers to a question was taken', phone=phone, mac=mac, reply=winner)
+        step('one of the phone\'s and the Mac\'s answers to a question was taken', phone=phone, mac=mac, reply=winner,
+             macStatus=waiting.get('status'), macStatusAfterAnswer=answered.get('status'))
+
+    # A Claude Code command that answers with text, sent as a message: the answer shows as the
+    # coordinator's message, and the prompt opens again.
+    def text_command():
+        request_id = phone_send('/model', 'model')
+        answer = find(lambda e: e['kind'] == 'assistant_message' and 'Current model' in e['payload'].get('text', ''),
+                      'the answer of /model', timeout=60)
+        wait_for('the prompt to open after the command', prompt_open, timeout=60)
+        step('a command that answers with text gave its answer as a message', request=request_id,
+             answer=answer['payload'].get('text', '')[:200])
 
     # 10. Compaction at the open prompt, then one message: one turn.
     def compaction():
@@ -712,7 +734,7 @@ def run(check):
         # Without a start there is nothing to check.
         start()
         for body in (phone_message, mac_message, idle_wake, busy_turn, steered_turn, stopped_turn, permission_request,
-                     question, compaction, closed_workspace, crash_at_the_prompt, crash_during_a_turn, terminal_again):
+                     question, text_command, compaction, closed_workspace, crash_at_the_prompt, crash_during_a_turn, terminal_again):
             part(body)
         require(not failures, f'Parts that failed: {failures}')
     finally:

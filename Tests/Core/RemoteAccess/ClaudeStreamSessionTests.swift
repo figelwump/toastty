@@ -345,6 +345,9 @@ struct ClaudeStreamSessionTests {
         let interaction = try #require(projector.pendingInteractions.first)
         #expect(interaction.kind == .question)
         #expect(interaction.prompt == "Which color?")
+        // The session's status reads this: a question waits, and after the
+        // answer nothing waits.
+        #expect(session.waitingRequest == .init(requestID: "req-q", permissionSummary: nil))
         let answers = [RemoteInteractionAnswer(questionID: "q0", selectedOptionIDs: ["q0:o1"])]
         guard case .submitted(let line, let observations) = session.answer(responseID: "req-q", answers: answers, at: Self.start) else {
             Issue.record("Expected the answer to be submitted")
@@ -356,6 +359,15 @@ struct ClaudeStreamSessionTests {
         #expect((input["questions"] as? [[String: Any]])?.count == 1)
         Self.ingest(observations, into: &projector)
         #expect(projector.pendingInteractions.isEmpty)
+        #expect(session.waitingRequest == nil)
+
+        // A permission request waits with what it asks for. The end of the
+        // turn withdraws it.
+        _ = session.receive(line: Self.permissionRequest(requestID: "req-p", callID: "toolu_p"), at: Self.start)
+        #expect(session.waitingRequest?.requestID == "req-p")
+        #expect(session.waitingRequest?.permissionSummary?.isEmpty == false)
+        _ = session.receive(line: #"{"type":"result","subtype":"success","is_error":false}"#, at: Self.start)
+        #expect(session.waitingRequest == nil)
     }
 
     @Test func oneRequestWaitsForEachToolCallAndAWithdrawnOneCloses() throws {

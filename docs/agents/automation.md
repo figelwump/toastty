@@ -488,6 +488,10 @@ It checks, in this order:
   answer is refused.
 - A question: a phone and the Mac (`coordinator.answer-question`) answer at
   the same moment with different choices, and one is taken.
+- For both, the session's status is `needs_approval` while the request
+  waits, and is not from the moment of the answer.
+- `/model` as a message: Claude Code's answer shows as the coordinator's
+  message, and the prompt opens again.
 - `/compact` at the open prompt, then one message: one receipt, one reply.
 - Closing the coordinator's workspace ends the Claude Code process.
 - A second coordinator starts in the same app. After a kill of the app at

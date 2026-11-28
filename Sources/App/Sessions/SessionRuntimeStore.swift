@@ -6297,6 +6297,46 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         directSessionIDs.contains(sessionID)
     }
 
+    /// The status of a direct session while a request waits for the user's
+    /// answer, with the texts that a terminal session's request has.
+    static func directSessionWaitingStatus(permissionSummary: String?) -> SessionStatus {
+        permissionSummary.map {
+            SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: $0)
+        } ?? SessionStatus(kind: .needsApproval, summary: "Needs input",
+                           detail: "Claude Code is waiting for your answers")
+    }
+
+    /// The agent of a direct session asks for a permission or an answer
+    /// (`waiting`), or no request of its waits any more (`nil`). The
+    /// agent's process is the one source of this for a direct session: it
+    /// also says when a request has its answer, which no hook reports, so
+    /// the status does not stay at "needs approval" until the agent's next
+    /// tool call. A hook's report of the same request is dropped; see
+    /// `takesWaitingRequestsFromItsProcess`.
+    func noteDirectSessionWaitingRequest(sessionID: String, waiting status: SessionStatus?, at now: Date) {
+        guard directSessionIDs.contains(sessionID),
+              let record = sessionRegistry.activeSession(sessionID: sessionID) else { return }
+        if let status {
+            updateStatus(sessionID: sessionID, status: status, at: now)
+            return
+        }
+        // The turn goes on after the answer. A turn that ended has its own
+        // status already, which stays.
+        guard record.status?.kind == .needsApproval else { return }
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Working inside Claude Code"),
+            at: now
+        )
+    }
+
+    /// A direct session reports its waiting requests itself
+    /// (`noteDirectSessionWaitingRequest`), so a hook's "needs approval"
+    /// report for it is not taken.
+    func takesWaitingRequestsFromItsProcess(sessionID: String) -> Bool {
+        directSessionIDs.contains(sessionID)
+    }
+
     /// A hook of the session's agent reported the agent's own session.
     func noteStartReportFromHook(sessionID: String) {
         guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }

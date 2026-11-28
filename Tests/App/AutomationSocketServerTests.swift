@@ -191,6 +191,81 @@ struct AutomationSocketServerSessionLifecycleTests: AutomationSocketServerTestSu
     }
 
     @Test
+    func aDirectSessionsWaitingRequestComesFromItsProcessAndNotFromTheHook() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-direct"
+        func send(_ kind: SessionStatusKind, _ summary: String) throws -> AutomationResponseEnvelope {
+            try sendEvent(
+                AutomationEventEnvelope(
+                    eventType: "session.status",
+                    sessionID: sessionID,
+                    requestID: UUID().uuidString,
+                    payload: ["kind": .string(kind.rawValue), "summary": .string(summary)]
+                ),
+                socketPath: socketPath
+            )
+        }
+        @MainActor func statusKind() -> SessionStatusKind? {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind
+        }
+        let started = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: ["agent": .string(AgentKind.claude.rawValue)]
+            ),
+            socketPath: socketPath
+        )
+        #expect(started.ok)
+        await MainActor.run { server.sessionRuntimeStore.markDirectSession(sessionID: sessionID) }
+        let working = try send(.working, "Working")
+        #expect(working.ok)
+
+        // The hook of Claude Code reports each request, and never its
+        // answer. Its report is taken as received and changes nothing.
+        let fromHook = try send(.needsApproval, "Needs approval")
+        #expect(fromHook.ok)
+        let afterHook = await statusKind()
+        #expect(afterHook == .working)
+
+        // The process reports the request, and its answer.
+        await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionWaitingRequest(
+                sessionID: sessionID,
+                waiting: SessionRuntimeStore.directSessionWaitingStatus(permissionSummary: nil),
+                at: Date()
+            )
+        }
+        let whileWaiting = await statusKind()
+        #expect(whileWaiting == .needsApproval)
+        await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionWaitingRequest(sessionID: sessionID, waiting: nil, at: Date())
+        }
+        let afterAnswer = await statusKind()
+        #expect(afterAnswer == .working)
+
+        // A turn that ended keeps its status when its request is withdrawn.
+        let ready = try send(.ready, "Ready")
+        #expect(ready.ok)
+        await MainActor.run {
+            server.sessionRuntimeStore.noteDirectSessionWaitingRequest(sessionID: sessionID, waiting: nil, at: Date())
+        }
+        let afterTurn = await statusKind()
+        #expect(afterTurn == .ready)
+    }
+
+    @Test
     func sessionStatusCanResolveActiveSessionForBackgroundTabPanel() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

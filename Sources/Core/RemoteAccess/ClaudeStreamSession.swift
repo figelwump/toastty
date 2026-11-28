@@ -164,6 +164,28 @@ public struct ClaudeStreamSession: Sendable {
         pendingRequests.map(\.requestID)
     }
 
+    /// A request that waits for the user's answer, as the session's status
+    /// names it.
+    public struct WaitingRequest: Equatable, Sendable {
+        public var requestID: String
+        /// What a permission request asks for. `nil` for a question.
+        public var permissionSummary: String?
+    }
+
+    /// The oldest request that waits for an answer, or `nil` when none
+    /// waits. The session knows the moment a request starts to wait and
+    /// the moment it has its answer; no hook reports the second.
+    public var waitingRequest: WaitingRequest? {
+        pendingRequests.first.map { request in
+            switch request.form {
+            case .question:
+                WaitingRequest(requestID: request.requestID, permissionSummary: nil)
+            case .permission:
+                WaitingRequest(requestID: request.requestID, permissionSummary: request.prompt)
+            }
+        }
+    }
+
     // MARK: - Lines the host writes
 
     /// The first line the host writes. The process answers with its account

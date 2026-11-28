@@ -161,6 +161,10 @@ final class CoordinatorController: ObservableObject {
         var queuedCount: Int
         /// Why the first queued entry waits.
         var hold: CoordinatorSendHold?
+        /// The agent is a process of Toastty's own (`ClaudeDirectSession`),
+        /// or starts as one. Its terminal is a plain shell: nothing of the
+        /// agent's waits there.
+        var agentIsDirectSession = false
     }
 
     struct StartResult: Equatable {
@@ -854,7 +858,9 @@ final class CoordinatorController: ObservableObject {
             session: session,
             startFailure: session == nil && isStarting == false ? startFailure : nil,
             queuedCount: queuedEntries.count + pausedEntries.count,
-            hold: queuedEntries.isEmpty ? nil : hold
+            hold: queuedEntries.isEmpty ? nil : hold,
+            agentIsDirectSession: session.map { sessionRuntimeStore.isDirectSession(sessionID: $0.sessionID) }
+                ?? (directSession != nil)
         )
     }
 
@@ -1592,6 +1598,16 @@ final class CoordinatorController: ObservableObject {
             host: directSessionHost,
             now: now,
             onTurnEnd: { [weak self] end in self?.noteDirectTurnEnd(end, sessionID: plan.sessionID) },
+            onWaitingRequestChange: { [weak self] waiting in
+                guard let self else { return }
+                self.sessionRuntimeStore.noteDirectSessionWaitingRequest(
+                    sessionID: plan.sessionID,
+                    waiting: waiting.map {
+                        SessionRuntimeStore.directSessionWaitingStatus(permissionSummary: $0.permissionSummary)
+                    },
+                    at: self.now()
+                )
+            },
             onEnd: { [weak self] reason in self?.directSessionEnded(sessionID: plan.sessionID, reason: reason) }
         )
         do {
@@ -2489,7 +2505,10 @@ final class CoordinatorController: ObservableObject {
             // because the agent is not up, not because of its state.
             return .held(summary.state == .starting ? .agentStarting : Self.hold(for: reason), recheckAt: nil)
         }
-        if session.agent == .claude, terminals?.claudeHasNativeDialog(panelID: session.panelID) == true {
+        // The terminal of a direct session shows nothing of the agent, so
+        // a dialog that its text looks like is not the agent's.
+        if session.agent == .claude, directSession?.sessionID != session.sessionID,
+           terminals?.claudeHasNativeDialog(panelID: session.panelID) == true {
             return .held(.terminalDialog, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
         }
         guard noteTypingStarts(entry) else {

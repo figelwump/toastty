@@ -499,6 +499,45 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.typedThroughStatusGate.isEmpty)
     }
 
+    // MARK: - A direct session
+
+    @MainActor
+    @Test func aDirectSessionsNoticeDoesNotSendTheUserToTheTerminal() async throws {
+        let fixture = try CoordinatorChatFixture(agent: .claude)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") { fixture.controller.promptIsOpenForTesting }
+        let conversations = fixture.conversations
+        conversations.sessionRuntimeStore.markDirectSession(sessionID: conversations.sessionID)
+        let session = DirectSessionStandIn(
+            panelID: fixture.panelID, sessionID: conversations.sessionID, service: conversations.service
+        )
+        conversations.service.attachDirectSession(session)
+        #expect(fixture.controller.status?.agentIsDirectSession == true)
+
+        // "Needs approval" with no request in the conversation: nothing
+        // waits in the terminal of a direct session, so the chat says
+        // nothing. A terminal session gets the notice with Show Terminal.
+        fixture.report(.needsApproval)
+        #expect(fixture.chat.notice == nil)
+
+        // A permission request has no form in the chat yet. The notice
+        // says where it can be answered.
+        session.agentWrites(#"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#)
+        session.agentWrites(#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"toolu_1","input":{"command":"git push"}}}"#)
+        try await fixture.waitUntil("the notice of the permission request") {
+            fixture.chat.notice == .awaitingAnswerOutsideChat
+        }
+        session.agentWrites(#"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"}"#)
+        try await fixture.waitUntil("the end of the notice") { fixture.chat.notice == nil }
+
+        // A question has its card in the chat: no notice.
+        session.agentWrites(#"{"type":"system","subtype":"init","session_id":"native-direct","apiKeySource":"none"}"#)
+        session.agentWrites(#"{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","requires_user_interaction":true,"input":{"questions":[{"question":"Which color?","header":"Color","multiSelect":false,"options":[{"label":"Red","description":"Warm"},{"label":"Blue","description":"Cool"}]}]}}}"#)
+        try await fixture.waitUntil("the question's card") { fixture.chat.interactionAnswerStates.count == 1 }
+        #expect(fixture.chat.notice == nil)
+    }
+
     // MARK: - The user's text in the terminal
 
     @MainActor

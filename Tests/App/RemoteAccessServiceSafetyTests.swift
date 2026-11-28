@@ -5242,7 +5242,7 @@ extension RemoteAccessServiceSafetyTests {
 /// writes for the agent, and the test gives the lines that Claude Code would
 /// write. The real `ClaudeStreamSession` reads and makes the lines.
 @MainActor
-private final class DirectSessionStandIn: DirectConversationSession {
+final class DirectSessionStandIn: DirectConversationSession {
     let panelID: UUID
     let sessionID: String
     private weak var service: RemoteAccessService?
