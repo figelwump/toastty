@@ -212,8 +212,12 @@ struct CoordinatorChatSteerTests {
         try fixture.endTurn(1)
         try await fixture.waitUntil("the first waiting message") { fixture.delivered.texts == ["Refused"] }
         try fixture.startTurn(2, userText: "Refused")
-        try await fixture.waitUntil("a turn that takes a steer") { fixture.controller.canSteer }
-        #expect(fixture.chat.delivery?.steers == true)
+        // The controller reads the new turn at once; the chat reads it when
+        // its own subscription delivers the change. `delivery` includes the
+        // controller's `canSteer`, so this waits for both.
+        try await fixture.waitUntil("a turn that takes a steer, also in the chat") {
+            fixture.chat.delivery == CoordinatorComposerDelivery(steers: true, canSteer: true)
+        }
     }
 
     // MARK: - The choice of Queue
