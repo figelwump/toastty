@@ -247,6 +247,7 @@ jobs:
           name: linux-tests-${{ matrix.runner }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/dev-runs/*/artifacts/
+            artifacts/manual/ghostty-linux/
             artifacts/manual/linux-tasks/
             artifacts/package-tests/*/report*
             artifacts/package-tests/*/results.json

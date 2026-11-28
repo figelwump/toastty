@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import picomatch from 'picomatch';
 import { parse } from 'yaml';
@@ -162,6 +164,33 @@ test('Linux uses native 24.04 and 26.04 runners and keeps both results', () => {
   assert.ok(job.steps.some((step) => step.run === 'linux/ghostty/build-libghostty.sh'));
   assert.ok(job.steps.some((step) => step.run?.includes('dbus-run-session -- scripts/linux/check.sh')));
   assert.equal(job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@')).if, 'always()');
+});
+
+test('Ghostty installer works in a fresh checkout without Dependencies', (t) => {
+  const checkout = mkdtempSync(join(tmpdir(), 'toastty-ghostty-install-'));
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  const script = join(checkout, 'scripts/ghostty/install-local-xcframework.sh');
+  const framework = join(checkout, 'fixture/GhosttyKit.xcframework');
+  mkdirSync(join(checkout, 'scripts/ghostty'), { recursive: true });
+  mkdirSync(framework, { recursive: true });
+  copyFileSync(new URL('scripts/ghostty/install-local-xcframework.sh', root), script);
+  writeFileSync(join(framework, 'Info.plist'), 'framework fixture\n');
+
+  const result = spawnSync('bash', [script], {
+    env: {
+      ...process.env,
+      GHOSTTY_XCFRAMEWORK_SOURCE: framework,
+      GHOSTTY_XCFRAMEWORK_VARIANT: 'debug',
+      GHOSTTY_COMMIT: '0123456789012345678901234567890123456789',
+      GHOSTTY_SOURCE_DIRTY: '0',
+      GHOSTTY_BUILD_FLAGS: '-Demit-xcframework=true',
+    },
+    encoding: 'utf8',
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(join(checkout, 'Dependencies/GhosttyKit.Debug.xcframework/Info.plist'), 'utf8'), 'framework fixture\n');
+  assert.match(readFileSync(join(checkout, 'Dependencies/GhosttyKit.Debug.metadata.env'), 'utf8'), /GHOSTTY_COMMIT=0123456789012345678901234567890123456789/);
 });
 
 const releaseWorkflow = parse(read('.github/workflows/ios-testflight.yml'));

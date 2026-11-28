@@ -396,6 +396,10 @@ main (int argc, char **argv)
     ghostty_surface_size_s before = ghostty_surface_size (toastty_ghostty_surface_get_surface (term));
     GridWait w = { toastty_ghostty_surface_get_surface (term), before.columns, before.rows };
     gtk_widget_set_size_request (GTK_WIDGET (term), 1000, 640);
+    /* Without a browser attached, GTK 4.14 Broadway may not tick the frame
+       clock for a queued toplevel resize. Deliver the child allocation
+       directly, just as the app's headless automation layout does. */
+    gtk_widget_allocate (GTK_WIDGET (term), 1000, 640, -1, NULL);
     gboolean changed = spin_until (grid_changed, &w, 10000);
     ghostty_surface_size_s after = ghostty_surface_size (toastty_ghostty_surface_get_surface (term));
     CHECK (changed && after.columns > before.columns && after.rows > before.rows,
