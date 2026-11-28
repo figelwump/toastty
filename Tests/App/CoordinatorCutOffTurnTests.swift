@@ -31,6 +31,11 @@ struct CoordinatorCutOffTurnTests {
         {"type":"assistant","uuid":"a1","parentUuid":"uuid-taken","message":{"role":"assistant","content":[{"type":"text","text":"Looking"}]}}
         {"type":"user","uuid":"uuid-steer","message":{"role":"us
         """#.utf8).write(to: transcript)
+        let messagesInTurn: [CoordinatorWorkspaceRecord.UnfinishedMessage] = [
+            .init(id: "mac-1", messageID: "uuid-taken", text: "Summarize the open pull requests", byUser: true),
+            .init(id: "mac-steer", messageID: "uuid-steer", text: "Only the ones of this week", byUser: true),
+            .init(id: "phone-1", messageID: "uuid-phone", text: "And the failing checks", byUser: true),
+        ]
         try CoordinatorWorkspaceRecord(
             workspaceID: workspaceID,
             panelID: fixture.panelID,
@@ -38,11 +43,7 @@ struct CoordinatorCutOffTurnTests {
                 nativeSessionID: "native-direct",
                 transcriptPath: transcript.path,
                 scopedWorkspaceIDs: nil,
-                messagesInTurn: [
-                    .init(id: "mac-1", messageID: "uuid-taken", text: "Summarize the open pull requests", byUser: true),
-                    .init(id: "mac-steer", messageID: "uuid-steer", text: "Only the ones of this week", byUser: true),
-                    .init(id: "phone-1", messageID: "uuid-phone", text: "And the failing checks", byUser: true),
-                ]
+                messagesInTurn: messagesInTurn
             )
         ).save(to: recordFile)
         // "Steer now" was typing the steer from the paused queue.
@@ -72,6 +73,15 @@ struct CoordinatorCutOffTurnTests {
         #expect(saved.messagesInTurn == nil)
         #expect(saved.cutOffMessage?.id == "mac-1")
         #expect(CoordinatorQueueSnapshot.load(from: queueFile)?.paused.map(\.quitBeforeTaken) == [true, true])
+
+        // A second quit came after the queue's save and before the record's:
+        // the next recovery finds its copies and makes no others.
+        var interrupted = try #require(CoordinatorWorkspaceRecord.load(from: recordFile))
+        interrupted.directSession?.messagesInTurn = messagesInTurn
+        try interrupted.save(to: recordFile)
+        fixture.relaunch()
+        fixture.controller.recoverDirectTurnForTesting(resumes: true)
+        #expect(fixture.controller.pausedEntries.map(\.text) == ["Only the ones of this week", "And the failing checks"])
 
         // The chat of a direct session says so, and marks each message
         // that Claude never took.

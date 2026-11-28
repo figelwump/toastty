@@ -69,6 +69,9 @@ struct CoordinatorWorkspaceRecord: Codable, Equatable {
         /// A person sent it: in the Mac's chat or on a phone. `false` for
         /// Toastty's digest or a message from `coordinator send`.
         var byUser: Bool
+        /// The folders of attached files that the entry owned, when this
+        /// Mac sent it (`CoordinatorController.QueuedEntry.attachmentFolders`).
+        var attachmentFolders: [String]?
     }
 
     init(workspaceID: UUID, panelID: UUID?, directSession: DirectSession? = nil) {
