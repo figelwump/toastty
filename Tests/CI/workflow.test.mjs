@@ -162,7 +162,8 @@ test('Linux uses native 24.04 and 26.04 runners and keeps both results', () => {
   assert.deepEqual(job.strategy.matrix.runner, ['ubuntu-24.04', 'ubuntu-26.04']);
   assert.equal(job.strategy['fail-fast'], false);
   assert.ok(job.steps.some((step) => step.run === 'linux/ghostty/build-libghostty.sh'));
-  assert.ok(job.steps.some((step) => step.run?.includes('dbus-run-session -- scripts/linux/check.sh')));
+  const desktopGate = job.steps.find((step) => step.run?.includes('dbus-run-session -- scripts/linux/check.sh'));
+  assert.equal(desktopGate.env.APPIMAGE_EXTRACT_AND_RUN, 1);
   assert.equal(job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@')).if, 'always()');
 });
 

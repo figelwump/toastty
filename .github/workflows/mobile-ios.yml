@@ -230,6 +230,7 @@ jobs:
 
       - name: Build, test, smoke and package Toastty on Broadway
         env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
           DEBFULLNAME: Toastty CI
           DEBEMAIL: ci@toastty.invalid
           LIBGL_ALWAYS_SOFTWARE: 1

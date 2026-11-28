@@ -79,6 +79,10 @@ done
 out="${out:-$repo_root/artifacts/package-tests/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
+# The full evidence path can be longer than Linux's AF_UNIX socket limit,
+# particularly when a task worktree name is included.
+socket_dir="$(mktemp -d /tmp/toastty-pkg.XXXXXX)" || exit 1
+trap 'rm -rf -- "$socket_dir"' EXIT
 results="$out/results.jsonl"
 : > "$results"
 report="$out/report.md"
@@ -114,7 +118,7 @@ test_instance() {
   current="$1"; local launcher="$2" cli_bin="$3"; shift 3
   local dir="$out/$current"
   mkdir -p "$dir/screenshots" "$dir/transcripts" "$dir/runtime-home" "$dir/artifacts"
-  local sock="$dir/toastty.sock" app_log="$dir/app.log"
+  local sock="$socket_dir/$current.sock" app_log="$dir/app.log"
 
   if [[ "$real_window" == "0" ]]; then
     toastty_smoke_start_display "$dir/broadwayd.log" || { check "Broadway display starts" "gtk4-broadwayd" false; return; }
@@ -358,13 +362,14 @@ for image in "${appimages[@]}"; do
   installed_image="$apps/$(basename "$image")"
   cp "$image" "$installed_image"
   chmod +x "$installed_image"
-  update_info="$("$installed_image" --appimage-updateinformation 2>/dev/null)"
+  update_info="$(env -u APPIMAGE_EXTRACT_AND_RUN "$installed_image" --appimage-updateinformation 2>/dev/null)"
   check "update information points at GitHub Releases" "$update_info" grep -q '^gh-releases-zsync|' <<<"$update_info"
   check "zsync file sits next to the AppImage" "$(basename "$image").zsync" test -s "$image.zsync"
   mkdir -p "$out/appimage/extract"
-  (cd "$out/appimage/extract" && "$installed_image" --appimage-extract >/dev/null 2>&1)
+  (cd "$out/appimage/extract" && env -u APPIMAGE_EXTRACT_AND_RUN "$installed_image" --appimage-extract >/dev/null 2>&1)
   cli_bin="$out/appimage/extract/squashfs-root/usr/lib/toastty/bin/toastty"
-  # Launch the AppImage file itself (FUSE mount), as a user would.
+  # Launch the AppImage file itself. Hosted runners can set
+  # APPIMAGE_EXTRACT_AND_RUN=1 to use its launcher without FUSE.
   test_instance appimage "$installed_image" "$cli_bin"
 done
 

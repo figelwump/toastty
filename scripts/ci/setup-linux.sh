@@ -13,7 +13,7 @@ test "$(uname -m)" = x86_64
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential pkg-config python3 dbus-daemon jq netcat-openbsd uuid-runtime \
-  fakeroot fonts-dejavu-core libgtk-4-dev libgtk-4-bin libadwaita-1-dev \
+  desktop-file-utils fakeroot fonts-dejavu-core libgtk-4-dev libgtk-4-bin libadwaita-1-dev \
   libwebkitgtk-6.0-dev libegl-dev libgl1-mesa-dri libegl-mesa0 \
   libcurl4-openssl-dev libedit-dev libicu-dev libsqlite3-dev libxml2-dev \
   libncurses-dev libzstd-dev zlib1g-dev
