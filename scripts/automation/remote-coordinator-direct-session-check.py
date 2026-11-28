@@ -728,10 +728,15 @@ def run(check, agent_type, frames):
             protocolVersion='1.0', conversationID=state['first'], expectedTurnEpoch=turn_epoch))
         require(code == 200 and stopped.get('result') == dict(status='accepted'), f'Stop was not taken: {stopped}')
         after_stop = wait_for('the prompt to open after the stop', prompt_open, timeout=90)
+        # The coordinator's row follows the stop too, and not only the chat.
+        stopped_status = wait_for('the status to leave "working" after the stop',
+                                  lambda: (s := status()).get('status') not in ('working', 'needs_approval') and s,
+                                  timeout=20, interval=1).get('status')
         require(not any(e['kind'] == 'assistant_message' and 'SHOULD-NOT-FINISH-EITHER' in e['payload'].get('text', '')
                         for e in events()), 'The stopped turn ran to its end')
         ask(word('AFTER-STOP-OK'), 'AFTER-STOP-OK')
-        step('a stop ended the turn and the next message ran', state=after_stop.get('state'))
+        step('a stop ended the turn and the next message ran', state=after_stop.get('state'),
+             macStatusAfterStop=stopped_status)
 
     # 8. A permission request. A phone without approvals is refused. Then two phones answer at the
     #    same moment with different answers: one answer is taken, and the turn follows it.
