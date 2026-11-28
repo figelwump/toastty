@@ -64,6 +64,8 @@ final class ToasttySettingsStoreTests: XCTestCase {
         XCTAssertEqual(ToasttySettingsStore.load(userDefaults: userDefaults).localDocumentAppearance, .system)
     }
 
+    #if os(macOS)
+    // AppKitDefaultPreferences is macOS-only.
     func testAppKitDefaultPreferencesDoNotCountAsToasttyPersistedSettings() {
         let userDefaults = makeUserDefaults()
 
@@ -71,6 +73,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
 
         XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
+    #endif
 
     func testLegacyTerminalFontSizePointsLoadsStoredOverride() {
         let userDefaults = makeUserDefaults()

@@ -79,8 +79,14 @@ final class RemoteTranscriptTailer {
         }
         let makeParser = makeParser
         let provider = provider
+        ToasttyLog.info(
+            "Started remote transcript tailer",
+            category: .automation,
+            metadata: Self.lifecycleLogMetadata(conversationID: conversationID, provider: provider)
+        )
 
         task = Task.detached(priority: .utility) {
+            let startedAt = Date()
             var parser = makeParser()
             var offset: UInt64 = 0
             var identity: FileIdentity?
@@ -106,6 +112,12 @@ final class RemoteTranscriptTailer {
                 let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
 
                 if let knownIdentity = identity, knownIdentity != currentIdentity || size < offset {
+                    ToasttyLog.info(
+                        "Remote transcript tailer saw its file replaced",
+                        category: .automation,
+                        metadata: Self.lifecycleLogMetadata(
+                            conversationID: conversationID, provider: provider, byteCount: offset)
+                    )
                     await onEvent(conversationID, .fileReplaced)
                     return
                 }
@@ -194,10 +206,19 @@ final class RemoteTranscriptTailer {
 
                 if initialReadCompleted == false, offset >= size, Task.isCancelled == false {
                     initialReadCompleted = true
+                    var metadata = Self.lifecycleLogMetadata(
+                        conversationID: conversationID, provider: provider, byteCount: offset)
+                    metadata["elapsed_ms"] = String(Int(Date().timeIntervalSince(startedAt) * 1000))
+                    ToasttyLog.info("Remote transcript tailer caught up", category: .automation, metadata: metadata)
                     await onEvent(conversationID, .initialReadComplete)
                 }
+
                 try? await Task.sleep(nanoseconds: pollInterval)
             }
+            var metadata = Self.lifecycleLogMetadata(
+                conversationID: conversationID, provider: provider, byteCount: offset)
+            metadata["caught_up"] = String(initialReadCompleted)
+            ToasttyLog.info("Remote transcript tailer stopped", category: .automation, metadata: metadata)
         }
     }
 
@@ -210,9 +231,14 @@ final class RemoteTranscriptTailer {
                 in: observations))
     }
 
-    func stop() {
-        task?.cancel()
-        task = nil
+    func stop(reason: String = "owner") {
+        guard let task else { return }
+        var metadata = Self.lifecycleLogMetadata(conversationID: conversationID, provider: provider)
+        metadata["reason"] = reason
+        metadata["caught_up"] = String(isReadingInitialContent == false)
+        ToasttyLog.info("Stopping remote transcript tailer", category: .automation, metadata: metadata)
+        task.cancel()
+        self.task = nil
     }
 
     /// Routine tailer logs describe only the parser category and safe size
@@ -221,6 +247,21 @@ final class RemoteTranscriptTailer {
     /// this logging boundary.
     nonisolated static func readFailureLogMetadata(provider: AgentKind) -> [String: String] {
         ["provider": provider.rawValue]
+    }
+
+    /// Lifecycle logs carry the conversation and safe size facts, never the
+    /// transcript path (see `readFailureLogMetadata`).
+    nonisolated static func lifecycleLogMetadata(
+        conversationID: RemoteConversationID,
+        provider: AgentKind,
+        byteCount: UInt64? = nil
+    ) -> [String: String] {
+        var metadata = [
+            "conversation_id": conversationID.rawValue.uuidString,
+            "provider": provider.rawValue,
+        ]
+        if let byteCount { metadata["bytes"] = String(byteCount) }
+        return metadata
     }
 
     nonisolated static func oversizedRecordLogMetadata(provider: AgentKind, byteCount: Int) -> [String: String] {

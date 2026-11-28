@@ -37,7 +37,7 @@ canonicalize_directory_path() {
   local parent_dir=""
   local base_name=""
 
-  parent_dir="$(cd "$(dirname "$input_path")" && pwd)"
+  parent_dir="$(cd "$(dirname "$input_path")" && pwd)" || return 1
   base_name="$(basename "$input_path")"
   printf '%s/%s\n' "$parent_dir" "$base_name"
 }
@@ -148,10 +148,11 @@ if [[ ! -d "$SOURCE_PATH" ]]; then
 fi
 
 SOURCE_PATH="$(canonicalize_directory_path "$SOURCE_PATH")"
+# A fresh checkout has no ignored Dependencies directory yet.
+mkdir -p "$(dirname "$DEST_PATH")"
 DEST_PATH="$(canonicalize_directory_path "$DEST_PATH")"
 METADATA_PATH="${DEST_PATH%.xcframework}.metadata.env"
 
-mkdir -p "$(dirname "$DEST_PATH")"
 rm -rf "$DEST_PATH"
 cp -R "$SOURCE_PATH" "$DEST_PATH"
 

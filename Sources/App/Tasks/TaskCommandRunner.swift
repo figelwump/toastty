@@ -84,8 +84,14 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
             return launchFailure("Could not create pipes: \(String(cString: strerror(errno)))")
         }
 
+        #if os(Linux)
+        // Glibc's spawn types are structs, not Darwin's opaque pointers.
+        var actions = posix_spawn_file_actions_t()
+        var attributes = posix_spawnattr_t()
+        #else
         var actions: posix_spawn_file_actions_t?
         var attributes: posix_spawnattr_t?
+        #endif
         posix_spawn_file_actions_init(&actions)
         posix_spawnattr_init(&attributes)
         defer {
@@ -99,6 +105,19 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         }
         posix_spawn_file_actions_adddup2(&actions, stdoutPipe[1], STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&actions, stderrPipe[1], STDERR_FILENO)
+        #if os(Linux)
+        posix_spawn_file_actions_addchdir_np(&actions, command.directory)
+        // Glibc has no POSIX_SPAWN_CLOEXEC_DEFAULT: close every descriptor
+        // above the three standard ones instead.
+        posix_spawn_file_actions_addclosefrom_np(&actions, 3)
+        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+        posix_spawnattr_setflags(&attributes, Int16(flags))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var defaultSignals = sigset_t()
+        sigfillset(&defaultSignals)
+        var noSignals = sigset_t()
+        sigemptyset(&noSignals)
+        #else
         if #available(macOS 26.0, *) {
             posix_spawn_file_actions_addchdir(&actions, command.directory)
         } else {
@@ -111,6 +130,7 @@ struct TaskLiveCommandRunner: TaskCommandRunning {
         posix_spawnattr_setpgroup(&attributes, 0)
         var defaultSignals = ~sigset_t(0)
         var noSignals = sigset_t(0)
+        #endif
         posix_spawnattr_setsigdefault(&attributes, &defaultSignals)
         posix_spawnattr_setsigmask(&attributes, &noSignals)
 

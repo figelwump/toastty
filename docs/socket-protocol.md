@@ -568,7 +568,8 @@ Notable action-specific behavior:
     there since its last turn ended, and sets `wokenAt`; the mark clears
     when that agent's next turn starts.
     `task.mark-done` requires `taskID`, sets `doneAt`, and marks the task space
-    done.
+    done. Linux also requires an agent waiting at the prompt in that task's
+    space.
 - `task.set-release`
   - requires the boolean `afterMerge` and takes optional `taskID`; without it,
     a task's own agent sets it on its own task. `afterMerge=true` saves the

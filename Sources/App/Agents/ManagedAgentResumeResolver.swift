@@ -135,6 +135,39 @@ enum ManagedAgentResumeResolver {
     }
 }
 
+extension ManagedAgentResumeResolver {
+    /// The Claude transcript that actually holds `nativeSessionID`. Claude
+    /// reports `transcript_path` under the project folder for its current
+    /// directory, but a session resumed from a different directory keeps
+    /// writing to the folder it started in. When the reported file is
+    /// missing, look for the session in the sibling project folders.
+    static func existingClaudeTranscriptPath(
+        reported path: String,
+        nativeSessionID: String,
+        fileManager: FileManager = .default
+    ) -> String {
+        guard fileManager.fileExists(atPath: path) == false else { return path }
+        let fileName = "\(nativeSessionID).jsonl"
+        let projectsDirectory = URL(filePath: path).deletingLastPathComponent().deletingLastPathComponent()
+        guard URL(filePath: path).lastPathComponent == fileName,
+              let projects = try? fileManager.contentsOfDirectory(
+                  at: projectsDirectory,
+                  includingPropertiesForKeys: [.contentModificationDateKey]
+              ) else {
+            return path
+        }
+        let matches = projects
+            .map { $0.appendingPathComponent(fileName, isDirectory: false) }
+            .filter { fileManager.fileExists(atPath: $0.path) }
+        let newest = matches.max { lhs, rhs in
+            let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            return (lhsDate ?? .distantPast) < (rhsDate ?? .distantPast)
+        }
+        return newest?.path ?? path
+    }
+}
+
 private extension ManagedAgentResumeResolver {
     static func missingWorkingDirectoryNotice(record: ManagedAgentResumeRecord, resumeArgv: [String]) -> String {
         let path = record.cwd.trimmingCharacters(in: .whitespacesAndNewlines)

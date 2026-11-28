@@ -5,15 +5,6 @@ import PhotosUI
 import RemoteProtocol
 import SwiftUI
 
-/// While the coordinator's turn runs: what Send does with the text.
-struct CoordinatorComposerDelivery: Equatable {
-    /// Send types the text into the running turn. Otherwise the text waits
-    /// in the queue for the turn's end.
-    var steers: Bool
-    /// The running turn can take a steer now.
-    var canSteer: Bool
-}
-
 /// The composer for a message to the coordinator: the coordinator's message
 /// that it replies to, a row of attached files,
 /// a ＋ menu that attaches files or photos or mentions a task, a text field
@@ -361,22 +352,15 @@ struct CoordinatorComposerView: View {
     }
 
     static func sendLabel(_ delivery: CoordinatorComposerDelivery?) -> String {
-        guard let delivery else { return "Send" }
-        return delivery.steers ? "Steer" : "Queue"
+        CoordinatorComposerDelivery.sendLabel(delivery)
     }
 
     static func sendHelp(_ delivery: CoordinatorComposerDelivery?) -> String {
-        guard let delivery else { return "Send (Return). Shift-Return starts a new line." }
-        return delivery.steers
-            ? "Steer: add to the running turn (Return). Command-Return queues. Shift-Return starts a new line."
-            : "Queue: send after this turn (Return). Shift-Return starts a new line."
+        CoordinatorComposerDelivery.sendHelp(delivery)
     }
 
     static func chipHelp(_ delivery: CoordinatorComposerDelivery) -> String {
-        if delivery.canSteer == false {
-            return "The running turn cannot take a steer now, so the message waits for the turn's end."
-        }
-        return "Steer adds the message to the running turn. Queue sends it after this turn."
+        CoordinatorComposerDelivery.chipHelp(delivery)
     }
 }
 

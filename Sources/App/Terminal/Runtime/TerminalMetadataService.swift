@@ -1,4 +1,6 @@
-#if TOASTTY_HAS_GHOSTTY_KIT
+// Linux compiles this service too: its terminal frontend reports Ghostty
+// actions through LinuxAppLogic.handleTerminalRuntimeEvent (docs/linux.md).
+#if TOASTTY_HAS_GHOSTTY_KIT || os(Linux)
 import AppKit
 import CoreState
 import Foundation
@@ -282,6 +284,25 @@ final class TerminalMetadataService {
             state: state
         )
     }
+
+    #if os(Linux)
+    /// Linux knows the panel of a terminal notification directly (no Ghostty
+    /// surface-handle lookup).
+    func handleDesktopNotification(
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState
+    ) -> Bool {
+        handleDesktopNotification(
+            title: title,
+            body: body,
+            route: DesktopNotificationRoute(workspaceID: workspaceID, panelID: panelID, source: "linux_surface"),
+            state: state
+        )
+    }
+    #endif
 
     func handleRuntimeMetadataAction(
         _ intent: GhosttyRuntimeAction.Intent,

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
+source "$ROOT_DIR/scripts/automation/smoke-platform.sh"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-shortcut-hints-smoke-$(date +%Y%m%d-%H%M%S)}"
 RUNTIME_LABEL="$(toastty_sanitize_runtime_label "$RUN_ID")"
@@ -21,10 +22,8 @@ fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
 INSTANCE_JSON="$TOASTTY_RUNTIME_HOME/instance.json"
-APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
+APP_BINARY="$(toastty_smoke_app_binary "$DERIVED_PATH")"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
-GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
-GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_XCFRAMEWORK_PATH=""
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 RESTORE_GHOSTTY_ENABLED_WORKSPACE=0
@@ -90,6 +89,7 @@ cleanup() {
     kill "$APP_PID" >/dev/null 2>&1 || true
     wait "$APP_PID" >/dev/null 2>&1 || true
   fi
+  toastty_smoke_stop_display
 
   if [[ "$RESTORE_GHOSTTY_ENABLED_WORKSPACE" == "1" ]]; then
     if ! (
@@ -105,26 +105,17 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
-if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null; then
+if ! toastty_smoke_bootstrap; then
   exit 1
 fi
 
-if [[ -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" ]]; then
-  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_DEBUG_XCFRAMEWORK_PATH"
-elif [[ -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
-  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_RELEASE_XCFRAMEWORK_PATH"
-fi
+GHOSTTY_XCFRAMEWORK_PATH="$(toastty_smoke_ghostty_artifact)"
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
 fi
 
-xcodebuild \
-  -workspace toastty.xcworkspace \
-  -scheme ToasttyApp \
-  -configuration Debug \
-  -destination "platform=macOS,arch=${ARCH}" \
-  -derivedDataPath "$DERIVED_PATH" \
-  build >/dev/null
+toastty_smoke_build "$DERIVED_PATH" "$ARCH" >/dev/null
+toastty_smoke_start_display "$ARTIFACTS_DIR/broadwayd-${RUN_ID}.log"
 
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \

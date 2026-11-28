@@ -7,6 +7,8 @@ description: Use this skill when a Toastty GUI bug, fix, or uncertainty needs hu
 
 Use this workflow for opportunistic GUI debugging and verification on the remote Mac when socket automation and smoke tests do not cover the interaction well.
 
+This is macOS-only. For the Linux app, drive a local Broadway run and read its screenshots yourself, using a real window only for OpenGL checks (see `.agents/skills/toastty-dev-run/references/linux.md`).
+
 This is not a CI-style assertion framework. A `pass` result means the Codex turn completed; only claim product verification when the transcript or final report contains the evidence you requested.
 
 ## When to use this

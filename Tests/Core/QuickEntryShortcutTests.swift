@@ -15,13 +15,22 @@ struct QuickEntryShortcutTests {
         }
     }
 
+    /// The label as the platform's menus show it.
+    static func label(mac: String, linux: String) -> String {
+        #if os(Linux)
+        linux
+        #else
+        mac
+        #endif
+    }
+
     @Test
     func parsesTheDefault() throws {
         let shortcut = try parse("opt+shift+t")
         #expect(shortcut == QuickEntryShortcut.default)
         #expect(shortcut.modifiers == [.option, .shift])
         #expect(shortcut.key == .character("t"))
-        #expect(shortcut.symbolLabel == "⌥⇧T")
+        #expect(shortcut.symbolLabel == Self.label(mac: "⌥⇧T", linux: "Alt+Shift+T"))
     }
 
     @Test
@@ -34,20 +43,20 @@ struct QuickEntryShortcutTests {
 
     @Test
     func labelsModifiersInMacOrder() throws {
-        #expect(try parse("cmd+shift+opt+ctrl+k").symbolLabel == "⌃⌥⇧⌘K")
+        #expect(try parse("cmd+shift+opt+ctrl+k").symbolLabel == Self.label(mac: "⌃⌥⇧⌘K", linux: "Ctrl+Alt+Shift+Super+K"))
     }
 
     @Test
     func parsesNamedKeysDigitsAndPunctuation() throws {
         #expect(try parse("ctrl+opt+space").key == .space)
-        #expect(try parse("ctrl+opt+space").symbolLabel == "⌃⌥Space")
+        #expect(try parse("ctrl+opt+space").symbolLabel == Self.label(mac: "⌃⌥Space", linux: "Ctrl+Alt+Space"))
         #expect(try parse("cmd+opt+return").key == .return)
         #expect(try parse("cmd+opt+enter").key == .return)
         #expect(try parse("cmd+opt+tab").key == .tab)
         #expect(try parse("ctrl+opt+1").key == .character("1"))
         #expect(try parse("cmd+opt+/").key == .character("/"))
         #expect(try parse("ctrl+f5").key == .function(5))
-        #expect(try parse("ctrl+f5").symbolLabel == "⌃F5")
+        #expect(try parse("ctrl+f5").symbolLabel == Self.label(mac: "⌃F5", linux: "Ctrl+F5"))
     }
 
     @Test

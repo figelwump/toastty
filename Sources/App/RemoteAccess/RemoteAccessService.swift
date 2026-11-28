@@ -620,6 +620,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private let panelMetadataCache = RemotePanelMetadataCache()
+    private let localServerPreviews: RemoteLocalServerPreviews
     private var panelMetadataPollTask: Task<Void, Never>?
     private let previewScratchpadDirectory: URL
     private let store: AppStore
@@ -800,6 +801,9 @@ final class RemoteAccessService: ObservableObject {
     ] = [:]
 
     private var tailersByConversationID: [RemoteConversationID: RemoteTranscriptTailer] = [:]
+    /// Conversations whose replay from the start changed the projection
+    /// without broadcasting it; each gets one resnapshot when it catches up.
+    private var conversationIDsAwaitingReplayResnapshot: Set<RemoteConversationID> = []
     /// The agents that Toastty runs as its own processes, by the panel that
     /// holds each one's conversation. See `DirectConversationSession`.
     private var directSessionsByPanelID: [UUID: any DirectConversationSession] = [:]
@@ -894,10 +898,15 @@ final class RemoteAccessService: ObservableObject {
                 configureIfNeeded: configureIfNeeded
             )
         },
+        localServerPreviews: RemoteLocalServerPreviews? = nil,
         gatewayServerFactory: (RemoteGatewayRequestHandler) -> any RemoteAccessGatewayServing = {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
+        self.localServerPreviews = localServerPreviews ?? RemoteLocalServerPreviews(
+            fileURL: runtimePaths.remoteAccessDirectoryURL.appending(
+                path: "local-server-previews.json", directoryHint: .notDirectory)
+        )
         let attachmentStoreDirectoryURL = runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true)
         self.attachmentStoreDirectoryURL = attachmentStoreDirectoryURL
         self.attachmentStore = RemoteMessageAttachmentStore(root: attachmentStoreDirectoryURL)
@@ -1174,6 +1183,7 @@ final class RemoteAccessService: ObservableObject {
             }
         } else {
             invalidateTailnetSetup()
+            localServerPreviews.removeMappings()
             let shouldAudit = activationState != .off
             activationState = .off
             for task in pushTasksByEventID.values { task.cancel() }
@@ -1196,6 +1206,7 @@ final class RemoteAccessService: ObservableObject {
     private func failActivation(_ failure: RemoteAccessListenerFailure) {
         guard activationState != .off else { return }
         invalidateTailnetSetup()
+        localServerPreviews.removeMappings()
         activationState = .failed(
             message: failure.recoveryMessage(port: port)
         )
@@ -1506,6 +1517,7 @@ final class RemoteAccessService: ObservableObject {
             removeConversationState(conversationID)
         }
         tailersByConversationID.removeAll()
+        conversationIDsAwaitingReplayResnapshot.removeAll()
         activeSessionIDByConversationID.removeAll()
         panelIDByConversationID.removeAll()
         conversationIDByPanelID.removeAll()
@@ -2131,12 +2143,14 @@ final class RemoteAccessService: ObservableObject {
             scratchpadDirectory: previewScratchpadDirectory
         ))
         panelMetadataCache.requestRefresh()
+        localServerPreviews.removeMappings(except: RemoteLocalServerPreviews.previewablePorts(in: store.state))
     }
 
     private func updatePanelMetadataPolling() {
         guard isEnabled, connectedNativeClientCount > 0 else {
             panelMetadataPollTask?.cancel()
             panelMetadataPollTask = nil
+            localServerPreviews.removeMappings()
             return
         }
         refreshPanelMetadata()
@@ -2209,9 +2223,30 @@ final class RemoteAccessService: ObservableObject {
         do {
             let captured = try previewContext(target: operation.request.target)
             context = captured
+            // A browser on a loopback server is previewed through a tailnet
+            // mapping of its port; the recheck below still compares the
+            // panel's own URL.
+            var readContext = captured
+            if case .web(let url) = captured.source, RemoteLocalServerPreviews.loopbackPort(of: url) != nil {
+                do {
+                    readContext.source = .web(try await localServerPreviews.phoneURL(for: url))
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    ToasttyLog.warning(
+                        "Could not map a local server onto the tailnet for a phone preview",
+                        category: .automation,
+                        metadata: [
+                            "underlying_error": (error as? TailscaleServeSetupError)?.title
+                                ?? String(reflecting: type(of: error)),
+                        ]
+                    )
+                    throw RemotePreviewError.unsupported
+                }
+            }
             stage = .read
-            let work = Task.detached(priority: .utility) {
-                try RemotePreviewProvider.response(operation: operation, context: captured)
+            let work = Task.detached(priority: .utility) { [readContext] in
+                try RemotePreviewProvider.response(operation: operation, context: readContext)
             }
             let response = try await withTaskCancellationHandler {
                 try await work.value
@@ -2584,18 +2619,21 @@ final class RemoteAccessService: ObservableObject {
     ) -> RemoteWorkspaceDoneResult {
         var result = RemoteWorkspaceDoneResult.workspaceNotFound
         if isReady, let workspace = store.state.workspacesByID[request.workspaceID] {
+            let task = sessionRuntimeStore.taskSpaceDoneMarkItem(workspaceID: request.workspaceID)
+            let needsMerge = task?.record != nil && (task?.hasOpenPullRequest == true || task?.merge != nil)
+            let completionUnavailable = task?.acceptsDoneMark == false && !needsMerge
             result = Self.workspaceDoneResult(
                 requestedDone: request.done,
                 isSubspace: store.state.subspaceParentIDsByWorkspaceID()[request.workspaceID] != nil,
                 isDone: workspace.doneAt != nil,
-                hasWorkInProgress: scanConversationCandidates(mintingIDs: false).contains { candidate in
+                hasWorkInProgress: completionUnavailable || scanConversationCandidates(mintingIDs: false).contains { candidate in
                     guard candidate.workspaceID == request.workspaceID else { return false }
                     switch candidate.presentationStatus {
                     case .working?, .needsApproval?, .error?: return true
                     case .ready?, .idle?, nil: return false
                     }
                 },
-                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: request.workspaceID),
+                acceptsDoneMark: !needsMerge,
                 clientKnowsOpenPullRequestResult: request.knowsOpenPullRequestResult
             )
             if result == .updated {
@@ -3388,7 +3426,8 @@ final class RemoteAccessService: ObservableObject {
         if projectionStore.isConversationRegistered(conversationID) {
             publishResnapshotRequired(for: conversationID)
         }
-        tailersByConversationID.removeValue(forKey: conversationID)?.stop()
+        tailersByConversationID.removeValue(forKey: conversationID)?.stop(reason: "conversation_removed")
+        conversationIDsAwaitingReplayResnapshot.remove(conversationID)
         projectionStore.removeConversation(conversationID)
         coordinator.removeConversation(conversationID)
         controlCPromptEpochByConversationID.removeValue(forKey: conversationID)
@@ -3579,7 +3618,7 @@ final class RemoteAccessService: ObservableObject {
             if let tailer = tailersByConversationID.removeValue(forKey: candidate.conversationID) {
                 let path = tailer.fileURL.path
                 let provider = tailer.provider
-                tailer.stop()
+                tailer.stop(reason: "provider_feed_rewritten")
                 startTailer(for: candidate.conversationID, provider: provider, path: path)
             }
             changed = true
@@ -3628,7 +3667,7 @@ final class RemoteAccessService: ObservableObject {
             if existing.fileURL.path == path {
                 return
             }
-            existing.stop()
+            existing.stop(reason: "transcript_path_changed")
             tailersByConversationID[conversationID] = nil
         }
         startTailer(for: conversationID, provider: provider, path: path)
@@ -3642,7 +3681,7 @@ final class RemoteAccessService: ObservableObject {
         for conversationID: RemoteConversationID,
         runtimeBound: Bool
     ) -> Bool {
-        tailersByConversationID.removeValue(forKey: conversationID)?.stop()
+        tailersByConversationID.removeValue(forKey: conversationID)?.stop(reason: "transcript_path_cleared")
 
         guard let projector = projectionStore.projectorState(for: conversationID),
               projector.providerSessionFilePath != nil else {
@@ -3722,15 +3761,20 @@ final class RemoteAccessService: ObservableObject {
             // Profile reports have no transcript sequence or lifecycle event.
             // Publish them through the session list even when nothing else
             // changed, so an in-session model switch reaches subscribers.
-            broadcastEvents(
-                emitted,
-                for: conversationID,
-                sessionListChanged: previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
-            )
+            let profileChanged = previousProfile != projectionStore.projectorState(for: conversationID)?.executionProfile
+            publishTailerEvents(emitted, for: conversationID, sessionListChanged: profileChanged)
             drainSendQueue(for: conversationID)
 
-        case .initialReadStarted, .initialReadComplete, .initialReadUnavailable:
+        case .initialReadStarted, .initialReadUnavailable:
             notifyLocalSubscribers(of: conversationID)
+
+        case .initialReadComplete:
+            if conversationIDsAwaitingReplayResnapshot.remove(conversationID) != nil {
+                publishResnapshotRequired(for: conversationID)
+                broadcastSessionList()
+            } else {
+                notifyLocalSubscribers(of: conversationID)
+            }
 
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
@@ -3741,7 +3785,7 @@ final class RemoteAccessService: ObservableObject {
             guard let tailer = tailersByConversationID[conversationID] else { return }
             let path = tailer.fileURL.path
             let provider = tailer.provider
-            tailer.stop()
+            tailer.stop(reason: "file_replaced")
             tailersByConversationID[conversationID] = nil
             projectionStore.forceResnapshot(for: conversationID, bindingID: UUID(), at: Date())
             publishResnapshotRequired(for: conversationID)
@@ -3876,7 +3920,24 @@ final class RemoteAccessService: ObservableObject {
                 : RemoteConversationProjectionStore.linkedFileReferences(in: history),
             for: conversationID
         )
-        broadcastEvents(emitted, for: conversationID)
+        publishTailerEvents(emitted, for: conversationID)
+    }
+
+    private func publishTailerEvents(
+        _ events: [ConversationEvent],
+        for conversationID: RemoteConversationID,
+        sessionListChanged: Bool = false
+    ) {
+        // A long replay can overflow the live buffer of a phone that opens
+        // the conversation mid-replay. Send one resnapshot when the file
+        // catches up, whether it is the whole transcript or direct-session history.
+        if tailersByConversationID[conversationID]?.isReadingInitialContent == true {
+            if events.isEmpty == false || sessionListChanged {
+                conversationIDsAwaitingReplayResnapshot.insert(conversationID)
+            }
+        } else {
+            broadcastEvents(events, for: conversationID, sessionListChanged: sessionListChanged)
+        }
     }
 
     /// Types `text` plus Return into the panel's terminal, or gives it to

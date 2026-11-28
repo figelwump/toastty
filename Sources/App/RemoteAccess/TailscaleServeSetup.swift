@@ -91,14 +91,7 @@ struct TailscaleServeSetup: Sendable {
     }
 
     func run(port: UInt16, configuredOrigin: String, configureIfNeeded: Bool) async throws -> String {
-        let client: TailscaleClientIdentity
-        do {
-            client = try await detector.detectClient()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as TailscaleTailnetOriginDetectionError {
-            throw TailscaleServeSetupError.detection(error)
-        }
+        let client = try await detectClient()
         let savedOrigin = configuredOrigin.trimmingCharacters(in: .whitespacesAndNewlines)
         let savedURL = RemoteAccessService.publicGatewayURL(from: savedOrigin)
         guard let clientHost = URL(string: client.origin)?.host,
@@ -168,6 +161,57 @@ struct TailscaleServeSetup: Sendable {
             if result.timedOut { throw TailscaleServeSetupError.timedOut }
         }
         throw TailscaleServeSetupError.configurationFailed
+    }
+
+    /// Maps tailnet HTTPS `port` to the loopback server on the same port, so
+    /// a paired phone can load a browser panel showing `http://localhost:port`.
+    /// Returns the HTTPS origin and whether this call created the mapping (an
+    /// identical existing one is reused and left alone). The same conflict and
+    /// Funnel checks as the gateway mapping apply: an occupied or public port
+    /// is never changed.
+    func exposeLocalServer(port: UInt16) async throws -> (origin: String, created: Bool) {
+        let client = try await detectClient()
+        let origin = "\(client.origin):\(port)"
+        if try await configuration(client: client).state(origin: origin, port: port) == .configured {
+            return (origin, false)
+        }
+        try await verifyIdentity(client)
+        try Task.checkCancellation()
+        let result = try? await commandRunner(
+            client.executableURL,
+            ["serve", "--bg", "--https=\(port)", "http://127.0.0.1:\(port)"],
+            commandTimeout
+        )
+        try Task.checkCancellation()
+        if try await configuration(client: client).state(origin: origin, port: port) == .configured {
+            return (origin, true)
+        }
+        if let result {
+            if let url = Self.approvalURL(in: result.stdout) ?? Self.approvalURL(in: result.stderr) {
+                throw TailscaleServeSetupError.approvalRequired(url)
+            }
+            if result.timedOut { throw TailscaleServeSetupError.timedOut }
+        }
+        throw TailscaleServeSetupError.configurationFailed
+    }
+
+    /// Removes a mapping made by `exposeLocalServer(port:)`, only while it is
+    /// still exactly that mapping.
+    func removeLocalServer(port: UInt16) async throws {
+        let client = try await detectClient()
+        let origin = "\(client.origin):\(port)"
+        guard try await configuration(client: client).state(origin: origin, port: port) == .configured else { return }
+        _ = try await commandRunner(client.executableURL, ["serve", "--https=\(port)", "off"], commandTimeout)
+    }
+
+    private func detectClient() async throws -> TailscaleClientIdentity {
+        do {
+            return try await detector.detectClient()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as TailscaleTailnetOriginDetectionError {
+            throw TailscaleServeSetupError.detection(error)
+        }
     }
 
     private func configuration(client: TailscaleClientIdentity) async throws -> ServeConfiguration {

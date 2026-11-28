@@ -4,6 +4,20 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
+/// The keys that the panel's hints name. Linux uses Ctrl where macOS uses
+/// Command.
+enum QuickEntryKeyLabels {
+    #if os(Linux)
+    static let workspacePicker = "Ctrl+1"
+    static let agentPicker = "Ctrl+2"
+    static let presetColumns = "Ctrl+→"
+    #else
+    static let workspacePicker = "⌘1"
+    static let agentPicker = "⌘2"
+    static let presetColumns = "⌘→"
+    #endif
+}
+
 /// What an opener fills in before the quick entry panel shows.
 struct QuickEntryPrefill: Equatable {
     /// Chooses the workspace; nil keeps the one the panel starts on.
@@ -11,8 +25,19 @@ struct QuickEntryPrefill: Equatable {
     /// Text selected in a terminal. It is attached as a text file, so the
     /// task text stays what the user types.
     var selectionText: String?
+    /// A finished task's context, for Continue as New Task. It is attached
+    /// as a Markdown file, so the task text stays what the user types.
+    var continuation: QuickEntryContinuation?
 
     static let empty = QuickEntryPrefill()
+}
+
+/// What Continue as New Task attaches: the earlier task's context file.
+struct QuickEntryContinuation: Equatable {
+    var taskID: UUID
+    var taskTitle: String
+    var fileName: String
+    var text: String
 }
 
 /// The coordinator, as the quick entry panel uses it. While a coordinator
@@ -51,6 +76,12 @@ final class QuickEntryModel: ObservableObject {
     }
 
     @Published var text = ""
+    /// The task this panel continues, while its context file is attached.
+    var continuesTaskTitle: String? {
+        guard let continuation, attachments.contains(where: { $0.displayName == continuation.fileName }) else { return nil }
+        return continuation.taskTitle
+    }
+    private var continuation: QuickEntryContinuation?
     /// The attached files. Their changes are the panel's changes.
     let attachmentDraft: DraftAttachments
     var attachments: [Attachment] { attachmentDraft.attachments }
@@ -170,10 +201,10 @@ final class QuickEntryModel: ObservableObject {
 
     /// Why Create Task waits for the user, when a pill has no value.
     var missingChoiceHint: String? {
-        if workspaceID == nil { return "Pick a workspace with ⌘1" }
+        if workspaceID == nil { return "Pick a workspace with \(QuickEntryKeyLabels.workspacePicker)" }
         // An empty Agent list: no agent can take a task. The list says how
         // to add one.
-        if preset == nil { return agentProfiles.isEmpty ? "Install or configure an agent" : "Pick an agent with ⌘2" }
+        if preset == nil { return agentProfiles.isEmpty ? "Install or configure an agent" : "Pick an agent with \(QuickEntryKeyLabels.agentPicker)" }
         return nil
     }
 
@@ -265,6 +296,18 @@ final class QuickEntryModel: ObservableObject {
         if let selectionText = prefill.selectionText,
            selectionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             attachText(selectionText, named: "selection.txt")
+        }
+        if let continuation = prefill.continuation {
+            // One continuation per panel: a second one replaces the first.
+            if let previous = self.continuation, previous.fileName != continuation.fileName {
+                for attachment in attachments where attachment.displayName == previous.fileName {
+                    removeAttachment(id: attachment.id)
+                }
+            }
+            self.continuation = continuation
+            if attachments.contains(where: { $0.displayName == continuation.fileName }) == false {
+                attachText(continuation.text, named: continuation.fileName)
+            }
         }
     }
 
@@ -380,6 +423,9 @@ final class QuickEntryModel: ObservableObject {
         attachmentDraft.attachText(text, named: name)
     }
 
+    // The Linux frontend reads its clipboard and drops itself and calls
+    // the attach methods above.
+    #if !os(Linux)
     @discardableResult
     func pasteAttachments(from pasteboard: NSPasteboard) -> Bool {
         attachmentDraft.pasteAttachments(from: pasteboard)
@@ -389,6 +435,12 @@ final class QuickEntryModel: ObservableObject {
     /// added to the text.
     func handleDrop(from pasteboard: NSPasteboard) -> Bool {
         attachmentDraft.handleDrop(from: pasteboard)
+    }
+    #endif
+
+    /// A web link dropped on the panel, added to the text.
+    func addLink(_ link: String) {
+        appendLine(link)
     }
 
     func beginPromisedAttachment() -> DraftAttachments.PromisedAttachment? {

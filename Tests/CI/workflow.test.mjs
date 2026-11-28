@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import picomatch from 'picomatch';
 import { parse } from 'yaml';
@@ -14,7 +16,7 @@ test('only PR runs cancel superseded runs', () => {
   assert.ok(workflow.concurrency.group.includes("github.event_name == 'pull_request' && github.ref || github.run_id"));
 });
 
-test('pull requests run only the workflow tests and the gate; test jobs run by hand', () => {
+test('pull requests require desktop validation and keep full iOS and auxiliary jobs manual', () => {
   assert.deepEqual(Object.keys(workflow.on).sort(), ['pull_request', 'workflow_dispatch']);
   assert.equal(workflow.on.pull_request, null);
   for (const path of ['.github/workflows/push-worker.yml', '.github/workflows/ios-testflight.yml']) {
@@ -25,27 +27,35 @@ test('pull requests run only the workflow tests and the gate; test jobs run by h
   assert.equal(workflow.jobs.gate.if, 'always()');
   assert.equal(workflow.jobs.workflow.if, undefined);
   assert.equal(workflow.jobs.workflow['runs-on'], 'ubuntu-latest');
-  for (const name of ['ios', 'macos', 'scripts', 'web']) {
+  for (const name of ['ios', 'scripts', 'web']) {
     assert.equal(workflow.jobs[name].if, "github.event_name == 'workflow_dispatch'", name);
     assert.equal(workflow.jobs[name].needs, 'workflow', name);
   }
   assert.equal(workflow.jobs.ios.permissions.contents, 'read');
-  assert.deepEqual([...workflow.jobs.gate.needs].sort(), ['ios', 'macos', 'scripts', 'web', 'workflow']);
+  for (const name of ['macos', 'linux']) {
+    assert.equal(workflow.jobs[name].if, undefined, name);
+    assert.equal(workflow.jobs[name].needs, 'workflow', name);
+    assert.deepEqual(workflow.jobs[name].permissions, { contents: 'read' });
+    assert.equal(workflow.jobs[name].steps[0].with['persist-credentials'], false);
+  }
+  assert.deepEqual([...workflow.jobs.gate.needs].sort(), ['ios', 'linux', 'macos', 'scripts', 'web', 'workflow']);
 });
 
 const gateStep = workflow.jobs.gate.steps[0];
 const gate = (overrides = {}) => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', gateStep.run], {
   env: { ...process.env, WORKFLOW_RESULT: 'success', FULL_RUN: 'false',
-    IOS_RESULT: 'skipped', MACOS_RESULT: 'skipped', SCRIPTS_RESULT: 'skipped', WEB_RESULT: 'skipped', ...overrides },
+    IOS_RESULT: 'skipped', MACOS_RESULT: 'success', LINUX_RESULT: 'success', SCRIPTS_RESULT: 'skipped', WEB_RESULT: 'skipped', ...overrides },
   encoding: 'utf8',
 });
 
-test('PR gate requires the workflow tests and rejects any test job that ran', () => {
+test('PR gate requires workflow and desktop success and keeps manual jobs skipped', () => {
   assert.equal(gate().status, 0);
-  for (const state of ['failure', 'cancelled', 'skipped', '']) {
-    assert.notEqual(gate({ WORKFLOW_RESULT: state }).status, 0);
+  for (const name of ['WORKFLOW', 'MACOS', 'LINUX']) {
+    for (const state of ['failure', 'cancelled', 'skipped', '']) {
+      assert.notEqual(gate({ [`${name}_RESULT`]: state }).status, 0);
+    }
   }
-  for (const name of ['IOS', 'MACOS', 'SCRIPTS', 'WEB']) {
+  for (const name of ['IOS', 'SCRIPTS', 'WEB']) {
     for (const state of ['success', 'failure', 'cancelled', '']) {
       assert.notEqual(gate({ [`${name}_RESULT`]: state }).status, 0);
     }
@@ -54,16 +64,16 @@ test('PR gate requires the workflow tests and rejects any test job that ran', ()
 
 test('release evidence job names match the full manual workflow', () => {
   const names = Object.entries(workflow.jobs).filter(([id]) => id !== 'workflow').flatMap(([, job]) => {
-    const configurations = job.strategy?.matrix.configuration;
-    return configurations ? configurations.map((configuration) =>
-      job.name.replace('${{ matrix.configuration }}', configuration)) : [job.name];
+    const matrix = job.strategy?.matrix;
+    if (!matrix) return [job.name];
+    const [[key, values]] = Object.entries(matrix);
+    return values.map((value) => job.name.replace(`\${{ matrix.${key} }}`, value));
   });
   assert.deepEqual(JSON.parse(read('.github/ios-release-ci-jobs.json')).sort(), names.sort());
 });
 
 test('manual full validation requires every job to pass', () => {
   assert.notEqual(gate({ FULL_RUN: 'true' }).status, 0);
-  assert.notEqual(gate({ FULL_RUN: 'true', MACOS_RESULT: 'success' }).status, 0);
   assert.equal(gate({ FULL_RUN: 'true', IOS_RESULT: 'success',
     MACOS_RESULT: 'success', SCRIPTS_RESULT: 'success', WEB_RESULT: 'success' }).status, 0);
   assert.notEqual(gate({ FULL_RUN: 'true', WORKFLOW_RESULT: 'failure', IOS_RESULT: 'success',
@@ -122,9 +132,66 @@ test('every web-panel package is covered by the web test command', () => {
   }
 });
 
-test('Mac artifacts include result bundles without uploading DerivedData', () => {
-  const upload = workflow.jobs.macos.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
-  assert.equal(upload.with.path, 'artifacts/ci-macos/*.xcresult');
+test('hosted Mac runs Ghostty-backed Debug tests, a Release build, and GUI smoke', () => {
+  const job = workflow.jobs.macos;
+  assert.equal(job['runs-on'], 'macos-26');
+  assert.equal(job.env.TUIST_DISABLE_GHOSTTY, undefined);
+  assert.equal(job.env.TUIST_TOASTTY_DISABLE_PUSH, 1);
+  assert.ok(job.steps.some((step) => step.run?.includes('build-macos-ghostty.sh')));
+  assert.ok(job.steps.some((step) => step.run?.includes('grep -q TOASTTY_HAS_GHOSTTY_KIT')));
+  assert.match(job.steps.find((step) => step.id === 'debug-build').run, /-configuration Debug[\s\S]+build-for-testing$/m);
+  const tests = job.steps.find((step) => step.name === 'Run macOS XCTest');
+  assert.match(tests.run, /-parallel-testing-enabled NO[\s\S]+test-without-building$/m);
+  assert.match(job.steps.find((step) => step.name.includes('Release app')).run, /-configuration Release[\s\S]+build$/m);
+  const smoke = job.steps.find((step) => step.name === 'Smoke test the macOS GUI');
+  assert.match(smoke.if, /steps\.debug-build\.outcome == 'success'/);
+  for (const script of ['smoke-ui', 'workspace-tabs-smoke', 'workspace-scope-smoke', 'shortcut-hints-smoke']) {
+    assert.ok(smoke.run.includes(script));
+  }
+  const upload = job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(upload.if, 'always()');
+  assert.deepEqual(upload.with.path.trim().split('\n'), [
+    'artifacts/ci-macos/*.xcresult',
+    'artifacts/dev-runs/ci-*/artifacts/',
+  ]);
+});
+
+test('Linux uses native 24.04 and 26.04 runners and keeps both results', () => {
+  const job = workflow.jobs.linux;
+  assert.equal(job['runs-on'], '${{ matrix.runner }}');
+  assert.deepEqual(job.strategy.matrix.runner, ['ubuntu-24.04', 'ubuntu-26.04']);
+  assert.equal(job.strategy['fail-fast'], false);
+  assert.ok(job.steps.some((step) => step.run === 'linux/ghostty/build-libghostty.sh'));
+  const desktopGate = job.steps.find((step) => step.run?.includes('dbus-run-session -- scripts/linux/check.sh'));
+  assert.equal(desktopGate.env.APPIMAGE_EXTRACT_AND_RUN, 1);
+  assert.equal(job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@')).if, 'always()');
+});
+
+test('Ghostty installer works in a fresh checkout without Dependencies', (t) => {
+  const checkout = mkdtempSync(join(tmpdir(), 'toastty-ghostty-install-'));
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  const script = join(checkout, 'scripts/ghostty/install-local-xcframework.sh');
+  const framework = join(checkout, 'fixture/GhosttyKit.xcframework');
+  mkdirSync(join(checkout, 'scripts/ghostty'), { recursive: true });
+  mkdirSync(framework, { recursive: true });
+  copyFileSync(new URL('scripts/ghostty/install-local-xcframework.sh', root), script);
+  writeFileSync(join(framework, 'Info.plist'), 'framework fixture\n');
+
+  const result = spawnSync('bash', [script], {
+    env: {
+      ...process.env,
+      GHOSTTY_XCFRAMEWORK_SOURCE: framework,
+      GHOSTTY_XCFRAMEWORK_VARIANT: 'debug',
+      GHOSTTY_COMMIT: '0123456789012345678901234567890123456789',
+      GHOSTTY_SOURCE_DIRTY: '0',
+      GHOSTTY_BUILD_FLAGS: '-Demit-xcframework=true',
+    },
+    encoding: 'utf8',
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(join(checkout, 'Dependencies/GhosttyKit.Debug.xcframework/Info.plist'), 'utf8'), 'framework fixture\n');
+  assert.match(readFileSync(join(checkout, 'Dependencies/GhosttyKit.Debug.metadata.env'), 'utf8'), /GHOSTTY_COMMIT=0123456789012345678901234567890123456789/);
 });
 
 const releaseWorkflow = parse(read('.github/workflows/ios-testflight.yml'));
@@ -192,7 +259,7 @@ test('iOS CI and archiving select the same pinned Xcode before generation', () =
 });
 
 test('full CI gate blocks every non-success graph result, including abandoned runners', () => {
-  for (const name of ['IOS', 'MACOS', 'SCRIPTS', 'WEB']) {
+  for (const name of ['IOS', 'MACOS', 'LINUX', 'SCRIPTS', 'WEB']) {
     for (const result of ['skipped', 'failure', 'cancelled', 'abandoned', '', 'pending']) {
       assert.notEqual(gate({ FULL_RUN: 'true', IOS_RESULT: 'success', MACOS_RESULT: 'success',
         SCRIPTS_RESULT: 'success', WEB_RESULT: 'success', [`${name}_RESULT`]: result }).status, 0);

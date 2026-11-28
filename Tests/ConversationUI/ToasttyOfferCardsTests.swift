@@ -39,6 +39,10 @@ final class ToasttyOfferCardsTests: XCTestCase {
         XCTAssertEqual(Self.offerGroups(in: blocks).map { $0.offers.map(\.id) }, [["a", "b"]])
         // The text around the block stays text.
         XCTAssertEqual(blocks.count, 3)
+        if blocks.count == 3 {
+            XCTAssertEqual(ToasttyMarkdownSegment.segments(blocks),
+                           [.text([blocks[0]]), .other(blocks[1]), .text([blocks[2]])])
+        }
 
         for text in [
             Self.message("{\"offers\": ["),
@@ -103,16 +107,16 @@ final class ToasttyOfferCardsTests: XCTestCase {
     /// The message's accessibility label names the offers and leaves out
     /// their data: each card has its own label.
     func testTheMessagesLabelLeavesOutTheOffersData() {
-        let spoken = ToasttyOfferGroupView.spokenText(of: Self.message(Self.offersJSON(["a", "b"])))
+        let spoken = ToasttyOfferGroupPresentation.spokenText(of: Self.message(Self.offersJSON(["a", "b"])))
         XCTAssertEqual(spoken, "2 items block work.\n2 offers\nThat is all.")
         let broken = Self.message("{\"offers\": [")
-        XCTAssertEqual(ToasttyOfferGroupView.spokenText(of: broken), broken)
-        XCTAssertEqual(ToasttyOfferGroupView.spokenText(of: "No offers."), "No offers.")
+        XCTAssertEqual(ToasttyOfferGroupPresentation.spokenText(of: broken), broken)
+        XCTAssertEqual(ToasttyOfferGroupPresentation.spokenText(of: "No offers."), "No offers.")
     }
 
     func testTheFooterCountsTheAnswers() {
         func text(_ takesAnswers: Bool, _ pending: Int, _ answered: Int) -> String {
-            ToasttyOfferGroupView.footerText(takesAnswers: takesAnswers, pending: pending, answered: answered, total: 4)
+            ToasttyOfferGroupPresentation.footerText(takesAnswers: takesAnswers, pending: pending, answered: answered, total: 4)
         }
         XCTAssertEqual(text(true, 0, 0), "No answers yet")
         XCTAssertEqual(text(true, 1, 0), "1 answer not sent")
@@ -241,7 +245,7 @@ final class ToasttyOfferCardsTests: XCTestCase {
             event(2, .assistantMessage(.init(text: Self.message("{\"offers\": []}"), phase: .final))),
         ])
         XCTAssertFalse(emptied.takesAnswers(at: 1))
-        XCTAssertEqual(ToasttyOfferGroupView.spokenText(of: Self.message("{\"offers\": []}")),
+        XCTAssertEqual(ToasttyOfferGroupPresentation.spokenText(of: Self.message("{\"offers\": []}")),
                        "2 items block work.\nThat is all.")
 
         // A second answer replaces the first for the newer list.

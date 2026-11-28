@@ -166,11 +166,15 @@ final class AppStoreUnreadNavigationSpatialOrderTests: AppStoreCommandTestCase {
             // Compare presence checks from a fresh cycle. A retained cycle
             // can return its sole entry again after reaching that entry.
             fixture.store.replaceState(fixture.store.state)
+            #if os(macOS)
+            // ToasttyCommandMenus is the macOS menu layer (SwiftUI); Linux
+            // checks the AppStore entry point below.
             XCTAssertEqual(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
                 store: fixture.store,
                 preferredWindowID: fixture.windowID,
                 sessionRuntimeStore: fixture.sessions
             ), expectedAvailability)
+            #endif
             XCTAssertEqual(fixture.store.canFocusNextUnreadOrActivePanelFromCommand(
                 preferredWindowID: fixture.windowID,
                 sessionRuntimeStore: fixture.sessions

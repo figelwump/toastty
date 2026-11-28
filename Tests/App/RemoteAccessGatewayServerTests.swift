@@ -5,6 +5,12 @@ import Network
 import Testing
 @testable import ToasttyApp
 
+#if os(Linux)
+private let runsOnCorelibsFoundation = true
+#else
+private let runsOnCorelibsFoundation = false
+#endif
+
 @MainActor
 struct RemoteAccessGatewayServerTests {
     private struct FixedFacade: RemoteSessionFacade {
@@ -384,7 +390,7 @@ struct RemoteAccessGatewayServerTests {
         #expect(decoded.snapshot.conversations.first?.statusDetail == "Indexing the workspace")
     }
 
-    @Test func webSocketSubscribeReceivesBroadcasts() async throws {
+    @Test(.disabled(if: runsOnCorelibsFoundation, "corelibs URLSessionWebSocketTask misses server closes; see LinuxGatewayWebSocketTests")) func webSocketSubscribeReceivesBroadcasts() async throws {
         let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
@@ -571,7 +577,7 @@ struct RemoteAccessGatewayServerTests {
         #expect(harness.server.webSocketClientCount == 0)
     }
 
-    @Test func disconnectingDeviceSweepsAllMatchingSocketsAndIsolatesOtherDevice() async throws {
+    @Test(.disabled(if: runsOnCorelibsFoundation, "corelibs URLSessionWebSocketTask misses server closes; see LinuxGatewayWebSocketTests")) func disconnectingDeviceSweepsAllMatchingSocketsAndIsolatesOtherDevice() async throws {
         let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
@@ -609,7 +615,7 @@ struct RemoteAccessGatewayServerTests {
         }
     }
 
-    @Test func disconnectAllSweepsEveryDeviceSocket() async throws {
+    @Test(.disabled(if: runsOnCorelibsFoundation, "corelibs URLSessionWebSocketTask misses server closes; see LinuxGatewayWebSocketTests")) func disconnectAllSweepsEveryDeviceSocket() async throws {
         let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)
@@ -648,7 +654,7 @@ struct RemoteAccessGatewayServerTests {
         #expect(allDevicesRevoked)
     }
 
-    @Test func sendScopeDowngradeKeepsReadSocketAliveAndRejectsSendImmediately() async throws {
+    @Test(.disabled(if: runsOnCorelibsFoundation, "corelibs URLSessionWebSocketTask misses server closes; see LinuxGatewayWebSocketTests")) func sendScopeDowngradeKeepsReadSocketAliveAndRejectsSendImmediately() async throws {
         let harness = try await Self.startHarness()
         defer { harness.server.stop() }
         try await Self.awaitListening(harness)

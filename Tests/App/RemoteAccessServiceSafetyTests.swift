@@ -1256,6 +1256,8 @@ struct RemoteAccessServiceSafetyTests {
         #expect(board.items().first { $0.id == .task(taskID) }?.stage == .done)
     }
 
+    #if os(macOS)
+    // Builds the quick entry panel's controller (AppKit).
     /// A phone reads the Mac's capabilities when it connects. The Mac makes
     /// the coordinator's controller at launch, not at the first Open
     /// Coordinator, so a phone that connects before the coordinator ever
@@ -1332,6 +1334,7 @@ struct RemoteAccessServiceSafetyTests {
         #expect(capabilities.contains(.coordinatorChatRead))
         #expect(capabilities.contains(.taskCreate))
     }
+    #endif
 
     @MainActor
     @Test func workspaceInventoryNamesSpawnersByListedConversationAndOnlyKnownPrimaryKeys() throws {
@@ -2841,6 +2844,81 @@ struct RemoteAccessServiceSafetyTests {
             fixture.summary.inputAvailability.allowsRemoteSend
         }
         #expect(fixture.summary.inputAvailability.allowsRemoteSend)
+    }
+
+    /// A transcript replayed from the start reaches phones as one resnapshot
+    /// when the replay catches up, not as a page per batch. A phone that opened
+    /// the conversation mid-replay overflowed its live buffer and kept a
+    /// partial history.
+    @MainActor
+    @Test(arguments: [false, true])
+    func transcriptReplayReachesPhonesAsOneResnapshot(directSession: Bool) async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        if directSession {
+            fixture.sessionRuntimeStore.markDirectSession(sessionID: fixture.sessionID)
+            fixture.service.attachDirectSession(DirectSessionStandIn(
+                panelID: fixture.panelID, sessionID: fixture.sessionID, service: fixture.service
+            ))
+        }
+        let recordedAt = Date().addingTimeInterval(-600)
+        let conversationID = fixture.conversationID
+        func eventCount() -> Int {
+            var cursor: ConversationEventCursor?
+            var total = 0
+            while case .page(let page) = fixture.service.facadeConversationEvents(
+                for: conversationID, after: cursor, limit: 200
+            ), let last = page.events.last {
+                total += page.events.count
+                cursor = ConversationEventCursor(projectionRunID: page.projectionRunID,
+                    projectionGeneration: page.projectionGeneration, afterSequence: last.sequence)
+            }
+            return total
+        }
+        func broadcasts(since start: Int) -> (pages: Int, resnapshots: Int) {
+            var pages = 0, resnapshots = 0
+            for message in fixture.server.broadcasts.dropFirst(start) {
+                switch message {
+                case .conversationEvents(let page) where page.conversationID == conversationID: pages += 1
+                case .resnapshotRequired(conversationID) : resnapshots += 1
+                default: break
+                }
+            }
+            return (pages, resnapshots)
+        }
+
+        // A new file at the transcript path makes the tailer replay it from
+        // the start, as a relaunch does; 1,000 records span several batches.
+        var history = Data()
+        for index in 0..<1_000 {
+            history.append(try Self.claudeUserLine("Message \(index)", id: "user-\(index)", at: recordedAt))
+        }
+        let transcriptPath = fixture.resumeRecord.sessionFilePath
+        let start = fixture.server.broadcasts.count
+        try history.write(to: URL(filePath: transcriptPath + ".new"))
+        try FileManager.default.removeItem(atPath: transcriptPath)
+        try FileManager.default.moveItem(atPath: transcriptPath + ".new", toPath: transcriptPath)
+
+        // One resnapshot when the file is replaced, one when the replay ends.
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 10_000_000_000) {
+            broadcasts(since: start).resnapshots >= 2
+        }
+        // The replaced file starts a fresh generation holding the replay.
+        #expect(eventCount() >= 1_000)
+        #expect(broadcasts(since: start).pages == 0)
+        #expect(broadcasts(since: start).resnapshots == 2)
+
+        // Once caught up, newly read records are broadcast live again.
+        // A direct session still only reads historical records from its file.
+        let handle = try FileHandle(forWritingTo: URL(filePath: transcriptPath))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: try Self.claudeUserLine("Appended message", id: "user-live", at: recordedAt))
+        try handle.close()
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 5_000_000_000) {
+            broadcasts(since: start).pages > 0
+        }
+        #expect(broadcasts(since: start).pages == 1)
     }
 
     /// Claude compacts an idle session without running a turn, so no Stop

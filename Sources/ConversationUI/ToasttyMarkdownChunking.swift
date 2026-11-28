@@ -108,6 +108,25 @@ enum ToasttyMarkdownChunking {
 
 /// Foundation owns Markdown grammar; layout consumes its semantic blocks.
 enum ToasttyMarkdownParser {
+    @MainActor private static let cache: NSCache<NSString, ParsedBlocks> = {
+        let cache = NSCache<NSString, ParsedBlocks>()
+        cache.countLimit = 600
+        return cache
+    }()
+
+    private final class ParsedBlocks {
+        let value: [ToasttyMarkdownBlock]
+        init(_ value: [ToasttyMarkdownBlock]) { self.value = value }
+    }
+
+    @MainActor static func cachedBlocks(_ text: String) -> [ToasttyMarkdownBlock] {
+        let key = text as NSString
+        if let cached = cache.object(forKey: key) { return cached.value }
+        let blocks = parse(text)
+        cache.setObject(ParsedBlocks(blocks), forKey: key)
+        return blocks
+    }
+
     static func parse(_ text: String) -> [ToasttyMarkdownBlock] {
         guard let attributed = try? AttributedString(markdown: text) else {
             return [ToasttyMarkdownBlock(

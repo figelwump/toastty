@@ -209,6 +209,70 @@ report verification as incomplete with the last available state. Do not select
 a workspace/tab or move focus to force a stronger result. Report visual or
 application readiness separately when the available evidence cannot establish it.
 
+## Testing A Web App In A Browser Panel (Linux)
+
+On Linux, `toastty browser` drives a Toastty browser panel the way Playwright
+drives a browser, for loading, inspecting and testing local web apps. (On macOS
+it is not available yet; the CLI reports `unknown command: browser`.) Commands
+target a browser in this terminal's workspace, or `--panel <id>`; they never
+change selection or focus.
+
+```bash
+toastty browser open http://localhost:3000   # right panel; waits for the load; creates a browser if none
+toastty browser snapshot                     # outline with refs: - button "Save" [ref=e7]
+toastty browser fill e4 "Buy milk"
+toastty browser press Enter --target e4
+toastty browser click 'role=button[name="Save"]'
+toastty browser check 'label=Remember me'
+toastty browser select '#size' Large
+toastty browser wait text "Saved"            # or: wait visible|hidden <target>, wait url '*/done', wait idle
+toastty browser text '#status'
+toastty browser eval 'document.querySelectorAll(".todo-list li").length'
+toastty browser console --errors
+toastty browser network --failed
+toastty browser screenshot --out /tmp/page.png   # then read the PNG to look at the page
+```
+
+- Name elements by a `snapshot` ref (`e12`), a CSS selector, XPath (`//…`), or
+  `text=`, `role=button[name="Save"]`, `label=`, `placeholder=`, `testid=`
+  locators; quote the value for an exact match (`text="Save"`). Refs last until
+  the page navigates; take a new snapshot after navigation or large changes.
+- Actions wait (default 10s, `--timeout <ms>`) until the element is visible,
+  enabled and not covered, then report what they hit, whether several elements
+  matched, and whether the action navigated. `--force` skips the checks.
+- Input is synthetic DOM events (untrusted), with emulated defaults for Enter,
+  Tab, Backspace and Space. It works with React and other frameworks, but CSS
+  `:hover` and handlers that require `event.isTrusted` do not react.
+- `eval` runs in the page (expression, function, or statements with `return`)
+  and awaits promises. `dialog accept|dismiss` sets how later
+  alert/confirm/prompt dialogs are answered (default: accept); answered dialogs
+  appear in `console`.
+- `--json` returns the raw result. Run `toastty browser --help` for every
+  command. `open` creates the browser in the right panel; pass `--placement`
+  only when the user asks for a split or tab. A browser in a workspace or tab the user has never shown still
+  loads and takes input, but `screenshot` needs it on screen once.
+
+## Local Dev Servers On The User's Phone
+
+The user's paired phone can preview a right-panel browser. For a server on
+this computer, such as `http://localhost:5173`, Toastty maps the port onto the
+tailnet with Tailscale Serve and the phone loads
+`https://<machine>.<tailnet>.ts.net:5173/`. Keep opening the `localhost` URL in
+the panel; Toastty does the mapping. When you start or configure a dev server
+the user may look at:
+
+- Serve plain `http` on `127.0.0.1`. Serve forwards to `127.0.0.1:<port>`, so a
+  server listening only on IPv6 `::1` (Vite's default for `localhost` on macOS)
+  or only on HTTPS cannot be previewed. Vite: `server.host: '127.0.0.1'`.
+- Allow `.ts.net` host names. The phone's requests arrive with
+  `Host: <machine>.<tailnet>.ts.net:<port>`, which servers that check hosts
+  reject by default. Vite: `server.allowedHosts: ['.ts.net']`.
+  webpack-dev-server: `allowedHosts: ['.ts.net']`. Next.js:
+  `allowedDevOrigins: ['*.ts.net']`. Give any other host-checking server the
+  same allowance.
+- Do not expose the server any wider (no `0.0.0.0`, Funnel, or port forwarding)
+  for the phone's sake; the tailnet mapping is enough.
+
 ## Closing Panels
 
 `panel.close` is non-interactive on the app-control path: it returns an error

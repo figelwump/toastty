@@ -224,6 +224,11 @@ enum RemoteTaskBoardProjection {
                 return RemoteTaskActionItem(action: .retry, title: menuItem.title)
             case .delete:
                 return RemoteTaskActionItem(action: .delete, title: menuItem.title)
+            #if os(Linux)
+            case .continueAsNewTask:
+                // It opens New Task on the computer; the iPhone has no such panel.
+                return nil
+            #endif
             }
         }
     }
@@ -286,7 +291,7 @@ enum RemoteTaskBoardProjection {
         switch item.stage {
         case .done:
             return RemoteTaskMergeControl(kind: .done, title: "Done", menu: [archiveTaskItem])
-        case .needsYou(.readyForReview):
+        case .needsYou(.readyForReview) where item.permitsMarkDoneAtPrompt:
             return RemoteTaskMergeControl(
                 kind: .completeTask, title: "Complete Task", action: RemoteTaskActionItem(action: .markDone, title: "Complete Task")
             )

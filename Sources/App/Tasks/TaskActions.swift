@@ -107,6 +107,10 @@ enum TaskActions {
             try coordinator.retry(taskID: taskID)
         case .delete(let taskID):
             try coordinator.delete(taskID: taskID)
+        #if os(Linux)
+        case .continueAsNewTask(let taskID):
+            coordinator.board?.continueAsNewTask?(taskID)
+        #endif
         }
     }
 
@@ -131,6 +135,10 @@ enum TaskActions {
         case .trackAsTask(let workspaceID): subject = .taskSpace(workspaceID)
         case .action(_, let taskID, _), .retry(let taskID, _), .retryTriage(let taskID), .delete(let taskID):
             subject = .task(taskID)
+        #if os(Linux)
+        case .continueAsNewTask(let taskID):
+            subject = .task(taskID)
+        #endif
         }
         guard let board = coordinator.board,
               let current = board.items().first(where: { $0.id == subject }) else { return false }
@@ -148,6 +156,9 @@ enum TaskActions {
         case .action(let action, let id, _): (start, taskID) = (action.failureTitle, id)
         case .retry(let id, _), .retryTriage(let id): (start, taskID) = ("Unable to Retry", id)
         case .delete(let id): (start, taskID) = ("Unable to Delete", id)
+        #if os(Linux)
+        case .continueAsNewTask(let id): (start, taskID) = ("Unable to Continue", id)
+        #endif
         }
         guard let title = coordinator.records.record(id: taskID)?.title else { return start }
         return "\(start) \(title)"
@@ -280,6 +291,10 @@ enum TaskActions {
             deleteUnpushed = box
             checkboxes.append(box)
         }
+        #if os(Linux)
+        // GTK draws them under the text (`AdwAlertDialog`'s extra child).
+        alert.accessoryCheckboxes = checkboxes
+        #else
         if checkboxes.isEmpty == false {
             let stack = NSStackView(views: checkboxes)
             stack.orientation = .vertical
@@ -288,6 +303,7 @@ enum TaskActions {
             stack.frame = NSRect(x: 0, y: 0, width: 320, height: CGFloat(checkboxes.count) * 22)
             alert.accessoryView = stack
         }
+        #endif
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let options = TaskArchiveOptions(
             closePullRequest: closePullRequest?.state == .on,
@@ -306,23 +322,5 @@ enum TaskActions {
 
     static func presentFailure(_ title: String, _ message: String) {
         WorkspaceMergeCoordinator.presentAlert(title: title, message: message)
-    }
-}
-
-/// A task's context menu items, with a divider between sections. The rows
-/// that stand for a task in the sidebar and the Tasks view all show these.
-struct TaskContextMenuItems: View {
-    let sections: [[TaskBoardPresentation.MenuItem]]
-    let run: (TaskBoardPresentation.MenuItem) -> Void
-
-    var body: some View {
-        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
-            if index > 0 {
-                Divider()
-            }
-            ForEach(section, id: \.self) { item in
-                Button(item.title, role: item.isDestructive ? .destructive : nil) { run(item) }
-            }
-        }
     }
 }

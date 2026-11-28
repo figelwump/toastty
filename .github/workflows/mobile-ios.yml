@@ -1,7 +1,7 @@
 name: Toastty CI
 
-# Pull requests run only the Linux workflow tests and the CI gate, which branch
-# protection on main requires. The test jobs run only on manual dispatch:
+# Pull requests run the desktop checks and the CI gate required by main.
+# Manual dispatch also runs the full iOS, portable script and web suites:
 #   gh workflow run mobile-ios.yml --ref <branch>
 on:
   pull_request:
@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -90,22 +92,29 @@ jobs:
           retention-days: 14
 
   macos:
-    name: macOS contract tests
+    name: macOS build, tests and smoke
     needs: workflow
-    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 75
+    permissions:
+      contents: read
     env:
       ARCH: arm64
-      TUIST_DISABLE_GHOSTTY: 1
+      TUIST_TOASTTY_DISABLE_PUSH: 1
+      DERIVED_PATH: ${{ github.workspace }}/artifacts/ci-macos/Derived
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
+
+      - name: Select pinned Xcode
+        run: bash scripts/ci/select-ios-xcode.sh
 
       - name: Install pinned Tuist
         run: |
@@ -122,40 +131,169 @@ jobs:
       - name: Test Mac release and device scripts
         run: node --test ios/Tests/ReleaseScriptTests/ios-testflight.test.mjs ios/Tests/ScriptTests/validate-device-build.test.mjs
 
-      - name: Generate macOS project
-        run: TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
+      - name: Restore pinned GhosttyKit
+        id: mac-ghostty-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            Dependencies/GhosttyKit.Debug.xcframework
+            Dependencies/GhosttyKit.Debug.metadata.env
+          key: macos-26-arm64-ghostty-${{ hashFiles('docs/ghostty-integration.md', 'scripts/ci/build-macos-ghostty.sh', 'scripts/ghostty/install-local-xcframework.sh', '.github/ios-xcode-version') }}
 
-      - name: Test macOS contract
+      - name: Build pinned GhosttyKit
+        if: steps.mac-ghostty-cache.outputs.cache-hit != 'true'
+        run: bash scripts/ci/build-macos-ghostty.sh
+
+      - name: Cache built GhosttyKit
+        if: steps.mac-ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Dependencies/GhosttyKit.Debug.xcframework
+            Dependencies/GhosttyKit.Debug.metadata.env
+          key: ${{ steps.mac-ghostty-cache.outputs.cache-primary-key }}
+
+      - name: Generate macOS project
+        run: |
+          ./scripts/dev/bootstrap-worktree.sh
+          grep -q TOASTTY_HAS_GHOSTTY_KIT toastty.xcodeproj/project.pbxproj
+
+      - name: Build macOS Debug and test bundles
+        id: debug-build
+        run: |
+          mkdir -p artifacts/ci-macos
+          xcodebuild \
+            -workspace toastty.xcworkspace \
+            -scheme ToasttyApp \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$DERIVED_PATH" \
+            -resultBundlePath artifacts/ci-macos/DebugBuild.xcresult \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            build-for-testing
+
+      - name: Run macOS XCTest
         run: |
           xcodebuild \
             -workspace toastty.xcworkspace \
             -scheme ToasttyApp \
             -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath artifacts/ci-macos/Derived \
+            -derivedDataPath "$DERIVED_PATH" \
             -resultBundlePath artifacts/ci-macos/TestResults.xcresult \
+            -parallel-testing-enabled NO \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=YES \
-            test
+            test-without-building
 
       - name: Build unsigned macOS Release app
+        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}
         run: |
           xcodebuild \
             -workspace toastty.xcworkspace \
-            -scheme ToasttyApp \
+            -scheme ToasttyApp-Release \
             -configuration Release \
             -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath artifacts/ci-macos/Derived \
+            -derivedDataPath "$DERIVED_PATH" \
             -resultBundlePath artifacts/ci-macos/ReleaseBuild.xcresult \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Upload macOS test artifacts
+      - name: Smoke test the macOS GUI
+        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}
+        run: |
+          result=0
+          for smoke in smoke-ui workspace-tabs-smoke workspace-scope-smoke shortcut-hints-smoke; do
+            RUN_ID="ci-$smoke" scripts/automation/"$smoke".sh || result=1
+          done
+          exit "$result"
+
+      - name: Upload macOS test and smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-contract-tests-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/ci-macos/*.xcresult
+          name: macos-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/ci-macos/*.xcresult
+            artifacts/dev-runs/ci-*/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux:
+    name: Linux build, tests and smoke (${{ matrix.runner }})
+    needs: workflow
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-26.04]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Install Swift and Linux build dependencies
+        run: bash scripts/ci/setup-linux.sh
+
+      - name: Restore pinned Linux Ghostty
+        id: linux-ghostty-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: linux/.deps/ghostty
+          key: ${{ matrix.runner }}-x64-ghostty-${{ hashFiles('linux/ghostty/**') }}
+
+      - name: Build pinned Linux Ghostty
+        if: steps.linux-ghostty-cache.outputs.cache-hit != 'true'
+        run: linux/ghostty/build-libghostty.sh
+
+      - name: Cache built Linux Ghostty
+        if: steps.linux-ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: linux/.deps/ghostty
+          key: ${{ steps.linux-ghostty-cache.outputs.cache-primary-key }}
+
+      - name: Point restored Ghostty pkg-config file at this checkout
+        if: steps.linux-ghostty-cache.outputs.cache-hit == 'true'
+        run: sed -i "s|^prefix=.*|prefix=$PWD/linux/.deps/ghostty|" linux/.deps/ghostty/lib/pkgconfig/toastty-ghostty.pc
+
+      - name: Build, test, smoke and package Toastty on Broadway
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          DEBFULLNAME: Toastty CI
+          DEBEMAIL: ci@toastty.invalid
+          LIBGL_ALWAYS_SOFTWARE: 1
+        run: |
+          # The nested Swift GUI fixtures allocate AF_UNIX sockets inside
+          # this directory. Keep the runner-specific base path short.
+          export XDG_RUNTIME_DIR="$(mktemp -d /tmp/tt.XXXXXX)"
+          trap 'rm -rf -- "$XDG_RUNTIME_DIR"' EXIT
+          umask 022
+          dbus-run-session -- scripts/linux/check.sh
+
+      - name: Upload Linux test and smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tests-${{ matrix.runner }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/dev-runs/*/artifacts/
+            artifacts/manual/ghostty-linux/
+            artifacts/manual/linux-tasks/
+            artifacts/package-tests/*/report*
+            artifacts/package-tests/*/results.json
+            artifacts/package-tests/*/*/app.log
+            artifacts/package-tests/*/*/screenshots/
+            artifacts/package-tests/*/*/transcripts/
           if-no-files-found: warn
           retention-days: 14
 
@@ -213,22 +351,26 @@ jobs:
       - workflow
       - ios
       - macos
+      - linux
       - scripts
       - web
     runs-on: ubuntu-latest
     steps:
-      - name: Require the workflow tests, and every job on a full run
+      - name: Require desktop checks and every job on a full run
         env:
           WORKFLOW_RESULT: ${{ needs.workflow.result }}
           IOS_RESULT: ${{ needs.ios.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
+          LINUX_RESULT: ${{ needs.linux.result }}
           SCRIPTS_RESULT: ${{ needs.scripts.result }}
           WEB_RESULT: ${{ needs.web.result }}
           FULL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           test "$WORKFLOW_RESULT" = success
+          test "$MACOS_RESULT" = success
+          test "$LINUX_RESULT" = success
           expected=skipped
           if [[ "$FULL_RUN" == true ]]; then expected=success; fi
-          for result in "$IOS_RESULT" "$MACOS_RESULT" "$SCRIPTS_RESULT" "$WEB_RESULT"; do
+          for result in "$IOS_RESULT" "$SCRIPTS_RESULT" "$WEB_RESULT"; do
             test "$result" = "$expected"
           done

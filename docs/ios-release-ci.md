@@ -211,9 +211,9 @@ Before archiving, the workflow checks GitHub Actions for a successful full manua
 push runs do not qualify.
 
 The newest trusted manual run must have a successful current attempt. The helper
-also requires one successful result for each of `CI gate`, `Script tests`,
-`Web panel tests`, `macOS contract tests`, `iOS tests (Debug)`, and
-`iOS tests (Release)`, all from that exact source and attempt. These names are maintained in
+also requires one successful result for the CI gate, the Mac desktop job, both
+Ubuntu desktop jobs, script and web-panel tests, and the Debug and Release iOS
+tests, all from that exact source and attempt. These names are maintained in
 `.github/ios-release-ci-jobs.json` and checked against the workflow. A failed or pending
 newer manual run blocks an older green result. Missing, skipped, cancelled,
 abandoned, failed, pending, incomplete, or unavailable evidence blocks archiving

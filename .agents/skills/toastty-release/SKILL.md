@@ -1,11 +1,13 @@
 ---
 name: toastty-release
-description: Use this skill when preparing a Toastty app release build, including Ghostty artifact installation, signed DMG creation, and drafting release notes from the recorded release diff.
+description: Use this skill when preparing a Toastty app release build, including Ghostty artifact installation, signed DMG creation, and drafting release notes from the recorded release diff, or building, testing and attaching the Linux port's packages (.deb, AppImage).
 ---
 
 # Toastty Release
 
 Use this workflow when the user asks to cut or prepare a Toastty release build artifact.
+
+**Linux:** the flow below builds the macOS DMG. The Linux `.deb` and AppImage ship on the same GitHub Release; to build, test (install, launch, terminal, Claude and Codex, screenshots) and attach them, read `references/linux.md` instead.
 
 ## Release order
 

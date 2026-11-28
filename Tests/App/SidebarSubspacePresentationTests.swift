@@ -453,6 +453,8 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(SidebarSubspacePresentation.path(sessionCWDs: [], workspace: workspace), "/repo/www-docs")
     }
 
+    #if os(macOS)
+    // SidebarView (SwiftUI) owns the drag index math; Linux's sidebar is GTK.
     func testWorkspaceMoveIndicesSkipSubspacesInTheWindowOrder() {
         let a = UUID(), b = UUID(), c = UUID(), subA = UUID(), subB = UUID()
         // Window order interleaves subspaces; the sidebar drags cards only.
@@ -485,6 +487,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
             draggedWorkspaceID: a, targetIndex: 3, topLevelWorkspaceIDs: cards, windowWorkspaceIDs: windowOrder
         ))
     }
+    #endif
 
     func testTaskStageSetsAQuietRowsMarkButAnAgentStillComesFirst() {
         typealias P = SidebarSubspacePresentation

@@ -1031,7 +1031,9 @@ agent one `[Toastty wake]` line at its open prompt, and the mark clears when
 that turn starts. `--clear`, a new `--on`, `task ready-for-review`, Done and
 Archive end it. See [Wait outside Toastty](tasks.md#wait-outside-toastty).
 `task ready-for-review` marks work without a pull request ready, and
-`task mark-done` finishes it. `task release` starts a release task for a
+`task mark-done` finishes it. On Linux, the agent must be back at its
+prompt. A running turn, a pending approval, an agent error, or no running
+agent prevents it. `task release` starts a release task for a
 project with `release_skill` or `release_prompt`. `--agent`, `--model` and
 `--effort` choose its agent as for `task create`; `[defaults]` fills what
 they leave out. See [Merge a task](tasks.md#merge-a-task),

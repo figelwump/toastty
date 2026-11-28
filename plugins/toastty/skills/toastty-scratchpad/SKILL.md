@@ -334,3 +334,49 @@ The helper requires `TOASTTY_CLI_PATH` and `TOASTTY_SESSION_ID`, which are prese
 - Tell the user what you put in the Scratchpad and summarize the key visual.
 - Mention if the helper reported a panel/document/revision so the user knows the update succeeded.
 - If the helper succeeds but the panel is not visible or appears incomplete, query `panel.scratchpad.state` for the returned `panelID` and inspect `recentDiagnostics` before republishing.
+
+## Keep A Scratchpad In The Workspace
+
+On Linux, each top-level workspace has a workspace page that lists the
+Scratchpads it keeps. A task's own Scratchpad closes with its task space. A
+kept copy stays with the workspace until the user deletes it. These commands
+exist only where `toastty action list` lists them; on a Mac, skip this
+section.
+
+Keep a Scratchpad when it records something the workspace should remember
+after the task ends, such as a decision, a plan, a design, or results. Do not
+keep throwaway status views. Keep it once; later updates to your Scratchpad
+copy over by themselves while your task space is open:
+
+```bash
+toastty action run workspace.scratchpad.keep --json \
+  "sessionID=$TOASTTY_SESSION_ID" "documentID=<document-id>"
+```
+
+The result has the copy's `documentID`, `linked` and `created` (false when it
+was kept already). Give the Scratchpad a clear title and purpose first: the
+workspace page lists them. The user can also keep a Scratchpad with the pin in
+the right panel's header.
+
+To read what the workspace kept, such as plans from earlier tasks, list the
+kept Scratchpads, then export the one you need. A managed session that names
+no workspace gets its own top-level workspace. Do not open or delete kept
+Scratchpads unless the user asks.
+
+```bash
+toastty query run workspace.scratchpad.list --json
+toastty action run workspace.scratchpad.export --json "documentID=<copy-id>"
+```
+
+`toastty query run workspace.overview --json` returns the whole page: the
+synopsis, the latest tasks and what each did, every task of the workspace, and
+the kept Scratchpads. When the user asks you to describe the workspace, write
+the page's synopsis: a few plain sentences on the workspace's purpose and
+current state, then the `Recent work:` list of what recent tasks did, one
+line each. A task's agent rewrites the synopsis each time its task finishes,
+as `toastty-task-start` describes under *Record what the task did*. Keep the
+lines already there, so the list is not lost:
+
+```bash
+toastty action run workspace.synopsis.set --json --stdin text < synopsis.txt
+```

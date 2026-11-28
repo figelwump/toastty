@@ -398,6 +398,16 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 context: context
             )
 
+        #if os(Linux)
+        case "browser.automation":
+            // `toastty browser …` (Linux only; LinuxBrowserAutomation.swift).
+            return try await LinuxBrowserAutomation(
+                executor: appControlExecutor,
+                registry: webPanelRuntimeRegistry,
+                context: context
+            ).run(payload)
+        #endif
+
         case "session.claude_question":
             guard let requestJSON = payload.string("requestJSON"),
                   requestJSON.utf8.count <= 128 * 1024,
@@ -1439,8 +1449,17 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             guard let nativeSessionID = normalizedOptionalText(event.payload.string("nativeSessionID")) else {
                 throw AutomationSocketError.invalidPayload("nativeSessionID is required")
             }
-            guard let sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
+            guard var sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
                 throw AutomationSocketError.invalidPayload("sessionFilePath is required")
+            }
+            if agent == .claude {
+                // A session resumed from another directory reports a
+                // transcript path that does not exist; tailing it would
+                // leave paired devices with no history or live updates.
+                sessionFilePath = ManagedAgentResumeResolver.existingClaudeTranscriptPath(
+                    reported: sessionFilePath,
+                    nativeSessionID: nativeSessionID
+                )
             }
             guard let cwd = normalizedOptionalText(event.payload.string("cwd"))
                 ?? normalizedOptionalText(activeSession.cwd) else {

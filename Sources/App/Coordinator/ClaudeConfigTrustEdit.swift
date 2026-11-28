@@ -89,6 +89,11 @@ enum ClaudeConfigTrustEdit {
               let after = try? JSONSerialization.jsonObject(with: edited) as? NSDictionary else {
             throw Failure(reason: "the config file is not a JSON object")
         }
+        #if os(Linux)
+        guard linuxTrusts(after, folderKey: folderKey, andKeepsTheRestOf: before) else {
+            throw Failure(reason: "the edit would change more than the folder's trust")
+        }
+        #else
         let key = folderKey as NSString
         let projects = NSMutableDictionary(dictionary: (before[projectsKey] as? NSDictionary) ?? [:])
         let entry = NSMutableDictionary(dictionary: (projects[key] as? NSDictionary) ?? [:])
@@ -100,9 +105,97 @@ enum ClaudeConfigTrustEdit {
         // two keys that differ only in Unicode normalization for one.
         let written = ((after[projectsKey] as? NSDictionary)?[key] as? NSDictionary)?[trustKey] as? NSNumber
         guard expected.isEqual(after),
-              let written, CFGetTypeID(written) == CFBooleanGetTypeID(), written.boolValue else {
+              let written, Self.isBoolean(written), written.boolValue else {
             throw Failure(reason: "the edit would change more than the folder's trust")
         }
+        #endif
+    }
+
+    #if os(Linux)
+    // corelibs `NSDictionary` finds a non-ASCII `NSString` key only for some
+    // hash seeds, so lookups and `isEqual` miss keys at random. Linux
+    // compares the parsed objects itself, matching keys by their Unicode
+    // scalars as `NSString` does on macOS: keys that differ only in their
+    // Unicode form stay apart.
+
+    /// A JSON object as its members, so that no key is looked up by hash.
+    private struct Members {
+        var pairs: [(key: String, value: Any)]
+
+        init(pairs: [(key: String, value: Any)]) {
+            self.pairs = pairs
+        }
+
+        init?(_ value: Any?) {
+            if let members = value as? Members {
+                self = members
+                return
+            }
+            guard let dictionary = value as? NSDictionary else { return nil }
+            var pairs: [(key: String, value: Any)] = []
+            for (key, value) in dictionary {
+                guard let key = key as? String else { return nil }
+                pairs.append((key, value))
+            }
+            self.pairs = pairs
+        }
+
+        subscript(key: String) -> Any? {
+            get { pairs.first { sameKey($0.key, key) }?.value }
+            set {
+                let index = pairs.firstIndex { sameKey($0.key, key) }
+                switch (index, newValue) {
+                case let (index?, value?): pairs[index].value = value
+                case let (nil, value?): pairs.append((key, value))
+                case let (index?, nil): pairs.remove(at: index)
+                case (nil, nil): break
+                }
+            }
+        }
+    }
+
+    private static func sameKey(_ a: String, _ b: String) -> Bool {
+        a.unicodeScalars.elementsEqual(b.unicodeScalars)
+    }
+
+    private static func sameJSON(_ a: Any, _ b: Any) -> Bool {
+        if let a = Members(a), let b = Members(b) {
+            guard a.pairs.count == b.pairs.count else { return false }
+            return a.pairs.allSatisfy { pair in b[pair.key].map { sameJSON(pair.value, $0) } ?? false }
+        }
+        if let a = a as? NSArray, let b = b as? NSArray {
+            return a.count == b.count && zip(a, b).allSatisfy { sameJSON($0, $1) }
+        }
+        if let a = a as? NSNumber, let b = b as? NSNumber {
+            return isBoolean(a) == isBoolean(b) && a.isEqual(b)
+        }
+        if let a = a as? String, let b = b as? String {
+            return a.unicodeScalars.elementsEqual(b.unicodeScalars)
+        }
+        return a is NSNull && b is NSNull
+    }
+
+    private static func linuxTrusts(_ after: NSDictionary, folderKey: String, andKeepsTheRestOf before: NSDictionary) -> Bool {
+        guard var expected = Members(before), let edited = Members(after) else { return false }
+        var projects = Members(expected[projectsKey]) ?? Members(pairs: [])
+        var entry = Members(projects[folderKey]) ?? Members(pairs: [])
+        entry[trustKey] = NSNumber(value: true)
+        projects[folderKey] = entry
+        expected[projectsKey] = projects
+        guard let written = Members(Members(edited[projectsKey])?[folderKey])?[trustKey] as? NSNumber else { return false }
+        return sameJSON(expected, edited) && isBoolean(written) && written.boolValue
+    }
+    #endif
+
+    /// A JSON `true` or `false`, not a number.
+    private static func isBoolean(_ number: NSNumber) -> Bool {
+        #if os(Linux)
+        // No CFGetTypeID in corelibs Foundation; a JSON boolean is the
+        // only NSNumber JSONSerialization makes with the `c` type.
+        String(cString: number.objCType) == "c"
+        #else
+        CFGetTypeID(number) == CFBooleanGetTypeID()
+        #endif
     }
 
     // MARK: - The text

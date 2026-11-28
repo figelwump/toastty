@@ -1334,6 +1334,58 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherDeliversBacklogReadInOneDeltaAndKeepsTrailingFragment() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let backlogLineCount = 2_000
+        let backlogEvents = expectation(description: "Every backlog prompt arrives")
+        backlogEvents.expectedFulfillmentCount = backlogLineCount
+        backlogEvents.assertForOverFulfill = true
+        let fragmentEvent = expectation(description: "Completed fragment arrives")
+        fragmentEvent.assertForOverFulfill = true
+
+        // Distinct ids keep the shared timestamp from deduplicating the turns.
+        func promptLine(_ text: String, id: String) -> String {
+            #"{"ts":"2026-03-27T18:46:23.170Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","id":"\#(id)","items":[{"type":"text","text":"\#(text)"}]}}"#
+        }
+        let prompts = (0..<backlogLineCount).map { "Backlog prompt \($0)" }
+        let fragmentPrompt = "Prompt split after the backlog"
+        let fragmentData = Data(promptLine(fragmentPrompt, id: "turn-fragment").utf8)
+        let splitIndex = fragmentData.count / 2
+
+        // Written before the watcher starts so the first read returns the
+        // whole backlog, ending in an incomplete line, as a single delta.
+        var backlog = Data(
+            prompts.enumerated().map { promptLine($1, id: "turn-\($0)") + "\n" }.joined().utf8
+        )
+        backlog.append(fragmentData.prefix(splitIndex))
+        try append(backlog, to: logURL)
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            if event.detail == fragmentPrompt {
+                fragmentEvent.fulfill()
+            } else {
+                backlogEvents.fulfill()
+            }
+        }
+        watcher.start()
+        await fulfillment(of: [backlogEvents], timeout: 10)
+
+        var trailingData = Data(fragmentData.dropFirst(splitIndex))
+        trailingData.append(UInt8(ascii: "\n"))
+        try append(trailingData, to: logURL)
+
+        await fulfillment(of: [fragmentEvent], timeout: 1)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.map(\.detail), prompts + [fragmentPrompt])
+    }
+
     func testWatcherResumesSameFileWithoutReplayingDeliveredLines() async throws {
         let logURL = try makeLogURL()
         let cursorState = CodexSessionLogCursorState()

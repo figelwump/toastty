@@ -89,6 +89,17 @@ turn of its agent and counts toward your agent's usage. Close the Coordinator
 workspace to stop it. See
 [When Toastty wakes the coordinator](#when-toastty-wakes-the-coordinator).
 
+### On Linux
+
+The Linux app has the same tasks, Tasks view, sidebar, quick entry and
+coordinator. The keys differ: Ctrl takes Command's place, Show Tasks is
+`Ctrl+Shift+D` (`Ctrl+Shift+T` opens a tab), the coordinator's dock is
+`Ctrl+Shift+K`, and quick entry is `Alt+Shift+T`. In every app the key
+goes through the desktop's global shortcuts portal, which asks you before
+it binds the key. Quick entry is a normal small window. Webhook keys are
+kept in `task-webhook-secrets.json` beside `task-webhooks.json`, readable
+by you only. See [Linux](linux.md#tasks-and-the-coordinator).
+
 ## Approval prompts
 
 A task's agent runs commands such as `toastty task start-work`, `git push`
@@ -2734,6 +2745,47 @@ and Archived, and the detail pane follows. When the selected task leaves the
 list, for example after **Archive…** or **Mark Done** into collapsed Done, the
 next row is selected, or the previous one when it was the last.
 
+### The workspace page (Linux)
+
+On Linux, clicking a project card's title in the sidebar opens the
+project's **workspace page** over the workspace, as the Tasks view does:
+
+- **About** says what the workspace is about, then a short *Recent work*
+  list. A task's agent rewrites it with `workspace.synopsis.set` each time
+  its task finishes (the `toastty-task-start` skill's *Record what the task
+  did*); until one does, Toastty summarizes the tasks.
+- **Recently** lists the latest tasks and what each did: the agent's last
+  reply, kept after its session ends, or else the request. A finished task's
+  row has **Continue**.
+- **Tasks** lists every task of the workspace in the Tasks view's groups.
+- **Workspace Scratchpads**, on the right, lists the Scratchpads the
+  workspace keeps, with a preview of the selected one.
+
+**Continue as New Task** is on a finished task (Done or To ship, not
+Archived): the Tasks view's detail pane, which also shows the saved context
+in a **Context** card, the task's right-click menu, and **Continue** on the
+workspace page. It opens New Task in the task's workspace with a file
+`continues-<slug>.md` attached: a link to the earlier task, its request,
+branch, pull request and merge commit, its kept Scratchpads, then the
+context its agent wrote with `workspace.task-context.set`, or without one
+its last reply. You type what the new task should do next; removing the
+file starts a plain task.
+
+**Terminal**, Esc, or a second click on the title returns to the workspace's
+own tabs. Selecting anything else also leaves the page. **Show Workspace
+Page** in the command palette opens it for the selected workspace.
+
+A task's Scratchpad closes with its task space. To keep one, click the pin
+in the right panel's header, or choose **Keep Scratchpad in Workspace** in
+the command palette. Agents can also keep one with
+`workspace.scratchpad.keep`. The workspace then has its own copy. While the
+task space stays open, the copy follows every change to the task's
+Scratchpad and shows **Live**. Afterwards it stays as it was last, until you
+delete it from the page. Agents list kept Scratchpads with
+`workspace.scratchpad.list`, read them with `workspace.scratchpad.export`,
+and read the whole page with `workspace.overview`. The Mac app does not have
+the workspace page yet; `docs/plans/workspace-overview.md` describes it.
+
 ### The command palette
 
 Type `task`, `done` or `merge` in the command palette to act on the current
@@ -2947,6 +2999,12 @@ in the task detail. After you confirm, Toastty marks the task Done, closes
 its task space and ends any agent sessions there. It keeps the worktree if
 the task has one. To mark the task Done without closing its space, use
 `toastty task mark-done`.
+
+On Linux, Mark Done is only available once the agent is back at its prompt.
+It is unavailable during a turn, while the agent needs an approval, after an
+agent error, and when no agent is running. The Linux CLI checks the same
+prompt condition. Carry this rule over when implementing the Mac task UI
+changes, including the close-task-space dialog.
 
 A task that split its work into child tasks finishes when its children
 finish. See [Split work into new tasks](#split-work-into-new-tasks).

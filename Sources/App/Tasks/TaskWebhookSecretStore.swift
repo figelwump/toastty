@@ -1,5 +1,7 @@
 import Foundation
+#if !os(Linux)
 import Security
+#endif
 
 /// What the Keychain holds for one webhook: its secret, and the settings
 /// digest the user approved. Keeping the approval here means an edit of
@@ -18,10 +20,17 @@ protocol TaskWebhookSecretStoring: Sendable {
 struct TaskWebhookSecretStoreError: Error, LocalizedError {
     let status: OSStatus
     var errorDescription: String? {
+        #if os(Linux)
+        let reason = "status \(status)"
+        #else
         let reason = SecCopyErrorMessageString(status, nil) as String? ?? "status \(status)"
+        #endif
         return "The Keychain refused the request: \(reason)"
     }
 }
+
+// No Keychain on Linux, and nothing there creates a Keychain store yet.
+#if !os(Linux)
 
 /// Generic-password items in the login Keychain. The service is
 /// `<bundle id>.task-webhooks`, with a suffix for a runtime-isolated home
@@ -78,6 +87,8 @@ struct KeychainTaskWebhookSecretStore: TaskWebhookSecretStoring {
         }
     }
 }
+
+#endif
 
 /// For tests and runs without a Keychain.
 final class InMemoryTaskWebhookSecretStore: TaskWebhookSecretStoring, @unchecked Sendable {

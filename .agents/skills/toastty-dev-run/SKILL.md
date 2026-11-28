@@ -1,6 +1,6 @@
 ---
 name: toastty-dev-run
-description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance on toastty-mini with runtime isolation and instance.json targeting, or for an explicitly requested local run.
+description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance on toastty-mini with runtime isolation and instance.json targeting, or for an explicitly requested local run, or on the Linux port (offscreen Broadway or a real window for OpenGL checks).
 ---
 
 # Toastty Dev Run
@@ -8,6 +8,8 @@ description: Use this skill when building, launching, or validating a live Toast
 Use this workflow when the task requires a real running Toastty app instance rather than unit tests alone.
 
 Read `.agents/skills/toastty-verify/SKILL.md` before the first validation command. Agent-driven native builds, app launches, and GUI checks run on toastty-mini. If it is unavailable, wait or report the blocker; do not switch to the user's Mac. Use local validation only when the user explicitly requests that local run, and pair local UI interaction with the global `peekaboo` skill.
+
+**Linux:** read `references/linux.md` first; it replaces the build, launch and inspection sections below. "Core rules" items 1, 3, 9, 10 and 11, "Validation planning" (for runs that validate a change) and "Runtime-home conventions" still apply. Everything runs locally, offscreen on a private Broadway display, plus a runtime-isolated real window for OpenGL checks.
 
 For human-like remote GUI debugging or verification beyond the supported smoke tests, use `.agents/skills/toastty-computer-use/SKILL.md`.
 

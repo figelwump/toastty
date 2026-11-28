@@ -78,6 +78,38 @@ public struct AutomationConfig: Equatable, Sendable {
         shouldBypassInteractiveConfirmation(arguments: arguments, environment: environment)
     }
 
+    /// The command-line flags `parse` and `shouldBypassInteractiveConfirmation`
+    /// read, and whether each takes a value.
+    static let commandLineFlags: [String: Bool] = [
+        automationArgument: false,
+        skipQuitConfirmationArgument: false,
+        "--disable-animations": false,
+        "--run-id": true,
+        "--fixture": true,
+        "--artifacts-dir": true,
+        "--socket-path": true,
+    ]
+
+    /// `arguments` without the automation flags and their values, for an
+    /// argument parser that rejects options it does not know (GApplication
+    /// on Linux). Values are consumed the way `parse` reads them.
+    public static func removingAutomationArguments(from arguments: [String]) -> [String] {
+        var remaining: [String] = []
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            let argument = arguments[index]
+            index += 1
+            guard index > arguments.startIndex + 1, let takesValue = commandLineFlags[argument] else {
+                remaining.append(argument)
+                continue
+            }
+            if takesValue, index < arguments.endIndex, arguments[index].hasPrefix("--") == false {
+                index += 1
+            }
+        }
+        return remaining
+    }
+
     private static func argumentValue(after flag: String, in arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else {
             return nil

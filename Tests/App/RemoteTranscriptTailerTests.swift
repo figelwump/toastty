@@ -12,6 +12,8 @@ struct RemoteTranscriptTailerTests {
         var observationBatches: [[ProviderTranscriptObservation]] = []
         var linkedFileReferences: [String] = []
         var fileReplacedCount = 0
+        /// The number of batches delivered before each `initialReadComplete`.
+        var caughtUpAfterBatchCounts: [Int] = []
 
         var allObservations: [ProviderTranscriptObservation] {
             observationBatches.flatMap { $0 }
@@ -125,7 +127,9 @@ struct RemoteTranscriptTailerTests {
             switch event {
             case .observations(let observations, _):
                 collector.observationBatches.append(observations)
-            case .initialReadStarted, .initialReadComplete, .initialReadUnavailable:
+            case .initialReadComplete:
+                collector.caughtUpAfterBatchCounts.append(collector.observationBatches.count)
+            case .initialReadStarted, .initialReadUnavailable:
                 break
             case .fileReplaced:
                 collector.fileReplacedCount += 1
@@ -142,6 +146,10 @@ struct RemoteTranscriptTailerTests {
         }
         let expected = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.basicSession).observations
         #expect(collector.allObservations == expected)
+        // The replay reports catching up once, after every initial batch.
+        await Self.waitUntil { collector.caughtUpAfterBatchCounts.isEmpty == false }
+        #expect(collector.caughtUpAfterBatchCounts == [collector.observationBatches.count])
+        #expect(tailer.isReadingInitialContent == false)
 
         // Append the resumed continuation; the tailer picks up only the new
         // records with fingerprints consistent with a continuous parse.
@@ -156,6 +164,7 @@ struct RemoteTranscriptTailerTests {
         await Self.waitUntil { collector.allObservations.count == fullExpected.count }
         #expect(collector.allObservations == fullExpected)
         #expect(collector.fileReplacedCount == 0)
+        #expect(collector.caughtUpAfterBatchCounts.count == 1)
     }
 
     @Test func tailsClaudeTranscriptThroughProviderFactory() async throws {
@@ -238,7 +247,9 @@ struct RemoteTranscriptTailerTests {
             switch event {
             case .observations(let observations, _):
                 collector.observationBatches.append(observations)
-            case .initialReadStarted, .initialReadComplete, .initialReadUnavailable:
+            case .initialReadComplete:
+                collector.caughtUpAfterBatchCounts.append(collector.observationBatches.count)
+            case .initialReadStarted, .initialReadUnavailable:
                 break
             case .fileReplaced:
                 collector.fileReplacedCount += 1

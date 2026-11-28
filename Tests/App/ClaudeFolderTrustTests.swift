@@ -129,6 +129,9 @@ struct ClaudeFolderTrustTests {
             (try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any])?["projects"] as? [String: Any]
         )
         #expect(Array(projects.keys) == [folder])
+        #if !os(Linux)
+        // corelibs JSONSerialization merges keys that differ only in their
+        // Unicode form, so Linux refuses this edit instead.
         // A key that differs only in its Unicode form is another key, as
         // it is for Claude Code.
         let composed = "/work/caf\u{00E9}"
@@ -140,6 +143,7 @@ struct ClaudeFolderTrustTests {
             #"{"projects":{"\#(decomposed)":{"hasTrustDialogAccepted":true},"\#(composed)": {"hasTrustDialogAccepted": true}}}"#
                 .unicodeScalars
         ))
+        #endif
     }
 
     @Test(arguments: [
@@ -272,7 +276,9 @@ struct ClaudeFolderTrustTests {
         defer { home.remove() }
         // The key is the folder's path without links, as Claude Code's
         // working directory reports it.
+        #if os(macOS) // /var and /tmp are links into /private on macOS only.
         #expect(home.folderKey.hasPrefix("/private/"))
+        #endif
         #expect(await home.trust.trust(folder: home.folder) == .trusted)
 
         let expected = Home.config.replacingOccurrences(

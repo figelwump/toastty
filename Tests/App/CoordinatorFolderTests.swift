@@ -8,6 +8,12 @@ import Testing
 /// where the user never set an identity.
 @MainActor
 struct CoordinatorFolderTests {
+    #if os(Linux)
+    nonisolated static let isLinux = true
+    #else
+    nonisolated static let isLinux = false
+    #endif
+
     /// The instructions Toastty ships, which a test can change.
     final class Instructions: @unchecked Sendable {
         private let lock = NSLock()
@@ -319,7 +325,7 @@ struct CoordinatorFolderTests {
 
     // MARK: - The shipped text
 
-    @Test func theAppShipsTheCoordinatorSkillAsTheInstructions() throws {
+    @Test(.disabled(if: Self.isLinux, "the Linux test runner has no app resources; the plugin self-test covers the shipped skills")) func theAppShipsTheCoordinatorSkillAsTheInstructions() throws {
         let instructions = try #require(CoordinatorFolder.shippedInstructions())
         // The skill's body, without the front matter a skill loader reads.
         #expect(instructions.hasPrefix("# Toastty Coordinator\n"))
@@ -343,7 +349,7 @@ struct CoordinatorFolderTests {
     /// The count that a review reads, and that a proposal for a Merging rule
     /// rests on: the one shell command of the shipped reference, run on a
     /// `decisions.md` as the coordinator writes it.
-    @Test func theShippedReviewCommandCountsTheMergedReviewsOfEachKind() throws {
+    @Test(.disabled(if: Self.isLinux, "the Linux test runner has no app resources; the plugin self-test covers the shipped skills")) func theShippedReviewCommandCountsTheMergedReviewsOfEachKind() throws {
         let reference = try #require(CoordinatorFolder.shippedReferences()["improving.md"])
         let command = try #require(reference.firstMatch(of: #/```bash\n(?<script>(?:.|\n)*?)\n *```/#)).script
         #expect(command.contains("since=2026-11-01"))

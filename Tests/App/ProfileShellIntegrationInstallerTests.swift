@@ -1845,7 +1845,11 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             ]
         )
 
+        #if os(macOS)
+        // macOS /bin/bash 3.2 pins HISTCMD here; bash 5 (Linux) advances it.
+        // The journal append below is the behavior under test on both.
         XCTAssertTrue(output.contains("histcmd=1"))
+        #endif
         XCTAssertTrue(output.contains("echo toastty-bash"))
     }
 
@@ -2432,6 +2436,10 @@ private func runProcess(
     arguments: [String],
     environment: [String: String]
 ) throws -> String {
+    // zsh is not installed by default on Linux distributions.
+    guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+        throw XCTSkip("\(executableURL.path) is not installed")
+    }
     let process = Process()
     process.executableURL = executableURL
     process.arguments = arguments

@@ -111,6 +111,15 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case windowTasksShow = "window.tasks.show"
     case windowTasksHide = "window.tasks.hide"
     case windowSidebarSetSegment = "window.sidebar.set-segment"
+    #if os(Linux)
+    // Linux-first workspace page (docs/plans/workspace-overview.md).
+    case workspaceScratchpadKeep = "workspace.scratchpad.keep"
+    case workspaceScratchpadOpen = "workspace.scratchpad.open"
+    case workspaceScratchpadExport = "workspace.scratchpad.export"
+    case workspaceScratchpadDelete = "workspace.scratchpad.delete"
+    case workspaceSynopsisSet = "workspace.synopsis.set"
+    case workspaceTaskContextSet = "workspace.task-context.set"
+    #endif
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -163,6 +172,10 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return ["app.browser_zoom.decrease"]
         case .appBrowserZoomReset:
             return ["app.browser_zoom.reset"]
+        #if os(Linux)
+        case .workspaceScratchpadKeep:
+            return ["workspace.scratchpad.promote"]
+        #endif
         default:
             return []
         }
@@ -170,6 +183,57 @@ enum AppControlActionID: String, CaseIterable, Sendable {
 
     var descriptor: AppControlCommandDescriptor {
         switch self {
+        #if os(Linux)
+        case .workspaceScratchpadKeep:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Keep a Scratchpad in its top-level workspace (Linux). The workspace gets its own copy, listed on its workspace page and by workspace.scratchpad.list. While the source's task space stays open, every change to the source copies over; after that the copy stays as it was last, until workspace.scratchpad.delete. Name the Scratchpad by panelID, or by sessionID with an optional documentID (the session's default when omitted). Keeping one already kept returns that copy with created=false.",
+                selectors: [.panelID],
+                parameters: [.sessionID(required: false), .scratchpadDocumentID(required: false)],
+                aliases: aliases
+            )
+        case .workspaceScratchpadOpen:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Open a workspace's kept Scratchpad in that workspace's right panel, or select the tab that shows it (Linux). Changes the user's view: use only when the user asked.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.scratchpadDocumentID(required: true)]
+            )
+        case .workspaceScratchpadExport:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Export a kept workspace Scratchpad's HTML to an app-chosen local file and return its filePath, documentID, revision and title (Linux).",
+                selectors: [],
+                parameters: [.scratchpadDocumentID(required: true)]
+            )
+        case .workspaceScratchpadDelete:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Delete a kept Scratchpad from its workspace and close the panels that show it (Linux). The task's own Scratchpad is not changed. Only when the user asked.",
+                selectors: [],
+                parameters: [.scratchpadDocumentID(required: true)]
+            )
+        case .workspaceSynopsisSet:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Set what a top-level workspace is about, shown at the top of its workspace page (Linux): a few plain sentences on its purpose and current state, then a short Recent work list of what its latest tasks did, at most 4,000 characters. Empty text clears it, and the page goes back to a summary Toastty makes from the tasks. A task space means its top-level workspace; a managed caller defaults to its own.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.text(required: true)]
+            )
+        case .workspaceTaskContextSet:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Save what a task's agent leaves for whoever continues its work (Linux): Markdown with the goal, what was done, where it stands, decisions, what remains, open questions and where to look, at most 8,000 characters. Continue as New Task attaches it to the new task, after the facts Toastty knows (request, branch, pull request, merge commit, kept Scratchpads). Writing again replaces it; empty text clears it. Without taskID, a task's agent writes its own task's.",
+                selectors: [],
+                parameters: [.taskID(required: false), .text(required: true)]
+            )
+        #endif
         case .windowCreate:
             return .init(id: rawValue, kind: .action, summary: "Create a new window.", selectors: [.windowID])
         case .windowSidebarToggle:
@@ -934,6 +998,11 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case coordinatorGet = "coordinator.get"
     case coordinatorReplies = "coordinator.replies"
     case webhookList = "webhook.list"
+    #if os(Linux)
+    case workspaceOverview = "workspace.overview"
+    case workspaceScratchpadList = "workspace.scratchpad.list"
+    case workspaceTaskContext = "workspace.task-context"
+    #endif
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -957,6 +1026,30 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
 
     var descriptor: AppControlCommandDescriptor {
         switch self {
+        #if os(Linux)
+        case .workspaceOverview:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return a top-level workspace's page (Linux): title, projectRoot, synopsis (text, written by an agent or made by Toastty, updatedAt), task counts, the latest tasks with what each did (the agent's last reply, kept after its session ends, else the request), every task's ID, title and stage, and the kept Scratchpads. A task space means its top-level workspace; a managed caller defaults to its own.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceScratchpadList:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List a top-level workspace's kept Scratchpads, newest first (Linux): documentID, title, purpose, revision, updatedAt, keptAt, keptBy, linked (whether changes to the source still copy over) and the source task. Read one with workspace.scratchpad.export. A task space means its top-level workspace; a managed caller defaults to its own.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceTaskContext:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return a task's saved context (Linux): the text its agent wrote with workspace.task-context.set (null when none), when and by which session, and continuation, the file Continue as New Task attaches to a new task (fileName, text, hasWrittenContext). Without taskID, a task's agent reads its own task's.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
+            )
+        #endif
         case .annotationKeys:
             return .init(
                 id: rawValue,

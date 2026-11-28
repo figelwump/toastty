@@ -1,6 +1,6 @@
 ---
 name: toastty-verify
-description: Read before the first Toastty validation command after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes. Choose remote native builds, tests, smoke, and Computer Use checks, with cheap source checks allowed locally.
+description: Read before the first Toastty validation command after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes. Choose remote native builds, tests, smoke, and Computer Use checks, with cheap source checks allowed locally; on the Linux port, choose local offscreen (Broadway) and real-window checks.
 ---
 
 # Toastty Verify
@@ -10,6 +10,10 @@ description: Read before the first Toastty validation command after code, projec
 Use this as the Toastty verification decision layer. Keep detailed command semantics in `docs/agents/automation.md`; use this skill to choose the right validation path, run it with the project guardrails, and report what was actually verified.
 
 Read this skill before the first validation command. Agent-driven native builds, macOS test suites, focused iOS Simulator runs, and GUI checks must run on toastty-mini; the full iOS suite runs on hosted CI (see CI Coverage). Cheap source checks and read-only inspection may run locally. If the mini is unavailable, wait or report the blocked checks; do not fall back to the user's Mac. An explicit user request for a local run permits that run only.
+
+## Platform
+
+The workflow, scopes, decision tree and handoff apply to both apps. The toastty-mini rule above and the commands below are for macOS and iOS. For Linux code (`linux/`, `scripts/linux/`, or the Linux behaviour of shared code), read `references/linux.md`. Linux validation is local: offscreen on a private Broadway display for everything, plus a runtime-isolated real window (`TOASTTY_LINUX_NON_UNIQUE=1`) for OpenGL-sensitive changes (Ghostty GL/DMA-BUF rendering, WebKit GPU rendering, frame timing, scaling), because Broadway always uses the offscreen renderer. Tell the user before a real window opens, and say in the handoff which checks ran where. Never run `gnome-shell --headless` or drive the user's installed Toastty. The remote, `sv`, Peekaboo and Computer Use steps are macOS-only.
 
 ## Core Workflow
 
@@ -22,17 +26,18 @@ Read this skill before the first validation command. Agent-driven native builds,
 4. Choose checks from the decision tree below that together cover each scenario with a real impact. Prefer deterministic tests and smoke scripts; use live GUI checks or Computer Use for scenarios only the real surface shows. When a scenario fails, fix the root cause instead of adding guards.
 5. Run commands through `sv exec --` whenever the documented wrapper needs secret-backed or service-injected environment, especially remote GUI/test wrappers. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI/test environment is injected there.
 6. Report the exact command family, scope, execution target, any explicit local authorization, result, and artifact paths. List the scenarios and say which checks covered them, and which were not covered and why.
+7. Always open the verification report in a Toastty Scratchpad (`toastty-scratchpad` skill), with a short summary in the reply. Publish it as its own Scratchpad (`--additional`) and reuse that document for later reruns. Outside a Toastty-managed session (no `TOASTTY_SESSION_ID`), say so and give the report in the reply.
 
 ## CI Coverage
 
-PR CI runs no tests for the change. On every PR, `Toastty CI` runs only the
-Linux CI workflow tests and the **CI gate** that branch protection requires;
-every test job runs only on manual dispatch. Your own checks are the
-verification: toastty-mini runs for native code (the macOS suite, and focused
-iOS Simulator tests with `--platform ios`), and the local script and web-panel
-commands in `docs/agents/automation.md` when a change touches those files.
-For push-worker changes, run `npm run check` in `workers/push`. Use the full
-macOS suite on toastty-mini because the hosted Mac job builds without Ghostty.
+On every PR, `Toastty CI` runs workflow tests and Ghostty-backed desktop
+builds, tests and smoke on GitHub-hosted macOS 26, Ubuntu 24.04 and Ubuntu
+26.04. The required **CI gate** depends on all desktop jobs. Full iOS, script
+and web-panel jobs also run on manual dispatch. Use toastty-mini for
+agent-driven macOS and focused iOS checks and for interactions that hosted
+smoke does not cover. See `docs/agents/automation.md` for local script and
+web-panel commands. For push-worker changes, run `npm run check` in
+`workers/push`.
 
 The toastty-mini Xcode can differ from the pinned hosted Xcode in
 `.github/ios-xcode-version`, and the hosted one has rejected code that the
@@ -57,9 +62,10 @@ gh run watch <run-id> --exit-status
 ```
 
 Use the URL returned by the dispatch. Verify `headSha` before using the
-result, and link it in the PR and report. `gh pr checks` shows only the
-PR's CI gate. A required full run must pass before merge. A subsequent base merge
-uses the rules below. Cancel a superseded run owned by this task if it can
+result, and link it in the PR and report. `gh pr checks` shows the PR run,
+not the separate manual validation. A required full run must pass before
+merge. A subsequent base merge uses the rules below. Cancel a superseded run
+owned by this task if it can
 no longer establish that result. Full Debug can take over two hours.
 
 Hosted XCTest already retries a failed case once. Read the log and compare
@@ -81,6 +87,14 @@ For docs-only or agent-instruction-only changes, do not run the full app gate by
 - Agent workflow changes: follow the global Review Gate.
 
 If the docs change alters build, release, automation, or validation behavior, also run a representative command or dry validation path.
+
+### Shared Code Across macOS And Linux
+
+`Sources/` and `Tests/` compile into both apps; the Linux build mirrors them through `linux/shared-sources.json`. A change there needs validation on both platforms:
+
+- On the platform you are on, run its checks. Each platform can only build itself, so name the other platform as untested in the handoff and leave its run to that platform (macOS: the remote wrappers or PR validation; Linux: `references/linux.md` on a Linux host).
+- Linux-only code in a shared file goes in an `#if os(Linux)` block and is listed in `docs/linux.md` under "Shared files with Linux guards". A macOS-only API in shared code breaks the Linux build.
+- New `Sources/App` files compile on Linux automatically unless they are on that target's exclude list. New `Tests/App` files run on Linux only after they are added to its include list.
 
 ### Build, Project, Or Dependency Changes
 
@@ -215,3 +229,4 @@ State:
 - What user-visible behaviors were covered.
 - What remains untested or blocked, with the reason.
 - Artifact paths under `artifacts/` when produced.
+- The report itself is open in a Scratchpad (Core Workflow step 7).

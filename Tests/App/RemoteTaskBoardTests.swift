@@ -203,6 +203,11 @@ struct RemoteTaskBoardTests {
         await fixture.waitForSetup(created.id)
         let sessionID = try #require(fixture.record(created.id)?.currentSessionID)
 
+        // A task starts with its first prompt. Until the agent reports that
+        // turn, an idle report can still be from the launch prompt.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .working, summary: "First prompt"), at: Date()
+        )
         fixture.sessionRuntimeStore.updateStatus(
             sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date()
         )
@@ -220,7 +225,8 @@ struct RemoteTaskBoardTests {
                 snapshot.tasks?.tasks.first { $0.id == created.id }?.showsAgentActivity == showsActivity
             }
             let item = try #require(harness.board.items().first { $0.taskID == created.id })
-            #expect(CoordinatorTaskChips(items: [item]).chips[created.id]?.showsActivity == showsActivity)
+            let chips = CoordinatorChatPresentation.taskChips([item]) { _ in .init(red: 0, green: 0, blue: 0) }
+            #expect(chips[created.id]?.showsActivity == showsActivity)
         }
     }
 

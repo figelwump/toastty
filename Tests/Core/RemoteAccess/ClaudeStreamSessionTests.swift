@@ -782,8 +782,21 @@ struct ClaudeStreamProcessTests {
 
     private static func child(_ script: String) throws -> Process {
         let child = Process()
+        #if os(Linux)
+        // A child launched from the test runner can inherit a blocked
+        // SIGTERM. Start with the default mask and disposition for TERM,
+        // then let the shell script choose whether to ignore it.
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        child.arguments = ["-c", """
+        import os, signal, sys
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.execv("/bin/sh", ["/bin/sh", "-c", sys.argv[1]])
+        """, script]
+        #else
         child.executableURL = URL(fileURLWithPath: "/bin/sh")
         child.arguments = ["-c", script]
+        #endif
         child.standardOutput = FileHandle.nullDevice
         child.standardError = FileHandle.nullDevice
         try child.run()

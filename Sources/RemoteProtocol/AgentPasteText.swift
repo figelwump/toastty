@@ -24,7 +24,11 @@ public enum AgentPasteText {
     /// harmless there.
     public static func keepingImagePathsAsText(_ text: String) -> String {
         var changed = false
-        let lines = text.components(separatedBy: "\n").map { line -> String in
+        // Split on the newline scalar: Swift reads "\r\n" as one character,
+        // and corelibs Foundation's `components(separatedBy:)` then keeps a
+        // CRLF text in one line.
+        let lines = text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map { scalars -> String in
+            let line = String(scalars)
             guard let rewritten = rewrittenLine(line) else { return line }
             changed = true
             return rewritten

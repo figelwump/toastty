@@ -257,10 +257,84 @@ struct TaskAppControlTests {
         // finishes the task.
         gitHub.answer(url, state: "CLOSED")
         await board.pullRequests?.refresh(link).value
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: Date()
+        )
         let marked = try executor.runAction(id: "workspace.set-done", args: [:], context: context(session))
         #expect(marked.didMutateState)
         #expect(try group() == .string("done"))
     }
+
+    #if os(Linux)
+    @Test func markDoneAndWorkspaceCheckboxRequireAnOpenAgentPrompt() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let runtime = fixture.sessionRuntimeStore
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store, sessionRuntimeStore: runtime,
+            pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
+            refreshInterval: nil, releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        runtime.taskCoordinator = fixture.coordinator
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Finish only after the turn ends", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Work."
+        ))
+        await fixture.waitForSetup(created.id)
+        let task = try #require(fixture.record(created.id))
+        let space = try #require(task.taskSpaceWorkspaceID)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        let session = try #require(task.currentSessionID)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        let target: [String: AutomationJSONValue] = ["taskID": .string(task.id.uuidString)]
+        let workspace: [String: AutomationJSONValue] = ["workspaceID": .string(space.uuidString)]
+        let message = "Mark Done is only available when the task's agent is waiting at the prompt."
+
+        func checkBlocked() async throws {
+            let item = try #require(board.items().first { $0.taskID == task.id })
+            #expect(!item.acceptsDoneMark)
+            #expect(TaskBoardPresentation.detailActions(item) == [.archive])
+            #expect(!TaskBoardPresentation.menuItems(item).joined().contains(.action(.markDone, taskID: task.id)))
+            await expectInvalidPayload(message) {
+                _ = try executor.runAction(id: "task.mark-done", args: target, context: context())
+            }
+            await expectInvalidPayload("workspace.set-done requires an unfinished task without an open pull request and an agent waiting at the prompt") {
+                _ = try executor.runAction(id: "workspace.set-done", args: workspace, context: context())
+            }
+            #expect(fixture.record(task.id)?.doneAt == nil)
+            #expect(fixture.store.state.workspacesByID[space]?.doneAt == nil)
+        }
+
+        for kind in [SessionStatusKind.working, .needsApproval, .error] {
+            runtime.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: kind.rawValue), at: Date())
+            try await checkBlocked()
+        }
+        runtime.stopSession(sessionID: session, at: Date())
+        try await checkBlocked()
+
+        runtime.startSession(
+            sessionID: "restored", agent: .codex, panelID: panel, windowID: windowID, workspaceID: space,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        runtime.updateStatus(sessionID: "restored", status: SessionStatus(kind: .ready, summary: "Ready"), at: Date())
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(TaskBoardPresentation.detailActions(item) == [.markDone, .archive])
+        #expect(throws: TaskError.self) {
+            try TaskActions.complete(taskID: task.id, coordinator: fixture.coordinator) { _, _ in
+                runtime.updateStatus(
+                    sessionID: "restored", status: SessionStatus(kind: .working, summary: "Working"), at: Date()
+                )
+                return true
+            }
+        }
+        #expect(fixture.record(task.id)?.doneAt == nil)
+        #expect(fixture.store.state.workspacesByID[space] != nil)
+        runtime.updateStatus(sessionID: "restored", status: SessionStatus(kind: .ready, summary: "Ready"), at: Date())
+        #expect(try executor.runAction(id: "task.mark-done", args: target, context: context()).didMutateState)
+        #expect(fixture.record(task.id)?.doneAt != nil)
+        #expect(fixture.store.state.workspacesByID[space]?.doneAt != nil)
+    }
+    #endif
 
     @Test func errorsComeBackAsInvalidPayload() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()

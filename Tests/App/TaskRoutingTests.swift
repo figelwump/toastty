@@ -439,7 +439,9 @@ struct TaskRoutingTests {
         // The picker offers it first, as a directory to open.
         let choices = fixture.coordinator.workspaceChoices(taskID: created.id)
         #expect(choices.suggested == .init(title: "website", rootDirectory: websiteRoot, choice: .directory(websiteRoot)))
+        #if os(macOS) // TaskSetupCard is a SwiftUI view.
         #expect(TaskSetupCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open website & Start")
+        #endif
 
         fixture.triage.answer(.success(TaskTriage.Answer(agent: "codex")))
         try fixture.coordinator.setWorkspace(taskID: created.id, choice: .directory(websiteRoot))
@@ -469,7 +471,9 @@ struct TaskRoutingTests {
         // A recently closed workspace reopens with its own title.
         var choices = fixture.coordinator.workspaceChoices(taskID: created.id)
         #expect(choices.suggested?.choice == .recent(recent.id))
+        #if os(macOS) // TaskSetupCard is a SwiftUI view.
         #expect(TaskSetupCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open control-plane & Start")
+        #endif
 
         // Opened by the user meanwhile: the suggestion is that workspace.
         let openedID = UUID()
@@ -482,8 +486,10 @@ struct TaskRoutingTests {
         )))
         choices = fixture.coordinator.workspaceChoices(taskID: created.id)
         #expect(choices.suggested?.choice == .open(openedID))
+        #if os(macOS) // TaskSetupCard is a SwiftUI view.
         #expect(TaskSetupCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Start in control-plane")
         #expect(TaskSetupCard.startTitle(for: nil, choices: choices) == "Start")
+        #endif
 
         // A suggestion that is only a directory now, such as a renamed
         // workspace that left the recent list, keeps its saved title.
@@ -494,7 +500,9 @@ struct TaskRoutingTests {
         try fixture.coordinator.records.insert(record)
         choices = fixture.coordinator.workspaceChoices(taskID: record.id)
         #expect(choices.suggested?.choice == .directory(renamed.path))
+        #if os(macOS) // TaskSetupCard is a SwiftUI view.
         #expect(TaskSetupCard.startTitle(for: choices.suggested?.choice, choices: choices) == "Open My Project & Start")
+        #endif
         try fixture.coordinator.setWorkspace(taskID: record.id, choice: .directory(renamed.path))
         let opened = try #require(fixture.record(record.id)?.workspaceID)
         #expect(fixture.store.state.workspacesByID[opened]?.title == "My Project")

@@ -1,8 +1,13 @@
+#if os(Linux)
+import Foundation
+import RemoteProtocol
+#else
 import CoreGraphics
 import Foundation
 import ImageIO
 import RemoteProtocol
 import UniformTypeIdentifiers
+#endif
 
 /// Serves a device the images attached to the user messages of the
 /// coordinator's chat. This is a boundary of what a device can read on
@@ -52,6 +57,11 @@ public enum RemoteCoordinatorAttachmentImageReader {
         size: RemoteCoordinatorAttachmentImageRequest.Size,
         allowedFolders: [URL]
     ) throws -> RemoteCoordinatorAttachmentImageResponse {
+        #if os(Linux)
+        // No ImageIO on Linux: the device shows the attachment without a
+        // thumbnail.
+        throw RemotePreviewError.unsupported
+        #else
         let fileExtension = URL(fileURLWithPath: recordedPath).pathExtension
         guard UTType(filenameExtension: fileExtension)?.conforms(to: .image) == true else {
             throw RemotePreviewError.unsupported
@@ -68,7 +78,10 @@ public enum RemoteCoordinatorAttachmentImageReader {
             path: path, maximumBytes: RemoteCoordinatorAttachmentImagePolicy.maximumSourceBytes)
         try Task.checkCancellation()
         return try encodedImage(from: snapshot.data, maximumPixelSize: size.maximumPixelSize)
+        #endif
     }
+
+    #if !os(Linux)
 
     static func encodedImage(
         from data: Data,
@@ -117,4 +130,5 @@ public enum RemoteCoordinatorAttachmentImageReader {
             pixelHeight: image.height
         )
     }
+    #endif
 }

@@ -87,6 +87,13 @@ final class PullRequestStateCache: ObservableObject {
     /// a failed request asks again with `viewFields`.
     nonisolated static let readinessViewFields = viewFields + ",mergeStateStatus,reviewDecision,statusCheckRollup"
 
+    #if os(Linux)
+    /// Stored, as Combine synthesizes it on macOS. The class has no
+    /// `@Published` property, and OpenCombine then returns a new publisher
+    /// on each read, so `setEntry`'s publishes would reach no subscriber.
+    nonisolated(unsafe) let objectWillChange = ObservableObjectPublisher()
+    #endif
+
     /// Not `@Published`: GitHub is asked again every 15 seconds to two
     /// minutes for each pull request, and an answer that repeats the last
     /// one changes only the times of the request. `setEntry` publishes when

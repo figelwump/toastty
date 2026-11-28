@@ -148,6 +148,7 @@ final class TaskWebhookService: ObservableObject {
         loadKeychainItems()
     }
 
+    #if !os(Linux)
     convenience init(runtimePaths: ToasttyRuntimePaths) {
         self.init(
             webhooksFileURL: runtimePaths.taskWebhooksFileURL,
@@ -161,6 +162,7 @@ final class TaskWebhookService: ObservableObject {
             )
         )
     }
+    #endif
 
     static var defaultUserAgent: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"

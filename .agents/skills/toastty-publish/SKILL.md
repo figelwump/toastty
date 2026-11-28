@@ -96,6 +96,10 @@ release.
   other way, such as `gh release edit --draft=false`, a hand edit of the
   appcast, or a merge of the release's website pull request.
 
+## Linux packages
+
+The Linux `.deb` and AppImage attach to the release this workflow creates. After it, follow `../toastty-release/references/linux.md` (section 4): `scripts/release/publish-linux-release.sh --version X.Y.Z --build-number N`, which requires the tag to name the commit the packages were built from.
+
 ## Important invariants
 
 - Publish must use `artifacts/release/<version>-<build>/release-metadata.env`, not the current `HEAD`, to decide what commit gets tagged.

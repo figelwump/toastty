@@ -2,7 +2,9 @@
   "CI gate",
   "iOS tests (Debug)",
   "iOS tests (Release)",
-  "macOS contract tests",
+  "macOS build, tests and smoke",
+  "Linux build, tests and smoke (ubuntu-24.04)",
+  "Linux build, tests and smoke (ubuntu-26.04)",
   "Web panel tests",
   "Script tests"
 ]

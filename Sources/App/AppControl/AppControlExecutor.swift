@@ -59,6 +59,11 @@ final class AppControlExecutor {
             if action.isCoordinatorAction, coordinatorController == nil {
                 return nil
             }
+            #if os(Linux)
+            if action.isWorkspaceOverviewAction, WorkspaceOverviewService.current == nil {
+                return nil
+            }
+            #endif
             return action.descriptor
         }
     }
@@ -67,6 +72,9 @@ final class AppControlExecutor {
         AppControlQueryID.allCases.compactMap { query in
             if query.isTaskQuery, taskCoordinator == nil { return nil }
             if query == .coordinatorGet || query == .coordinatorReplies, coordinatorController == nil { return nil }
+            #if os(Linux)
+            if query.isWorkspaceOverviewQuery, WorkspaceOverviewService.current == nil { return nil }
+            #endif
             return query.descriptor
         }
     }
@@ -266,13 +274,18 @@ final class AppControlExecutor {
                         "workspace.set-done applies to task spaces; this workspace is top-level"
                     )
                 }
-                // The rule of the done checkbox, on the Mac and on a phone:
-                // a task with an open pull request or a merge under way
-                // finishes through Merge or Archive. A mark it already has
-                // stays as it is.
-                if workspace.doneAt == nil, sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: workspaceID) == false {
+                // Use the same rule as the done checkbox. A mark the task
+                // already has stays as it is.
+                if workspace.doneAt == nil,
+                   let task = sessionRuntimeStore.taskSpaceDoneMarkItem(workspaceID: workspaceID),
+                   !task.acceptsDoneMark {
+                    if task.hasOpenPullRequest || task.merge != nil {
+                        throw AutomationSocketError.invalidPayload(
+                            "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                        )
+                    }
                     throw AutomationSocketError.invalidPayload(
-                        "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                        "workspace.set-done requires an unfinished task without an open pull request and an agent waiting at the prompt"
                     )
                 }
             }
@@ -584,6 +597,11 @@ final class AppControlExecutor {
             return try exportScratchpad(args: args)
         case .panelScratchpadUpdateMetadata, .panelScratchpadMakeDefault, .panelScratchpadUnbind:
             return try manageScratchpad(action: action, args: args)
+        #if os(Linux)
+        case .workspaceScratchpadKeep, .workspaceScratchpadOpen, .workspaceScratchpadExport,
+             .workspaceScratchpadDelete, .workspaceSynopsisSet, .workspaceTaskContextSet:
+            return try runWorkspaceOverviewAction(action, args: args)
+        #endif
 
         case .panelLocalDocumentSearchStart:
             let resolved = try resolveLocalDocumentTarget(payload: args)
@@ -1147,6 +1165,11 @@ final class AppControlExecutor {
 
         case .webhookList:
             return try runWebhookList(args: args)
+
+        #if os(Linux)
+        case .workspaceOverview, .workspaceScratchpadList, .workspaceTaskContext:
+            return try runWorkspaceOverviewQuery(query, args: args)
+        #endif
         }
         }
     }
@@ -3312,3 +3335,55 @@ extension AppControlExecutor {
         return (joined, lines.count, truncated)
     }
 }
+
+#if os(Linux)
+/// `toastty browser` (Linux only; `LinuxBrowserAutomation`) resolves and
+/// reports browser panels the way `panel.browser.state` does.
+extension AppControlExecutor {
+    func linuxBrowserTarget(
+        args: [String: AutomationJSONValue],
+        context: AutomationRequestContext
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        try withRequestContext(context) { try resolveBrowserTarget(payload: args) }
+    }
+
+    func linuxBrowserWorkspaceID(args: [String: AutomationJSONValue], context: AutomationRequestContext) throws -> UUID {
+        try withRequestContext(context) { try resolveWorkspaceID(args: args) }
+    }
+
+    func linuxBrowserPlacement(_ rawValue: String) throws -> WebPanelPlacement {
+        try webPanelPlacement(args: ["placement": .string(rawValue)])
+    }
+
+    func linuxBrowserStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: BrowserPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        browserPanelStateSnapshot(workspaceID: workspaceID, panelID: panelID, webState: webState, runtimeState: runtimeState)
+    }
+}
+#endif
+
+#if os(Linux)
+/// Internal doors to this file's private helpers, for the Linux-only
+/// workspace page commands (linux/Sources/ToasttyAppLogic/WorkspaceOverview).
+extension AppControlExecutor {
+    func workspaceIDDefaultingToCallerSession(_ args: [String: AutomationJSONValue]) throws -> UUID {
+        try resolveWorkspaceIDDefaultingToCallerSession(args: args)
+    }
+
+    func scratchpadDocumentIDArgument(_ args: [String: AutomationJSONValue], required: Bool) throws -> UUID? {
+        try scratchpadDocumentID(args: args, required: required)
+    }
+
+    func scratchpadSessionIDArgument(_ args: [String: AutomationJSONValue]) throws -> String {
+        try scratchpadSessionID(args: args)
+    }
+
+    func boundScratchpad(sessionID: String, documentID: UUID?) throws -> ScratchpadPanelReference? {
+        try sessionScratchpadTarget(sessionID: sessionID, documentID: documentID)
+    }
+}
+#endif

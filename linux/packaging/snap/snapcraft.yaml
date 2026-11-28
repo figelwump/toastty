@@ -1,0 +1,51 @@
+# Snap of Toastty (draft: not yet built; needs snapcraft).
+#
+#   scripts/linux/package.sh --version X.Y.Z --format snap
+#
+# package.sh copies this file into a scratch project next to `stage/`, the
+# `install.sh --prefix /usr --destdir` tree from the release build. core26 is
+# Ubuntu 26.04, the build host's release, so the host build's glibc matches.
+#
+# Classic confinement: a terminal must run the user's shells, tools and agent
+# CLIs from the host, which strict confinement prevents. Classic needs a Snap
+# Store review, and the gnome extension does not support it, so GTK 4,
+# libadwaita and WebKitGTK come from stage-packages and the launcher points
+# GTK at them. See docs/plans/linux-release.md for the open WebKit question
+# (its helper processes are found by an absolute path).
+name: toastty
+base: core26
+version: '0.0.0' # replaced by package.sh
+summary: Terminal workspaces for running and following coding agents
+description: |
+  Toastty organizes Ghostty-powered terminals into workspaces, tabs and
+  splits, tracks managed coding agents through their hooks, and keeps a right
+  panel for a browser, local documents and Scratchpads.
+grade: stable
+confinement: classic
+license: MIT
+platforms:
+  amd64:
+
+apps:
+  toastty:
+    command: usr/lib/toastty/bin/toastty-linux
+    desktop: usr/share/applications/com.GiantThings.toastty.desktop
+    common-id: com.GiantThings.toastty
+  cli:
+    command: usr/lib/toastty/bin/toastty
+
+parts:
+  toastty:
+    plugin: dump
+    source: stage
+    build-attributes:
+      - enable-patchelf
+    stage-packages:
+      - libgtk-4-1
+      - libadwaita-1-0
+      - libwebkitgtk-6.0-4
+      - libjavascriptcoregtk-6.0-1
+      - libglib2.0-bin
+      - shared-mime-info
+      - gsettings-desktop-schemas
+      - librsvg2-common

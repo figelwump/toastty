@@ -288,12 +288,15 @@ struct CoordinatorControllerTests {
         #expect(firstCommand.contains("/bin/scodex"))
         #expect(firstCommand.contains("project_doc_max_bytes") == false)
         #expect(fixture.controller.mayReadPartOfItsInstructions)
+        #if os(macOS)
+        // The chat view is macOS-only.
         if #available(macOS 15.0, *) {
             let text = CoordinatorChatView.text(for: .instructionsMayBeCut)
             #expect(text.contains("first 32 KiB"))
             #expect(text.contains("~/.toastty/agents.toml"))
             #expect(text.contains("project_doc_max_bytes = \(CoordinatorFolder.codexProjectDocMaxBytes)"))
         }
+        #endif
         // A fixed profile does not change what the running session got.
         fixture.tasks.agentCatalog.catalog = editable
         #expect(fixture.controller.mayReadPartOfItsInstructions)
@@ -758,6 +761,8 @@ struct CoordinatorControllerTests {
         #expect(CoordinatorController.lastLineNumber(of: text) == expected)
     }
 
+    #if os(macOS)
+    // The header menu is an AppKit view.
     /// Each item of the "…" menu in the coordinator's header does what it
     /// says.
     @Test func headerMenuOpensEachFileAndRestarts() {
@@ -778,6 +783,7 @@ struct CoordinatorControllerTests {
         #expect(opened == [.policy, .ledger, .friction])
         #expect(restarts == 1)
     }
+    #endif
 
     @Test func openPolicyWithoutACoordinatorSaysSo() throws {
         let fixture = try Fixture()

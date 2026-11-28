@@ -30,7 +30,7 @@
 - `./scripts/automation/check.sh` is the full gate for an explicitly requested local run (generate, artifact self-tests, web-panel tests, build, smoke, and app tests; Ghostty-backed unless fallback is explicitly requested).
 - After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly on toastty-mini before handoff. This includes branch merges and branch switches that may leave generated project state stale.
 - Avoid deriving `ARCH` from `uname -m` in translated shells or inside `sv exec`; it may report `x86_64` on arm64 hosts. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta. Prefer invocation-scoped overrides such as `ARCHS` and `ONLY_ACTIVE_ARCH=YES` over mutating project settings.
-- Agent-driven focused iOS simulator tests run on the remote toastty-mini path: `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree -- -only-testing:...`. PRs run no hosted tests; the full hosted suite runs only before a TestFlight release or when the user asks. See CI Coverage in the verify skill. Do not boot or drive a local simulator unless the user explicitly requests local validation.
+- Agent-driven focused iOS simulator tests run on the remote toastty-mini path: `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree -- -only-testing:...`. PRs run hosted desktop checks; the full hosted iOS suite runs only before a TestFlight release or when the user asks. See CI Coverage in the verify skill. Do not boot or drive a local simulator unless the user explicitly requests local validation.
 
 ## Validation
 
@@ -56,6 +56,7 @@ Use `.agents/skills/toastty-dev-run/SKILL.md` for live Toastty dev/debug app ins
 - Ghostty release provenance: install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
 - Build release DMG and draft notes: follow `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env`, `ghostty-metadata.env`, `sparkle-metadata.env`, and drafted `release-notes.md` into `artifacts/release/<version>-<build>/`.
 - Publish later: follow `.agents/skills/toastty-publish/SKILL.md`. It verifies existing drafted notes and release metadata, then runs `scripts/release/publish-github-release.sh --create-tag`.
+- Linux `.deb` and AppImage: built on a Linux host from the release commit, tested with `scripts/linux/test-package.sh`, and attached to the same release with `scripts/release/publish-linux-release.sh` (`.agents/skills/toastty-release/references/linux.md`).
 
 ## Debugging
 
@@ -67,6 +68,12 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 - For agent-specific terminal input bugs, validate the managed launch environment as well as AppKit/Ghostty routing. A fixture that enables terminal protocols itself can hide launch overrides that disable them in the real agent.
 - For remote Claude login failures over SSH, check authentication in the macOS GUI login session before concluding that Claude is logged out. The SSH security session can lack access to an existing subscription login; run the live CLI check in the GUI session when this occurs.
 - Before retrying remote GUI input or investigating `cgWindowNotFound`, check `CGSSessionScreenIsLocked` from `CGSessionCopyCurrentDictionary()` on the remote Mac. `IOConsoleLocked` can report false while the WindowServer session is locked. A running GUI session and a valid provider login do not prove that its windows are available to Computer Use.
+
+## Linux Port
+
+- The Ubuntu GTK app lives in `linux/` (SwiftPM, built from Linux hosts only); `docs/linux.md` covers build, test, runtime paths and the shared-file rules. Shared `Sources/` and `Tests/` are mirrored into the Linux build through `linux/shared-sources.json`: edit the originals, never `linux/.generated/`.
+- Linux-only code in a shared file goes in `#if os(Linux)` and is listed in `docs/linux.md` under "Shared files with Linux guards". Each platform can only build itself; say which platform a shared change was not validated on.
+- The verify, debug, dev-run and release skills cover Linux through their `references/linux.md`. `scripts/automation/check.sh` and the smoke scripts run on Linux too. Linux validation is local: offscreen on a private Broadway display, plus a runtime-isolated real window only for OpenGL-sensitive checks. There is no remote GUI path. Never run `gnome-shell --headless`, and never drive the user's installed Toastty.
 
 ## Specialized References
 

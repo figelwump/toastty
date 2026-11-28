@@ -52,6 +52,8 @@ export interface LocalDocumentPanelBootstrap {
   saveErrorMessage: string | null;
   theme: LocalDocumentPanelTheme;
   textScale: number;
+  // Edit-mode editor; hosts that omit it get the textarea.
+  editorEngine?: "textarea" | "codemirror";
   /** Markdown only. Missing means "formatted", as for the iOS preview. */
   markdownViewMode?: LocalDocumentMarkdownViewMode;
 }
