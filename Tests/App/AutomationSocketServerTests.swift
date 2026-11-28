@@ -256,13 +256,17 @@ struct AutomationSocketServerSessionLifecycleTests: AutomationSocketServerTestSu
         #expect(afterAnswer == .working)
 
         // A turn that ended keeps its status when its request is withdrawn.
+        // That status is ready, or idle when the user already looks at the
+        // panel.
         let ready = try send(.ready, "Ready")
         #expect(ready.ok)
+        let atTurnEnd = await statusKind()
+        #expect(atTurnEnd == .ready || atTurnEnd == .idle)
         await MainActor.run {
             server.sessionRuntimeStore.noteDirectSessionWaitingRequest(sessionID: sessionID, waiting: nil, at: Date())
         }
         let afterTurn = await statusKind()
-        #expect(afterTurn == .ready)
+        #expect(afterTurn == atTurnEnd)
     }
 
     @Test
