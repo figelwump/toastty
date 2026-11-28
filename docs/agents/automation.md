@@ -536,21 +536,24 @@ mode so that it can save frames of its window. The installed production app
 is not touched. Like the direct session check above, it runs with
 `TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1`, the real Claude CLI and
 subscription usage, the same narrow profile and the same folder trust
-handling. It drives the coordinator's chat with real clicks and keys through
-`ax-drive`, so it takes the screen of the validation Mac, which must be
-unlocked. A seeded device on the loopback gateway only reads events.
+handling. It presses the chat's buttons through Accessibility (`ax-drive
+press`), which runs each button's own action with no mouse event, so a
+Screen Sharing display on the validation Mac cannot lose a click. A seeded
+device on the loopback gateway sends the messages, in the user's own words,
+and reads the events. It may not approve requests, so only the Mac's card
+can answer them.
 
 It checks, in this order:
 
 - The notice while the direct session starts names no terminal.
-- A message from the chat's composer makes Claude ask to run a command. The
-  card shows the command and the Allow once and Deny buttons, the chat shows
-  no notice, and the status is `needs_approval`. A click on Allow once runs
-  the command, and the card then says "Sent from this Mac: Allow once".
-- A second request: a click on Deny, the command does not run, and the card
-  says "Sent from this Mac: Deny".
-- A question: its card has no Show Terminal button, and a click on a choice
-  and Submit answers it.
+- A message makes Claude ask to run a command. The card shows the command
+  and the Allow once and Deny buttons, the chat shows no notice, and the
+  status is `needs_approval`. Allow once runs the command, and the card then
+  says "Sent from this Mac: Allow once".
+- A second request: Deny, the command does not run, and the card says
+  "Sent from this Mac: Deny".
+- A question: its card has no Show Terminal button, and a choice and Submit
+  answer it.
 
 It writes `remote-coordinator-permission-card-check.json`, its frames under
 `remote-coordinator-permission-card-check-frames/`, the app log and Claude's

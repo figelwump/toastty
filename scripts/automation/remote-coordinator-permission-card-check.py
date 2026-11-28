@@ -8,20 +8,22 @@ Run through scripts/remote/validate.sh --require-remote --validation-command
 The check starts its own disposable Toastty instance from the wrapper's build, with a throwaway runtime home
 and user home and TOASTTY_COORDINATOR_CLAUDE_DIRECT_SESSION=1, as remote-coordinator-direct-session-check.py
 does. The instance runs in automation mode, so that it can save frames of its window. The check opens the
-coordinator's chat and, with real clicks and keys through ax-drive:
+coordinator's chat and presses its buttons through Accessibility (ax-drive `press`), which runs each
+button's own action with no mouse event, so a Screen Sharing display on the host cannot lose a click. A
+seeded device on the loopback gateway sends the messages, in the user's own words, and reads the events;
+it may not approve requests, so only the Mac's card can answer them. The check:
 
 1. catches the chat's notice while the direct session starts;
-2. sends a message that makes Claude ask to run `touch card-allowed.txt`, and clicks Allow once on the card:
-   the command runs, and the card names the decision that this Mac sent;
+2. sends a message that makes Claude ask to run `touch card-allowed.txt`, and presses Allow once on the
+   card: the command runs, and the card names the decision that this Mac sent;
 3. does the same for `touch card-denied.txt` with Deny: the command does not run;
 4. has Claude ask a question: its card has no Show Terminal button, and a choice and Submit answer it.
 
 It uses the real, authenticated Claude CLI and subscription usage, never an API key. The profile gives
-Claude the Bash tool and the question tool only, and allows only `sleep` without a request. A seeded device
-on the loopback gateway only reads the conversation's events. The run marks only its temporary coordinator
-folder trusted in ~/.claude.json, and removes that entry and the folder's Claude project directory
-afterward. Add --gui-session on a host driven over SSH: the Claude login lives in the GUI session's
-keychain, and the clicks come from the SSH side, which Accessibility trusts.
+Claude the Bash tool and the question tool only, and allows only `sleep` without a request. The run marks
+only its temporary coordinator folder trusted in ~/.claude.json, and removes that entry and the folder's
+Claude project directory afterward. Add --gui-session on a host driven over SSH: the Claude login lives in
+the GUI session's keychain, and the presses come from the SSH side, which Accessibility trusts.
 
 Evidence goes to remote-coordinator-permission-card-check.json, its frames folder, and the app log, under
 the wrapper's artifacts directory.
@@ -98,10 +100,10 @@ def run(check):
             '--tools', 'Bash,AskUserQuestion', '--strict-mcp-config']
     runtime_home, user_home = check.home('card', argv)
     (user_home / '.toastty/tasks.toml').write_text('[defaults]\nagent = "claude"\n')
-    # A device that only reads the conversation's events, for the cards' IDs and Claude's replies.
+    # A paired device that sends the messages and reads the events. It may not approve requests.
     (runtime_home / 'remote-access').mkdir(parents=True)
-    device = dict(id=str(uuid.uuid4()).upper(), name='Reading phone', scopes=['read'], authKind='native',
-                  tailscaleLogin=steer.IDENTITY, createdAt=0)
+    device = dict(id=str(uuid.uuid4()).upper(), name='Check phone', scopes=['read', 'send'], authKind='native',
+                  tailscaleLogin=steer.IDENTITY, createdAt=0, permissionApprovalEnabled=False)
     credential = dict(credentialHash=hashlib.sha256(steer.TOKEN.encode()).hexdigest(), deviceID=device['id'],
                       issuedAt=0)
     (runtime_home / 'remote-access/devices.json').write_text(json.dumps(dict(
@@ -178,11 +180,19 @@ def run(check):
         # A turn that just ended can show the prompt of the turn before it for a moment.
         wait_for('the open prompt', lambda: prompt_open() and (time.sleep(3) or prompt_open()), timeout=240)
 
-    def ask_command(path, allowed, refused):
+    def send(text):
+        """A message from the paired device, in the user's own words. Returns the last event before it."""
         after = last_sequence()
-        ui.send(f'Use the Bash tool to run exactly this command and nothing else: `touch {path}`. '
-                f'If it succeeds, reply with exactly: {allowed}. If it is refused, reply with exactly: {refused}')
+        current = wait_for('an open prompt', prompt_open, timeout=180)
+        body = dict(conversationID=current['conversationID'], clientRequestID=str(uuid.uuid4()),
+                    expectedInputEpoch=current['inputAvailability']['epoch'], text=text)
+        code, result = gateway.call('POST', '/api/conversation.message.send', body)
+        require(code == 200 and result.get('status') == 'accepted', f'The message was not taken: {code} {result}')
         return after
+
+    def ask_command(path, allowed, refused):
+        return send(f'Use the Bash tool to run exactly this command and nothing else: `touch {path}`. '
+                    f'If it succeeds, reply with exactly: {allowed}. If it is refused, reply with exactly: {refused}')
 
     try:
         instance.wait_until_ready()
@@ -225,7 +235,7 @@ def run(check):
             require(wrong not in texts, f'The chat says "{wrong}" for a card it can answer: {texts[-800:]}')
         require(waiting.get('status') == 'needs_approval', f'The coordinator does not wait for approval: {waiting}')
         capture('permission-card')
-        ui.run('click', allow)
+        ui.run('press', allow)
         reply('CARD-ALLOWED', after)
         wait_for('the card to name the decision sent',
                  lambda: 'Sent from this Mac: Allow once' in ui.texts(), timeout=60)
@@ -242,7 +252,7 @@ def run(check):
         deny = f"toastty-mobile-permission-option-{permission['id']}-deny"
         wait_for('the card\'s buttons', lambda: ui.exists(deny), timeout=30)
         capture('second-permission-card')
-        ui.run('click', deny)
+        ui.run('press', deny)
         wait_for('the card to name the decision sent', lambda: 'Sent from this Mac: Deny' in ui.texts(), timeout=60)
         # A denial can end the turn with no more words.
         settle()
@@ -253,10 +263,9 @@ def run(check):
         step('Deny on the card stopped the command', status=status().get('status'))
 
         # 4. A question in a direct session: its card has no Show Terminal button.
-        after = last_sequence()
-        ui.send('Use the AskUserQuestion tool to ask me exactly one question, "Which color?", with exactly two '
-                'options labelled Red and Blue. After my answer, reply with exactly COLOR- followed by my answer '
-                'in capital letters, and nothing else.')
+        after = send('Use the AskUserQuestion tool to ask me exactly one question, "Which color?", with exactly '
+                     'two options labelled Red and Blue. After my answer, reply with exactly COLOR- followed by my '
+                     'answer in capital letters, and nothing else.')
         question = next_interaction('question')
         decision = question['questions'][0]
         blue = next(o['id'] for o in decision['options'] if o['label'] == 'Blue')
@@ -264,8 +273,10 @@ def run(check):
         wait_for('the question\'s card', lambda: ui.exists(option), timeout=30)
         require(not ui.has_label('Show Terminal'), 'A direct session\'s question card offers Show Terminal')
         capture('question-card')
-        ui.run('click', option)
-        ui.run('click', f"toastty-mobile-interaction-submit-{question['id']}")
+        ui.run('press', option)
+        # Submit is enabled once the chat has drawn the choice.
+        time.sleep(1)
+        ui.run('press', f"toastty-mobile-interaction-submit-{question['id']}")
         reply('COLOR-BLUE', after)
         settle()
         capture('question-answered')
