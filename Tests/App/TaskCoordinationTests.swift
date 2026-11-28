@@ -52,7 +52,7 @@ struct TaskCoordinationTests {
         #expect(try messages(fixture, to: task) == ["\(answer.messageHeader)\nApproved by you.\nRead the release receipt?"])
     }
 
-    /// A turn that a saved `--steer` message starts would clear the task's
+    /// A turn that a saved `task send` message starts would clear the task's
     /// question, so the answer to it takes the open prompt first.
     @Test func anAnswerToTheTasksQuestionGoesBeforeASavedSteerMessage() async throws {
         let fixture = try Fixture()
@@ -63,7 +63,7 @@ struct TaskCoordinationTests {
         let questionID = try #require(request.replyRequest?.approvalID)
         fixture.sessions.report(session, .working)
         fixture.sessions.steerResult = .success(.mustWait)
-        _ = try await coordinator.sendSteering(taskID: task.id, text: "The user says: use 300 ms", from: "the coordinator")
+        _ = try await coordinator.send(taskID: task.id, text: "The user says: use 300 ms", from: "the coordinator")
         let answer = try coordinator.answerApproval(taskID: task.id, questionID: questionID, decision: .approve)
         #expect(try messages(fixture, to: task).isEmpty)
 
@@ -190,6 +190,30 @@ struct TaskCoordinationTests {
         if restored { #expect(answer.sessionID == agent.sessionID) }
     }
 
+    /// A send that the agent's open prompt takes at once: the session that
+    /// it reached.
+    private func sendTyped(_ fixture: Fixture, to task: TaskRecord, _ text: String) async throws -> TaskSessionInfo {
+        fixture.sessions.steerResult = .success(.sent)
+        let outcome = try await fixture.coordinator.send(taskID: task.id, text: text, from: "a")
+        guard case .typed(.sent, let session) = outcome else {
+            Issue.record("Expected a typed message, got \(outcome)")
+            throw TaskError("The message was not typed.")
+        }
+        return session
+    }
+
+    /// A send that cannot type now: the message that Toastty saved, as it
+    /// is after the open prompts that could take it.
+    private func sendSaved(_ fixture: Fixture, to task: TaskRecord, _ text: String) async throws -> TaskQueuedMessage {
+        fixture.sessions.steerResult = .success(.mustWait)
+        let outcome = try await fixture.coordinator.send(taskID: task.id, text: text, from: "a")
+        guard case .saved(let message, _, _) = outcome else {
+            Issue.record("Expected a saved message, got \(outcome)")
+            throw TaskError("The message was not saved.")
+        }
+        return message
+    }
+
     @Test func sendReachesTheSessionRestoredInTheTasksPaneAfterARelaunch() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
@@ -200,9 +224,13 @@ struct TaskCoordinationTests {
             cwd: nil, isActive: true, isInTurn: false, nativeConversationID: nil, title: nil
         )
 
-        let reached = try fixture.coordinator.send(taskID: task.id, text: "Rebase on main, please")
+        let reached = try await sendTyped(fixture, to: task, "Rebase on main, please")
         #expect(reached.sessionID == "restored")
-        #expect(try messages(fixture, to: task) == ["Rebase on main, please"])
+        #expect(fixture.sessions.steered.map(\.text) == ["Rebase on main, please"])
+        // A restored agent has reported no status yet. The prompt that its
+        // conversation shows open is free for the message.
+        let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
+        #expect(mayTypeAtPrompt())
     }
 
     @Test func sendFollowsTheTaskIntoItsWorktreeSession() async throws {
@@ -220,9 +248,9 @@ struct TaskCoordinationTests {
             cwd: nil, isActive: true, isInTurn: false, nativeConversationID: nil, title: nil
         )
 
-        let reached = try fixture.coordinator.send(taskID: task.id, text: "status?")
+        let reached = try await sendTyped(fixture, to: task, "status?")
         #expect(reached.sessionID == "moved")
-        #expect(fixture.sessions.delivered.map(\.panelID) == [worktreePanel])
+        #expect(fixture.sessions.steered.map(\.panelID) == [worktreePanel])
     }
 
     @Test func sendFallsBackToTheOriginalAgentWhenTheForkDidNotRun() async throws {
@@ -234,7 +262,7 @@ struct TaskCoordinationTests {
                 workspaceID: taskSpace, panelID: UUID(), sessionID: "fork-that-exited", forked: true
             )
         }
-        let reached = try fixture.coordinator.send(taskID: task.id, text: "status?")
+        let reached = try await sendTyped(fixture, to: task, "status?")
         #expect(reached.sessionID == (try sessionID(task)))
     }
 
@@ -252,12 +280,15 @@ struct TaskCoordinationTests {
             cwd: nil, isActive: true, isInTurn: false, nativeConversationID: nil, title: nil,
             statusUpdatedAt: Date()
         )
-        let reached = try fixture.coordinator.send(taskID: task.id, text: "status?")
+        let reached = try await sendTyped(fixture, to: task, "status?")
         #expect(reached.sessionID == "newer")
-        #expect(fixture.sessions.delivered.map(\.panelID) == [newer])
+        #expect(fixture.sessions.steered.map(\.panelID) == [newer])
         #expect(savedPanel != newer)
     }
 
+    /// A message that Toastty typed at the open prompt, without a confirmed
+    /// Return, can still be in that prompt. Toastty does not type it again,
+    /// and types no other message after it until a turn starts.
     @Test func aMessageThatMayNotHaveBeenSubmittedIsNotTypedAgain() async throws {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
@@ -265,123 +296,134 @@ struct TaskCoordinationTests {
         let watcherSession = try sessionID(watcher)
         fixture.sessions.report(watcherSession, .idle)
         fixture.sessions.deliveryResult = .uncertain
-        #expect(throws: TaskError("Toastty typed the message into task \(watcher.title)'s terminal but may not have submitted it. Check that terminal before you send it again.")) {
-            try fixture.coordinator.send(taskID: watcher.id, text: "status?")
-        }
-        // Another sender's message does not go in after it either.
-        #expect(throws: unconfirmedMessageError(watcher)) {
-            try fixture.coordinator.send(taskID: watcher.id, text: "another")
-        }
+        #expect(try await sendSaved(fixture, to: watcher, "status?").outcome?.kind == .sentUnconfirmed)
 
+        // Another sender's message does not go in after it, and nor does a
+        // watch's line.
+        #expect(try await sendSaved(fixture, to: watcher, "another").isWaiting)
         _ = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: watcher.id)
         fixture.sessions.report(try sessionID(target), .needsApproval)
         fixture.coordinator.evaluateWatches()
         #expect(try messages(fixture, to: watcher) == ["status?"])
 
-        fixture.sessions.report(watcherSession, .working)
-        fixture.sessions.report(watcherSession, .ready)
-        fixture.coordinator.evaluateWatches()
-        fixture.coordinator.evaluateWatches()
-        #expect(try messages(fixture, to: watcher).filter { $0.hasPrefix("[Toastty watch") }.count == 1)
+        // A turn that starts after the unconfirmed message took it. The
+        // next prompt takes the message that waits, and the one after it
+        // the watch's line. Neither is typed again.
+        func endTurn() {
+            fixture.sessions.report(watcherSession, .working)
+            fixture.sessions.report(watcherSession, .ready)
+            fixture.coordinator.evaluateWatches()
+            fixture.coordinator.evaluateWatches()
+        }
+        endTurn()
+        #expect(try messages(fixture, to: watcher) == ["status?", "another"])
+        endTurn()
+        endTurn()
+        #expect(try messages(fixture, to: watcher).count == 3)
+        #expect(try messages(fixture, to: watcher).last?.hasPrefix("[Toastty watch") == true)
         guard case .fired(_, _, _, true)? = fixture.record(watcher.id)?.watches?.first?.state else {
             Issue.record("an uncertain delivery should not be retried")
             return
         }
-
-        // A turn that starts after the last unconfirmed message took it.
-        #expect(throws: unconfirmedMessageError(watcher)) {
-            try fixture.coordinator.send(taskID: watcher.id, text: "another")
-        }
-        fixture.sessions.deliveryResult = .delivered
-        fixture.sessions.report(watcherSession, .working)
-        try fixture.coordinator.send(taskID: watcher.id, text: "another")
-        #expect(try messages(fixture, to: watcher).last == "another")
+        #expect(fixture.record(watcher.id)?.queuedMessages?.map(\.outcome?.kind) == [.sentUnconfirmed, .sentUnconfirmed])
     }
 
-    private func interactionError(_ task: TaskRecord) -> TaskError {
-        TaskError(
-            "Task \(task.title)'s agent waits for an answer to a permission prompt, a question or a dialog, and a typed message could answer it. Toastty typed nothing. Send the message again when the agent's prompt is open, or send it with --steer, which holds it until then."
-        )
-    }
-
-    private func typedTextError(_ task: TaskRecord) -> TaskError {
-        TaskError(
-            "Someone typed in task \(task.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
-        )
-    }
-
-    private func unconfirmedMessageError(_ task: TaskRecord) -> TaskError {
-        TaskError(
-            "An earlier message to task \(task.title) can still be in its agent's prompt: Toastty typed it, but the terminal did not confirm its Return. Toastty typed nothing. Send the message again after the agent's next turn starts."
-        )
-    }
-
-    /// A plain send types nothing where its text and Return would join or
-    /// answer something at the agent's prompt, and says why. Once the
-    /// prompt is free it types, at rest or into a running turn.
-    @Test func aPlainSendLeavesAnOccupiedPromptUntouched() async throws {
+    /// A message that must wait is typed only at a prompt that holds
+    /// nothing that its text and Return would join or answer.
+    @Test func aSendThatMustWaitLeavesAnOccupiedPromptUntouched() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
         let session = try sessionID(task)
         let panel = try panelID(task)
         let start = Date()
         fixture.sessions.report(session, .working, at: start)
-        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(10))
-        func send(_ text: String) throws { try fixture.coordinator.send(taskID: task.id, text: text) }
 
         // A permission prompt or a question that the hooks report, and a
         // dialog or an interaction that only the screen or the followed
         // conversation shows.
-        fixture.sessions.report(session, .needsApproval, at: start.addingTimeInterval(11))
-        #expect(throws: interactionError(task)) { try send("status?") }
-        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(12))
+        fixture.sessions.report(session, .needsApproval, at: start.addingTimeInterval(1))
+        #expect(try await sendSaved(fixture, to: task, "first").isWaiting)
         fixture.sessions.sessionsShowingInteraction.insert(session)
-        #expect(throws: interactionError(task)) { try send("status?") }
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(2))
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task).isEmpty)
         fixture.sessions.sessionsShowingInteraction.remove(session)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["first"])
 
-        // A person typed during the turn and did not submit it. Only a
+        // A person typed during the next turn and did not submit it. Only a
         // conversation that Toastty followed from before that turn started
         // can tell that the agent recorded that text: following that began
         // during the turn can miss the typing.
-        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(5)
-        #expect(throws: typedTextError(task)) { try send("status?") }
-        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(1)
-        #expect(throws: typedTextError(task)) { try send("status?") }
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(10))
+        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(15)
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(20))
+        #expect(try await sendSaved(fixture, to: task, "second").isWaiting)
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(11)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["first"])
         fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(-60)
-        try send("first")
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["first", "second"])
         fixture.sessions.openPromptFollowedSince[session] = nil
 
-        // Typing at the open prompt, then a turn that submits it: a running
-        // turn takes a message, until someone types into that turn.
-        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(13)
-        #expect(throws: typedTextError(task)) { try send("status?") }
-        fixture.sessions.report(session, .working, at: start.addingTimeInterval(14))
-        try send("second")
-        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(15)
-        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(-60)
-        #expect(throws: typedTextError(task)) { try send("status?") }
-        #expect(try messages(fixture, to: task) == ["first", "second"])
+        // Typing at the open prompt, then a turn that submits it: the
+        // prompt after that turn takes the message.
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(30))
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(31))
+        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(32)
+        #expect(try await sendSaved(fixture, to: task, "third").isWaiting)
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(33))
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(34))
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["first", "second", "third"])
+    }
+
+    /// An error ended the agent's turn, and the agent waits at its prompt.
+    /// A message that had to wait goes there, such as one that tells the
+    /// agent to continue. A `--queue` message waits for a turn that ends
+    /// without an error.
+    @Test func aSendThatMustWaitReachesAnAgentThatStoppedWithAnError() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        fixture.sessions.report(session, .working)
+        _ = try fixture.coordinator.queueMessage(taskID: task.id, text: "Facts", from: "a")
+        fixture.sessions.report(session, .error)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task).isEmpty)
+
+        #expect(try await sendSaved(fixture, to: task, "Continue where you stopped.").outcome?.kind == .sent)
+        #expect(try messages(fixture, to: task) == ["Continue where you stopped."])
+        // A send that types through the agent's conversation may use that
+        // prompt too, once the turn that the message started ended.
+        let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
+        fixture.sessions.report(session, .working)
+        fixture.sessions.report(session, .error)
+        #expect(mayTypeAtPrompt())
+        fixture.sessions.report(session, .working)
+        #expect(mayTypeAtPrompt() == false)
     }
 
     @Test func sendFailsWhenTheTaskHasNoRunningAgent() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
         fixture.sessions.stop(try sessionID(task))
-        #expect(throws: TaskError("Task \(task.title) has no running agent.")) {
-            try fixture.coordinator.send(taskID: task.id, text: "status?")
+        await #expect(throws: TaskError("Task \(task.title) has no running agent.")) {
+            try await fixture.coordinator.send(taskID: task.id, text: "status?", from: "a")
         }
-        #expect(throws: TaskError("The message is empty.")) {
-            try fixture.coordinator.send(taskID: task.id, text: "  \n")
+        await #expect(throws: TaskError("The message is empty.")) {
+            try await fixture.coordinator.send(taskID: task.id, text: "  \n", from: "a")
         }
     }
 
-    @Test func aCheckedSendGoesToTheTasksAgentAndSaysHowItWasGiven() async throws {
+    @Test func aSendGoesToTheTasksAgentAndSaysHowItWasGiven() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
         let panel = try panelID(task)
 
         fixture.sessions.steerResult = .success(.steered)
-        let reached = try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "a")
+        let reached = try await fixture.coordinator.send(taskID: task.id, text: "Use the new name", from: "a")
         guard case .typed(.steered, let session) = reached else {
             Issue.record("Expected a typed message, got \(reached)")
             return
@@ -393,32 +435,119 @@ struct TaskCoordinationTests {
         #expect(try messages(fixture, to: task).isEmpty)
         #expect(fixture.record(task.id)?.queuedMessages == nil)
 
-        // A send that types nothing says so, with the reason.
-        fixture.sessions.steerResult = .failure(.stateUnknown)
-        await #expect(throws: TaskError("Toastty cannot tell what task \(task.title)'s agent does now, so it typed nothing. Send the message again when the agent is idle.")) {
-            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "a")
+        // A send that types nothing, or cannot tell, says so with the
+        // reason, and saves nothing.
+        fixture.sessions.steerResult = .failure(.unavailable)
+        await #expect(throws: TaskError("Toastty could not type into task \(task.title)'s terminal.")) {
+            try await fixture.coordinator.send(taskID: task.id, text: "Use the new name", from: "a")
+        }
+        fixture.sessions.steerResult = .failure(.uncertain)
+        await #expect(throws: TaskError("Toastty typed the message into task \(task.title)'s terminal but may not have submitted it. Check that terminal before you send it again.")) {
+            try await fixture.coordinator.send(taskID: task.id, text: "Use the new name", from: "a")
         }
         #expect(fixture.record(task.id)?.queuedMessages == nil)
         fixture.sessions.stop(try sessionID(task))
         await #expect(throws: TaskError("Task \(task.title) has no running agent.")) {
-            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "a")
+            try await fixture.coordinator.send(taskID: task.id, text: "Use the new name", from: "a")
         }
     }
 
+    /// Claude's recovery after a Fable quota stop types its own message at
+    /// the stopped agent's prompt. A message that a send saved for the task
+    /// goes first: while one waits, the recovery does not go on.
+    @Test func aSavedSendHoldsTheRecoveryAfterAFableQuotaStop() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let sessionID = try sessionID(task)
+        func mayRecover() throws -> Bool {
+            fixture.coordinator.mayStillRecoverFableTask(
+                taskID: task.id, expectedSessionID: sessionID, session: try #require(fixture.sessions.session(sessionID))
+            )
+        }
+        // The agent works, and a message is saved for it. Then the quota
+        // error ends the turn.
+        fixture.sessions.report(sessionID, .working)
+        #expect(try await sendSaved(fixture, to: task, "Use the new name").isWaiting)
+        fixture.sessions.report(sessionID, .error)
+        #expect(try mayRecover() == false)
+        #expect(try messages(fixture, to: task).isEmpty)
+
+        // Toastty types the saved message at the stopped agent's prompt.
+        // Nothing waits then, and the recovery can go on.
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["Use the new name"])
+        #expect(fixture.record(task.id)?.waitingMessages.isEmpty == true)
+        #expect(try mayRecover())
+        // Another agent in the task's pane is not the one that stopped.
+        #expect(fixture.coordinator.mayStillRecoverFableTask(
+            taskID: task.id, expectedSessionID: "another", session: try #require(fixture.sessions.session(sessionID))
+        ) == false)
+    }
+
+    /// A send can wait for the agent's state before it types. If the task
+    /// moved to another agent meanwhile, as start-work moves it, nothing
+    /// goes to the agent that it left.
+    @Test func aSendThatWaitedTypesNothingIntoAnAgentThatTheTaskLeft() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        _ = try await sendTyped(fixture, to: task, "status?")
+        let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
+        let mayTypeIntoTurn = try #require(fixture.sessions.mayTypeIntoTurn)
+        #expect(mayTypeAtPrompt() && mayTypeIntoTurn())
+
+        let worktreePanel = UUID()
+        fixture.sessions.sessions["moved"] = TaskSessionInfo(
+            sessionID: "moved", agent: .claude, panelID: worktreePanel, workspaceID: taskSpace,
+            cwd: nil, isActive: true, isInTurn: false, nativeConversationID: nil, title: nil
+        )
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.operation.worktreeSession = TaskOperation.WorktreeSession(
+                workspaceID: taskSpace, panelID: worktreePanel, sessionID: "moved", forked: true
+            )
+        }
+        #expect(mayTypeAtPrompt() == false)
+        #expect(mayTypeIntoTurn() == false)
+    }
+
+    /// Toastty cannot tell what the agent does, as for an agent whose
+    /// conversation it does not follow: the send types nothing into a turn.
+    /// It saves the message, and types it at the prompt that the agent's
+    /// hooks report open, which can be at once.
+    @Test func aSendToAnAgentInAnUnknownStateWaitsForThePromptThatItsHooksReport() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        fixture.sessions.report(session, .working)
+        #expect(try await sendSaved(fixture, to: task, "Use the new name").isWaiting)
+        #expect(try messages(fixture, to: task).isEmpty)
+        fixture.sessions.report(session, .ready)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["Use the new name"])
+
+        fixture.sessions.report(session, .working)
+        fixture.sessions.report(session, .ready)
+        #expect(try await sendSaved(fixture, to: task, "And the new path").outcome?.kind == .sent)
+        #expect(try messages(fixture, to: task) == ["Use the new name", "And the new path"])
+    }
+
     /// Claude Code drops a Return typed while it reads a pasted image path,
-    /// so both sends type such a path as text.
-    @Test func bothSendsTypeAnImagePathAsTextSoTheReturnSubmitsIt() async throws {
+    /// so a send types such a path as text.
+    @Test func aSendTypesAnImagePathAsTextSoTheReturnSubmitsIt() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
         let text = "See the screenshot:\n/Users/me/attachments/shot.jpg"
         let typed = "See the screenshot:\n`/Users/me/attachments/shot.jpg`"
 
-        try fixture.coordinator.send(taskID: task.id, text: text)
-        #expect(try messages(fixture, to: task) == [typed])
-
         fixture.sessions.steerResult = .success(.steered)
-        _ = try await fixture.coordinator.sendSteering(taskID: task.id, text: text, from: "a")
+        _ = try await fixture.coordinator.send(taskID: task.id, text: text, from: "a")
         #expect(fixture.sessions.steered.map(\.text) == [typed])
+
+        // One that had to wait is typed the same way.
+        fixture.sessions.report(try sessionID(task), .working)
+        fixture.sessions.report(try sessionID(task), .ready)
+        _ = try await sendSaved(fixture, to: task, text)
+        #expect(try messages(fixture, to: task) == [typed])
     }
 
     @Test func taskSessionsAreUnscopedUnlessTheirCreatorWasScoped() async throws {
@@ -940,7 +1069,7 @@ struct TaskCoordinationTests {
         #expect(try messages(fixture, to: task).count == 1)
     }
 
-    /// One message of Toastty's for each open prompt: a `--steer` message
+    /// One message of Toastty's for each open prompt: a `task send` message
     /// that had to wait first, then a watch's line, then queued messages,
     /// oldest first. An agent at its open prompt gets the first at once.
     @Test func queuedMessagesTakeOneOpenPromptEachInOrder() async throws {
@@ -971,10 +1100,10 @@ struct TaskCoordinationTests {
         }
         _ = try coordinator.addWatch(targetTaskID: other.id, condition: .waiting, notifyTaskID: task.id)
         fixture.sessions.report(try sessionID(other), .needsApproval)
-        // The prompt that took "First" is still reported open: a `--steer`
-        // send that cannot type now is saved, ahead of the queued messages.
+        // The prompt that took "First" is still reported open: a send that
+        // cannot type now is saved, ahead of the queued messages.
         fixture.sessions.steerResult = .success(.mustWait)
-        let steered = try await coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "the coordinator")
+        let steered = try await coordinator.send(taskID: task.id, text: "Use the new name", from: "the coordinator")
         guard case .saved(let saved, let position, _) = steered else {
             Issue.record("Expected a saved message, got \(steered)")
             return
@@ -984,8 +1113,11 @@ struct TaskCoordinationTests {
         // prompt either: "First" took it.
         let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
         #expect(mayTypeAtPrompt() == false)
+        // Nor may it steer past the saved message into a turn.
+        let mayTypeIntoTurn = try #require(fixture.sessions.mayTypeIntoTurn)
+        #expect(mayTypeIntoTurn() == false)
         // A second one waits behind it, without a try to type it first.
-        let behind = try await coordinator.sendSteering(taskID: task.id, text: "And the new path", from: "the coordinator")
+        let behind = try await coordinator.send(taskID: task.id, text: "And the new path", from: "the coordinator")
         guard case .saved(_, .some(2), _) = behind else {
             Issue.record("Expected the second saved message, got \(behind)")
             return
@@ -999,7 +1131,7 @@ struct TaskCoordinationTests {
         endTurn(2)
         #expect(try messages(fixture, to: task) == ["First", "Use the new name", "And the new path"])
 
-        // A `--steer` message typed at once took the next prompt, also
+        // A message that a send typed at once took the next prompt, also
         // while the hooks still report it open.
         fixture.sessions.report(session, .working, at: start.addingTimeInterval(2.5))
         fixture.sessions.report(session, .ready, at: start.addingTimeInterval(3))
@@ -1096,17 +1228,17 @@ struct TaskCoordinationTests {
         #expect(fixture.record(task.id)?.queuedMessages?.first?.outcome?.sessionID == "restored")
     }
 
-    /// A `--steer` message that had to wait is saved on the task, so it
+    /// A `task send` message that had to wait is saved on the task, so it
     /// survives a relaunch. Unlike a `--queue` message, it does not wait for
     /// a turn that the quit cut off, for the task's question, or for a task
-    /// that merged: a `--steer` send to an open prompt types at once there
+    /// that merged: a `task send` to an open prompt types at once there
     /// too. Only an archived task drops it.
     @Test func aSteerMessageThatWaitsSurvivesARelaunch() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
         fixture.sessions.report(try sessionID(task), .working)
         fixture.sessions.steerResult = .success(.mustWait)
-        _ = try await fixture.coordinator.sendSteering(taskID: task.id, text: "The user says: use 300 ms", from: "the coordinator")
+        _ = try await fixture.coordinator.send(taskID: task.id, text: "The user says: use 300 ms", from: "the coordinator")
         _ = try fixture.coordinator.queueMessage(taskID: task.id, text: "Review points", from: "the coordinator")
         let quitLaunch = fixture.coordinator.launchID
         try fixture.coordinator.records.save(id: task.id) {
@@ -1127,7 +1259,7 @@ struct TaskCoordinationTests {
         fixture.sessions.report("restored", .idle)
         #expect(relaunched.wasInterruptedAtQuit(try #require(fixture.record(task.id))))
         // The monitor that reconcileAfterLaunch started types it.
-        await fixture.waitUntil("the saved --steer message is typed", timeout: .seconds(5)) {
+        await fixture.waitUntil("the saved message is typed", timeout: .seconds(5)) {
             (try? messages(fixture, to: task)) == ["The user says: use 300 ms"]
         }
         let saved = try #require(fixture.record(task.id)?.queuedMessages)
@@ -1140,12 +1272,12 @@ struct TaskCoordinationTests {
 
         // An archived task drops one that waits.
         fixture.sessions.report("restored", .working)
-        _ = try await relaunched.sendSteering(taskID: task.id, text: "Too late", from: "the coordinator")
+        _ = try await relaunched.send(taskID: task.id, text: "Too late", from: "the coordinator")
         try relaunched.records.save(id: task.id) { $0.archivedAt = Date() }
         relaunched.evaluateWatches()
         #expect(fixture.record(task.id)?.queuedMessages?.last?.outcome?.reason == "the task was archived")
         await #expect(throws: TaskError("Toastty cannot hold a message for task \(task.title): the task was archived. Nothing was typed.")) {
-            try await relaunched.sendSteering(taskID: task.id, text: "Later still", from: "the coordinator")
+            try await relaunched.send(taskID: task.id, text: "Later still", from: "the coordinator")
         }
     }
 
@@ -1195,7 +1327,7 @@ struct TaskCoordinationTests {
         #expect(outcomes?.count == 10)
         #expect(outcomes?.allSatisfy { $0?.kind == .dropped && $0?.reason == "the task merged" } == true)
         #expect(throws: TaskError(
-            "Toastty queues no message for task \(title): the task merged. A send without --queue types it at once and reopens the task."
+            "Toastty queues no message for task \(title): the task merged. A send without --queue gives it to the agent and reopens the task."
         )) {
             try coordinator.queueMessage(taskID: target.id, text: "Too late", from: "a")
         }

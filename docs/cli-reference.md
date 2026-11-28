@@ -880,7 +880,7 @@ toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root 
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>] [--name <project>]
-toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer | --queue] [--from <name>]
+toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--queue] [--from <name>]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
@@ -975,14 +975,16 @@ before the message that names the sender; see `send` under
 [`coordinator`](#coordinator). The coordinator's own `task send` gets a line
 that makes its approvals and decisions count as yours in the task; see
 [Approvals and decisions from the coordinator](tasks.md#approvals-and-decisions-from-the-coordinator).
-`task send` types its message at the agent's open prompt or into its running
-turn. It types nothing, and fails with the reason, while a permission prompt,
-a question or a dialog waits there, or while text that someone typed since the
-agent's latest turn started can still be in the prompt; see
-[Coordinate tasks](tasks.md#coordinate-tasks). With `--steer`, the message
-goes to the agent's open prompt or into its running turn, or Toastty saves it
-on the task for the next open prompt, also after a relaunch, and nothing is
-typed into a permission prompt.
+`task send` gives its message to the agent as soon as the agent can read it:
+at the agent's open prompt, or into the running turn of a Claude Code or
+Codex agent. It types nothing while a permission prompt, a question or a
+dialog waits there, while text that someone typed since the agent's latest
+turn started can still be in the prompt, or while Toastty cannot tell what
+the agent does. Toastty then saves the message on the task and types it at
+the agent's next open prompt, also after a relaunch. The result's `delivery`
+is `sent`, `steered` or `queued`; see
+[Coordinate tasks](tasks.md#coordinate-tasks). `--steer` is an older name
+for this default: Toastty accepts it, and it changes nothing.
 With `--queue`, Toastty never types into a running turn: it saves the message
 on the task and types it at the agent's next open prompt, also after a
 relaunch. `task get` lists it under `queuedMessages` with its outcome.

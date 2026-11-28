@@ -936,10 +936,10 @@ final class AppControlExecutor {
         if AppControlActionID.resolve(rawID) == .taskSend {
             let preparation = try withRequestContext(context) {
                 try validateTabParameter(args, descriptor: AppControlActionID.taskSend.descriptor)
-                return try prepareTaskSteerSend(args: args)
+                return try prepareTaskSend(args: args)
             }
             if let (coordinator, taskID, text, from) = preparation {
-                return try await finishTaskSteerSend(coordinator, taskID: taskID, text: text, from: from)
+                return try await finishTaskSend(coordinator, taskID: taskID, text: text, from: from)
             }
         }
         if AppControlActionID.resolve(rawID) == .taskArchive {

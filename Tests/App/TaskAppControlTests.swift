@@ -679,10 +679,10 @@ struct TaskAppControlTests {
         return value
     }
 
-    /// `task.send` with the live sessions: a permission prompt, Claude
-    /// Code's own dialog and a person's text in the agent's prompt each keep
-    /// the message out, and the answer says why. A turn that starts after
-    /// the text frees the prompt.
+    /// `task.send` with the live sessions, for an agent whose conversation
+    /// Toastty does not follow: a permission prompt, Claude Code's own
+    /// dialog and a person's text in the agent's prompt each keep the
+    /// message out. Toastty saves it, and types it once the prompt is free.
     @Test func taskSendLeavesAnOccupiedPromptUntouched() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
@@ -700,43 +700,56 @@ struct TaskAppControlTests {
         func report(_ kind: SessionStatusKind) {
             fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
         }
-        func send() throws {
-            _ = try executor.runAction(
+        func send(_ text: String) async throws -> [String: AutomationJSONValue] {
+            try #require(try await executor.runActionAsync(
                 id: "task.send",
-                args: ["taskID": .string(id.uuidString), "text": .string("status?"), "from": .string("Grok Bot")],
+                args: ["taskID": .string(id.uuidString), "text": .string(text), "from": .string("Grok Bot")],
                 context: context()
-            )
+            ).result)
         }
-        let interaction = "Task \(task.title)'s agent waits for an answer to a permission prompt, a question or a dialog, and a typed message could answer it. Toastty typed nothing. Send the message again when the agent's prompt is open, or send it with --steer, which holds it until then."
-        let typedText = "Someone typed in task \(task.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
         report(.working)
         report(.idle)
 
         // A permission prompt. The person answers it with keys: those leave
-        // nothing in the prompt, so the send goes after the turn.
+        // nothing in the prompt, so the message goes after the turn, once
+        // no dialog of Claude Code's own is on screen either.
         report(.working)
         report(.needsApproval)
-        await expectInvalidPayload(interaction) { try send() }
+        let waiting = try await send("first")
+        #expect(waiting["delivery"] == .string("queued"))
+        #expect(waiting["delivered"] == .bool(false))
+        #expect(waiting["queuePosition"] == .int(1))
         fixture.sessionRuntimeStore.noteUserInput(panelID: panel)
+        report(.working)
+        typed.dialogPanels.insert(panel)
+        report(.idle)
+        fixture.coordinator.evaluateWatches()
+        #expect(typed.entries.isEmpty)
+        typed.dialogPanels.remove(panel)
+        fixture.coordinator.evaluateWatches()
+        #expect(typed.entries.map(\.panelID) == [panel])
+        #expect(typed.entries.last?.text.hasSuffix("\nfirst") == true)
+
+        // A draft that a person typed at the agent's next prompt.
         report(.working)
         report(.idle)
-        typed.dialogPanels.insert(panel)
-        await expectInvalidPayload(interaction) { try send() }
-        typed.dialogPanels.remove(panel)
-        #expect(typed.entries.isEmpty)
-        try send()
-        #expect(typed.entries.map(\.panelID) == [panel])
-
-        // A draft that a person typed at the agent's prompt.
         fixture.sessionRuntimeStore.noteUserInput(panelID: panel)
-        await expectInvalidPayload(typedText) { try send() }
+        #expect(try await send("second")["delivery"] == .string("queued"))
         #expect(typed.entries.count == 1)
 
-        // The person submits it: the turn it starts takes the message.
+        // The person submits it: the prompt after that turn takes the
+        // message, and the next one takes a send at once.
         report(.working)
-        try send()
+        report(.idle)
+        fixture.coordinator.evaluateWatches()
         #expect(typed.entries.map(\.panelID) == [panel, panel])
-        #expect(typed.entries.last?.text.hasSuffix("\nstatus?") == true)
+        #expect(typed.entries.last?.text.hasSuffix("\nsecond") == true)
+        report(.working)
+        report(.idle)
+        let atPrompt = try await send("third")
+        #expect(atPrompt["delivery"] == .string("sent"))
+        #expect(atPrompt["delivered"] == .bool(true))
+        #expect(typed.entries.last?.text.hasSuffix("\nthird") == true)
     }
 
     @Test func aCoordinatorOutsideToasttyPollsSendsAndWakesATaskWithAWatch() async throws {
@@ -796,52 +809,6 @@ struct TaskAppControlTests {
         let producerTitle = try #require(fixture.record(producer.id)?.title)
         #expect(busy["markdownLink"] == .string("[\(producerTitle)](toastty://task/\(producer.id.uuidString))"))
 
-        // A follow-up by task ID reaches the producer's terminal, after a
-        // first line that names the sending task as a link.
-        let sent = try executor.runAction(
-            id: "task.send",
-            args: ["taskID": .string(producer.id.uuidString), "text": .string("Also document the errors")],
-            context: context(consumerSession)
-        )
-        #expect(sent.result?["sessionID"] == .string(producerSession))
-        #expect(typed.entries.map(\.panelID) == [producerPanel])
-        let consumerTitle = try #require(fixture.record(consumer.id)?.title)
-        #expect(typed.entries.last?.text == """
-            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
-            Also document the errors
-            """)
-        // A message with no text is refused, sender line or not.
-        for steer in [false, true] {
-            await expectInvalidPayload("The message is empty.") {
-                _ = try await executor.runActionAsync(
-                    id: "task.send",
-                    args: ["taskID": .string(producer.id.uuidString), "text": .string(" \n "), "steer": .bool(steer)],
-                    context: context(consumerSession)
-                )
-            }
-        }
-        #expect(typed.entries.count == 1)
-        // A program outside Toastty, with no session, names itself; a
-        // session that gives a name is still named by its task.
-        _ = try executor.runAction(
-            id: "task.send",
-            args: ["taskID": .string(producer.id.uuidString), "text": .string("Yes, go ahead"), "from": .string("Grok Bot")],
-            context: context()
-        )
-        #expect(typed.entries.last?.text == """
-            [Toastty] From "Grok Bot" (named by the caller): Toastty cannot tell who ran it.
-            Yes, go ahead
-            """)
-        _ = try executor.runAction(
-            id: "task.send",
-            args: ["taskID": .string(producer.id.uuidString), "text": .string("Done"), "from": .string("the user")],
-            context: context(consumerSession)
-        )
-        #expect(typed.entries.last?.text == """
-            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
-            Done
-            """)
-
         // The consumer's agent waits for the producer instead of polling;
         // the watch notifies the caller's own task by default.
         let watch = try executor.runAction(
@@ -898,6 +865,54 @@ struct TaskAppControlTests {
                 context: context()
             )
         }
+
+        // A follow-up by task ID reaches the producer's terminal, after a
+        // first line that names the sending task as a link. Each of the
+        // producer's open prompts takes one message.
+        func sendToProducer(_ text: String, from name: String? = nil, as callerSessionID: String?) async throws -> AppControlActionOutcome {
+            for kind in [SessionStatusKind.working, .idle] {
+                fixture.sessionRuntimeStore.updateStatus(
+                    sessionID: producerSession, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+                )
+            }
+            var args: [String: AutomationJSONValue] = ["taskID": .string(producer.id.uuidString), "text": .string(text)]
+            if let name { args["from"] = .string(name) }
+            return try await executor.runActionAsync(id: "task.send", args: args, context: context(callerSessionID))
+        }
+        let sentBefore = typed.entries.count
+        let sent = try await sendToProducer("Also document the errors", as: consumerSession)
+        #expect(sent.result?["sessionID"] == .string(producerSession))
+        #expect(sent.result?["delivery"] == .string("sent"))
+        #expect(typed.entries.count == sentBefore + 1)
+        #expect(typed.entries.last?.panelID == producerPanel)
+        let consumerTitle = try #require(fixture.record(consumer.id)?.title)
+        #expect(typed.entries.last?.text == """
+            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
+            Also document the errors
+            """)
+        // A message with no text is refused, sender line or not.
+        for steer in [false, true] {
+            await expectInvalidPayload("The message is empty.") {
+                _ = try await executor.runActionAsync(
+                    id: "task.send",
+                    args: ["taskID": .string(producer.id.uuidString), "text": .string(" \n "), "steer": .bool(steer)],
+                    context: context(consumerSession)
+                )
+            }
+        }
+        #expect(typed.entries.count == sentBefore + 1)
+        // A program outside Toastty, with no session, names itself; a
+        // session that gives a name is still named by its task.
+        _ = try await sendToProducer("Yes, go ahead", from: "Grok Bot", as: nil)
+        #expect(typed.entries.last?.text == """
+            [Toastty] From "Grok Bot" (named by the caller): Toastty cannot tell who ran it.
+            Yes, go ahead
+            """)
+        _ = try await sendToProducer("Done", from: "the user", as: consumerSession)
+        #expect(typed.entries.last?.text == """
+            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
+            Done
+            """)
     }
 
     @Test func aScopedSessionCanSendOnlyToTasksItMaySee() async throws {
@@ -911,48 +926,83 @@ struct TaskAppControlTests {
         let scoped = try #require(fixture.record(mine.id)?.operation.agentLaunch?.sessionID)
         #expect(fixture.sessionRuntimeStore.setScope(sessionID: scoped, workspaceIDs: []))
 
-        _ = try executor.runAction(
+        _ = try await executor.runActionAsync(
             id: "task.send", args: ["taskID": .string(mine.id.uuidString), "text": .string("hi")], context: context(scoped)
         )
         await expectInvalidPayload("No task has ID \(other.id.uuidString).") {
-            _ = try executor.runAction(
+            _ = try await executor.runActionAsync(
                 id: "task.send", args: ["taskID": .string(other.id.uuidString), "text": .string("hi")], context: context(scoped)
             )
         }
-        // The checked send has the same limit.
-        await expectInvalidPayload("No task has ID \(other.id.uuidString).") {
-            _ = try await executor.runActionAsync(
-                id: "task.send",
-                args: ["taskID": .string(other.id.uuidString), "text": .string("hi"), "steer": .bool(true)],
-                context: context(scoped)
-            )
+        // A send that names the default, and a queued one, have the same
+        // limit.
+        for flag in ["steer", "queue"] {
+            await expectInvalidPayload("No task has ID \(other.id.uuidString).") {
+                _ = try await executor.runActionAsync(
+                    id: "task.send",
+                    args: ["taskID": .string(other.id.uuidString), "text": .string("hi"), flag: .bool(true)],
+                    context: context(scoped)
+                )
+            }
         }
     }
 
-    @Test func aSteerSendTypesNothingWhenToasttyCannotTellWhatTheAgentDoes() async throws {
+    /// Toastty cannot tell what the agent does: it types nothing into the
+    /// agent's turn, saves the message, and types it at the prompt that
+    /// the agent's hooks report. `steer` names this default.
+    @Test func aSendWaitsForTheReportedPromptWhenToasttyCannotTellWhatTheAgentDoes() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
         // These sessions have no conversation that Toastty follows.
         let typed = useLiveSessions(fixture)
         let task = try await fixture.coordinator.create(TaskCreateRequest(text: "mine", workspaceID: fixture.workspaceID, agent: "codex"))
         await fixture.waitForSetup(task.id)
-        let title = try #require(fixture.record(task.id)).title
-        let typedBefore = typed.entries.count
-        let args: [String: AutomationJSONValue] = [
-            "taskID": .string(task.id.uuidString), "text": .string("Use the new name"), "steer": .bool(true),
-        ]
-
-        await expectInvalidPayload(
-            "Toastty cannot tell what task \(title)'s agent does now, so it typed nothing. Send the message again when the agent is idle."
-        ) {
-            _ = try await executor.runActionAsync(id: "task.send", args: args, context: context())
+        let session = try #require(fixture.record(task.id)?.operation.agentLaunch?.sessionID)
+        func report(_ kind: SessionStatusKind) {
+            fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
         }
-        // The call that cannot wait refuses a steer send. It does not fall
-        // back to typing without the check.
-        await expectInvalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action") {
-            _ = try executor.runAction(id: "task.send", args: args, context: context())
+        report(.working)
+        let typedBefore = typed.entries.count
+        var messageIDs: [AutomationJSONValue?] = []
+        for (index, steer) in [nil, true, false].enumerated() {
+            var args: [String: AutomationJSONValue] = ["taskID": .string(task.id.uuidString), "text": .string("Message \(index + 1)")]
+            args["steer"] = steer.map(AutomationJSONValue.bool)
+            let sent = try await executor.runActionAsync(id: "task.send", args: args, context: context())
+            #expect(sent.result?["delivery"] == .string("queued"))
+            #expect(sent.result?["delivered"] == .bool(false))
+            #expect(sent.result?["queuePosition"] == .int(index + 1))
+            #expect(sent.result?["sessionID"] == .string(session))
+            messageIDs.append(sent.result?["messageID"])
         }
         #expect(typed.entries.count == typedBefore)
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(task.id.uuidString)])
+        guard case .array(let messages)? = got["queuedMessages"] else {
+            Issue.record("task.get lists no messages: \(got)")
+            return
+        }
+        #expect(messages.count == 3)
+        for (message, messageID) in zip(messages, messageIDs) {
+            guard case .object(let listed) = message else { continue }
+            #expect(listed["messageID"] == messageID)
+            #expect(listed["steer"] == .bool(true))
+            #expect(listed["state"] == .string("queued"))
+        }
+
+        // The turn ends: the oldest goes to the open prompt.
+        report(.idle)
+        fixture.coordinator.evaluateWatches()
+        fixture.coordinator.evaluateWatches()
+        #expect(typed.entries.count == typedBefore + 1)
+        #expect(typed.entries.last?.text.hasSuffix("\nMessage 1") == true)
+
+        // The call that cannot wait takes only a queued send. It does not
+        // fall back to typing without the check.
+        await expectInvalidPayload("task.send without queue waits for the agent's state; send it through app_control.run_action") {
+            _ = try executor.runAction(
+                id: "task.send", args: ["taskID": .string(task.id.uuidString), "text": .string("Unchecked")], context: context()
+            )
+        }
+        #expect(typed.entries.count == typedBefore + 1)
     }
 
     /// A queued send, as a coordinator outside Toastty makes it: nothing is

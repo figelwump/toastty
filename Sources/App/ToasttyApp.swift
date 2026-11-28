@@ -1570,7 +1570,7 @@ struct ToasttyApp: App {
                 oldExampleSkills: OldExampleSkills.included(in: userSkillCatalog.scan())
             )
         }
-        // `task send --steer` types through the same path.
+        // `task send` types through the same path.
         taskSessions.conversationAccess = remoteAccessService
         agentLaunchService.quotaRecoveryConversationAccess = remoteAccessService
         // The coordinator types through its agent's conversation, the path

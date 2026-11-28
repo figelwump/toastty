@@ -147,17 +147,20 @@ struct TaskStartWorkTests {
         }
 
         /// What the next checked deliveries report.
-        var steerResult: Result<TaskSteerDelivery, TaskSteerFailure> = .failure(.stateUnknown)
-        /// The latest checked delivery's check of the open prompt.
+        var steerResult: Result<TaskSteerDelivery, TaskSteerFailure> = .success(.mustWait)
+        /// The latest checked delivery's check of the open prompt, and of
+        /// a running turn.
         var mayTypeAtPrompt: (@MainActor () -> Bool)?
+        var mayTypeIntoTurn: (@MainActor () -> Bool)?
         /// Text given to each panel's checked delivery, in order.
         private(set) var steered: [(panelID: UUID, text: String)] = []
 
         func deliverSteering(
-            _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+            _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
         ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
             steered.append((panelID, text))
-            self.mayTypeAtPrompt = mayTypeAtPrompt
+            mayTypeAtPrompt = { mayType(.openPrompt) }
+            mayTypeIntoTurn = { mayType(.runningTurn) }
             return steerResult
         }
 
@@ -886,9 +889,8 @@ struct TaskStartWorkTests {
             You own only this task. The conversation above can plan other tasks and other work: do not do them, and do \
             not act for the session that created this task. The task [\(parent.title)](toastty://task/\(parent.id.uuidString)) \
             created this task. Report progress, questions and results to it with \
-            `toastty task send \(parent.id.uuidString) --steer "<message>"`. Toastty types the message into that \
-            task's turn or at its prompt, or saves it for its next prompt. If the command fails, nothing was typed: \
-            send the report again with `--queue` in place of `--steer`.
+            `toastty task send \(parent.id.uuidString) "<message>"`. Toastty types the message into that task's turn \
+            or at its prompt, or saves it for its next prompt.
 
             Brief for the parser.
 
@@ -949,9 +951,8 @@ struct TaskStartWorkTests {
         let launched = try #require(fixture.launcher.calls.last)
         // The title is escaped for the link, and the ID stays in the command.
         let parentLine = #"The task [Plan the \[beta\] release](toastty://task/\#(parent.id.uuidString)) created this task. "#
-            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) --steer "<message>"`. "#
-            + "Toastty types the message into that task's turn or at its prompt, or saves it for its next prompt. "
-            + "If the command fails, nothing was typed: send the report again with `--queue` in place of `--steer`."
+            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) "<message>"`. "#
+            + "Toastty types the message into that task's turn or at its prompt, or saves it for its next prompt."
         #expect(launched.prompt.contains(parentLine))
         // A launch that cannot give the agent its skills sends another
         // message, which names the parent too.

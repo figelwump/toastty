@@ -125,6 +125,31 @@ enum TaskPromptOccupant: Equatable {
     case unconfirmedMessage
 }
 
+/// What shows that a task's agent rests at its prompt, for a message that
+/// Toastty types there (`TaskCoordinator.automaticPromptTurnEnd`).
+enum TaskPromptRest {
+    /// The agent's hooks report idle or ready. For Toastty's own lines and
+    /// `--queue` messages, which Toastty types on that report alone.
+    case reported
+    /// The same, or the hooks report that an error ended the turn. For a
+    /// `task send` message that waited, which also reaches an agent that
+    /// stopped.
+    case reportedOrStopped
+    /// The conversation that Toastty follows shows the prompt open, and the
+    /// hooks report no turn. For a `task send` that types through that
+    /// conversation. A session that reported no status yet counts, such as
+    /// one that Toastty restored after a relaunch.
+    case shownByConversation
+
+    func holds(for kind: SessionStatusKind?) -> Bool {
+        switch self {
+        case .reported: kind == .idle || kind == .ready
+        case .reportedOrStopped: kind == .idle || kind == .ready || kind == .error
+        case .shownByConversation: kind != .working && kind != .needsApproval
+        }
+    }
+}
+
 /// The session side of moving a task into its worktree. A protocol so tests
 /// can move tasks without agents.
 @MainActor
@@ -142,16 +167,16 @@ protocol TaskSessionProviding: AnyObject {
     /// The managed agent sessions running in a workspace now.
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo]
     /// Types `text` into the panel and submits it, as `terminal.send-text`
-    /// does. A busy agent queues it as typed input.
+    /// does, with no check of the agent's state: for a prompt that the
+    /// caller found open (`TaskCoordinator.automaticPromptTurnEnd`).
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
     /// Gives `text` to the agent in the panel under Toastty's input checks,
-    /// for `task send --steer`: typed at an open prompt, typed into a
-    /// running turn that can read it, or not typed (`.mustWait`), for the
-    /// next open prompt. Nothing is typed into a permission prompt or a
-    /// question.
-    /// `mayTypeAtPrompt`: see `TaskSteerSender.send`.
+    /// for `task send`: typed at an open prompt, typed into a running turn
+    /// that can read it, or not typed (`.mustWait`), for the next open
+    /// prompt. Nothing is typed into a permission prompt or a question.
+    /// `mayType`: see `TaskSteerSender.send`.
     func deliverSteering(
-        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+        _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
     ) async -> Result<TaskSteerDelivery, TaskSteerFailure>
     /// When `deliverSteering` last typed into the panel. A prompt that it
     /// typed at after the turn ended is taken, also while the agent's hooks
@@ -184,9 +209,9 @@ extension TaskSessionProviding {
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
     func deliverSteering(
-        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+        _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool
     ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
-        .failure(.stateUnknown)
+        .success(.mustWait)
     }
     func lastSteerTypedAt(panelID: UUID) -> Date? { nil }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }

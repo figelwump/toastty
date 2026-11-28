@@ -89,7 +89,7 @@ extension TaskCoordinator {
                 }
             }
             guard let session = liveAgentSession(of: record, ownAgentOnly: true) else { continue }
-            // It goes before a waiting `--steer` message, whose turn would
+            // It goes before a waiting `task send` message, whose turn would
             // clear the question.
             guard wasInterruptedAtQuit(record) == false,
                   let turnEnd = automaticPromptTurnEnd(for: session, yieldsToSteer: false) else { continue }

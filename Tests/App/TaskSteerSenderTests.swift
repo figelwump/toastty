@@ -4,14 +4,14 @@ import Foundation
 import RemoteProtocol
 import Testing
 
-/// `task send --steer` against a real conversation: what Toastty types, and
+/// `task send` against a real conversation: what Toastty types, and
 /// when, for each thing the task's agent can be doing.
 @Suite(.serialized)
 struct TaskSteerSenderTests {
     private typealias Transcript = LocalConversationAccessTests
 
     /// One Codex agent in a terminal panel, and the task sessions that
-    /// `task send --steer` uses, with Remote Access off. Nothing follows the
+    /// `task send` uses, with Remote Access off. Nothing follows the
     /// agent's conversation until the first send.
     @MainActor
     private final class Harness {
@@ -47,7 +47,7 @@ struct TaskSteerSenderTests {
         }
 
         func send(_ text: String) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
-            await sessions.deliverSteering(text, panelID: fixture.panelID) { true }
+            await sessions.deliverSteering(text, panelID: fixture.panelID) { _ in true }
         }
 
         /// What the agent's hooks report.
@@ -162,6 +162,21 @@ struct TaskSteerSenderTests {
         #expect(harness.typed.texts == ["Use 300 ms"])
     }
 
+    /// An error, such as the computer's sleep, ended the turn. The agent
+    /// waits at its prompt, and a message, such as one that tells it to
+    /// continue, goes there.
+    @MainActor
+    @Test func anAgentThatStoppedWithAnErrorGetsTheMessageAtItsOpenPrompt() async throws {
+        let harness = try Harness()
+        defer { harness.tearDown() }
+        try harness.startTurn()
+        try harness.fixture.appendToTranscript(Transcript.taskComplete(at: "2026-08-07T10:00:21.000Z"))
+        harness.report(.error)
+
+        #expect(await harness.send("Continue where you stopped.") == .success(.sent))
+        #expect(harness.typed.texts == ["Continue where you stopped."])
+    }
+
     @MainActor
     @Test func aTurnTheUserTypedInLeavesTheMessageToWait() async throws {
         let harness = try Harness()
@@ -177,7 +192,7 @@ struct TaskSteerSenderTests {
     }
 
     @MainActor
-    @Test func aDraftTypedBeforeToasttyFollowedTheConversationStopsTheSend() async throws {
+    @Test func aDraftTypedBeforeToasttyFollowedTheConversationLeavesTheMessageToWait() async throws {
         let harness = try Harness()
         defer { harness.tearDown() }
         try harness.startTurn()
@@ -187,7 +202,9 @@ struct TaskSteerSenderTests {
         harness.fixture.sessionRuntimeStore.noteUserInput(panelID: harness.fixture.panelID)
         try harness.endTurn()
 
-        #expect(await harness.send("Use 300 ms") == .failure(.typedInTerminal))
+        // The task coordinator saves it for the prompt after the turn that
+        // takes the draft.
+        #expect(await harness.send("Use 300 ms") == .success(.mustWait))
         #expect(harness.typed.texts.isEmpty)
 
         // The next turn starts after that typing, so it takes a message.

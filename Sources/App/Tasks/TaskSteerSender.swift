@@ -2,7 +2,7 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
-/// How `task send --steer` gave a message to a task's agent.
+/// How `task send` gave a message to a task's agent.
 enum TaskSteerDelivery: Equatable {
     /// Typed and submitted at the agent's open prompt.
     case sent
@@ -10,7 +10,7 @@ enum TaskSteerDelivery: Equatable {
     case steered
     /// Nothing was typed: the agent cannot take the message now. The
     /// caller saves it on the task for the agent's next open prompt
-    /// (`TaskCoordinator.sendSteering`).
+    /// (`TaskCoordinator.send`).
     case mustWait
 
     /// The name `task.send` reports for a typed message.
@@ -33,7 +33,7 @@ enum TaskSteerDelivery: Equatable {
     }
 }
 
-/// What `task send --steer` did with a message.
+/// What `task send` did with a message.
 enum TaskSteerSendOutcome {
     /// Typed now, at the agent's open prompt or into its turn.
     case typed(TaskSteerDelivery, session: TaskSessionInfo)
@@ -43,17 +43,19 @@ enum TaskSteerSendOutcome {
     case saved(TaskQueuedMessage, position: Int?, session: TaskSessionInfo)
 }
 
-/// Why `task send --steer` gave the agent nothing, or cannot say that it did.
+/// Why `task send` gave the agent nothing, or cannot say that it did.
 enum TaskSteerFailure: Error, Equatable {
-    /// Toastty could not tell what the agent does now. Nothing was typed.
-    case stateUnknown
-    /// The terminal did not take the text. Nothing was typed.
+    /// The terminal did not take the text, or the agent ended. Nothing was
+    /// typed.
     case unavailable
     /// The text was typed, but the terminal did not confirm the Return key.
     case uncertain
-    /// A person typed in the agent's terminal, and that text can still be
-    /// in the agent's prompt. Nothing was typed.
-    case typedInTerminal
+}
+
+/// Where `TaskSteerSender` is about to type a message.
+enum TaskSteerTarget: Equatable {
+    case openPrompt
+    case runningTurn
 }
 
 /// What the agent's own hooks and its terminal report about the agent in a
@@ -81,7 +83,9 @@ struct TaskSteerAgentView: Equatable {
 /// and a running turn of an agent that can read during a turn takes it as a
 /// steer. In every other case it types nothing and returns `.mustWait`: the
 /// task coordinator saves the message on the task, so that it waits across
-/// a relaunch, and types it at the agent's next open prompt.
+/// a relaunch, and types it at the agent's next open prompt. That is also
+/// the result when Toastty cannot tell what the agent does, as for an agent
+/// whose conversation it does not follow.
 ///
 /// The conversation's view comes from the agent's transcript. It can be
 /// behind, and a conversation that nothing followed before first reads its
@@ -110,10 +114,9 @@ final class TaskSteerSender {
         case failed(TaskSteerFailure)
         /// The agent cannot take the message now, and can later.
         case mustWait
-        /// Toastty cannot tell yet what the agent does. `waitAtDeadline`
-        /// says that the message can wait for the next open prompt if that
-        /// does not change.
-        case undecided(waitAtDeadline: Bool)
+        /// Toastty cannot tell yet what the agent does. If that does not
+        /// change before the deadline, the message must wait.
+        case undecided
     }
 
     weak var access: (any LocalConversationAccess)?
@@ -140,14 +143,20 @@ final class TaskSteerSender {
         self.agent = agent
     }
 
-    /// `mayTypeAtPrompt` says whether an open prompt is still free of
-    /// Toastty's other messages: one that waits goes first, and one that
-    /// was typed there took it. While it is not, the send waits as for an
+    /// `mayType` is asked in the same step as the typing, since the send
+    /// can wait for the agent's state before it. It says whether the
+    /// message may still go to this agent: the agent still works on the
+    /// sender's task, and no earlier message waits. For an open prompt it
+    /// also says whether the prompt is still free: of text that can be in
+    /// it, and of Toastty's other messages, where one that was typed there
+    /// took it. While an open prompt is not free, the send waits as for an
     /// undecided state, and then the message must wait.
     func send(
-        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool = { true }
+        _ text: String, panelID: UUID, mayType: @escaping @MainActor (TaskSteerTarget) -> Bool = { _ in true }
     ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
-        guard let access else { return .failure(.stateUnknown) }
+        // Nothing follows conversations: the message waits for the prompt
+        // that the agent's hooks report.
+        guard let access else { return .success(.mustWait) }
         guard let sessionID = agent(panelID)?.sessionID else { return .failure(.unavailable) }
         if subscriptions[panelID] == nil {
             subscriptions[panelID] = access.subscribeToConversation(inPanel: panelID)
@@ -157,15 +166,7 @@ final class TaskSteerSender {
         let message = Message(id: UUID().uuidString, text: text, sessionID: sessionID)
         let deadline = ContinuousClock.now + settleTimeout
         while true {
-            var step = look(panelID: panelID, message: message, mayTypeAtPrompt: mayTypeAtPrompt)
-            if case .undecided(let waitAtDeadline) = step {
-                if ContinuousClock.now < deadline, Task.isCancelled == false {
-                    try? await Task.sleep(for: Self.settlePollInterval)
-                    continue
-                }
-                step = waitAtDeadline ? .mustWait : .failed(.stateUnknown)
-            }
-            switch step {
+            switch look(panelID: panelID, message: message, mayType: mayType) {
             case .typed(let delivery):
                 typedAt[panelID] = now()
                 return .success(delivery)
@@ -175,7 +176,8 @@ final class TaskSteerSender {
             case .mustWait:
                 return .success(.mustWait)
             case .undecided:
-                return .failure(.stateUnknown)
+                guard ContinuousClock.now < deadline, Task.isCancelled == false else { return .success(.mustWait) }
+                try? await Task.sleep(for: Self.settlePollInterval)
             }
         }
     }
@@ -200,7 +202,7 @@ final class TaskSteerSender {
 
     /// One look at the agent, with no suspension between reading the state
     /// and typing.
-    private func look(panelID: UUID, message: Message, mayTypeAtPrompt: () -> Bool) -> Step {
+    private func look(panelID: UUID, message: Message, mayType: (TaskSteerTarget) -> Bool) -> Step {
         // The message is for one agent session. Another one can run in the
         // panel after a wait.
         guard let subscription = subscriptions[panelID], let agent = agent(panelID), agent.state != .notRunning,
@@ -211,13 +213,13 @@ final class TaskSteerSender {
         // time Toastty followed the panel. Text typed before that, and
         // after the agent's latest turn started, can still be in the
         // agent's prompt: no later turn took it. A message typed now would
-        // be added to it.
+        // be added to it, so it waits for the prompt after that turn.
         if let typedAt = agent.userTypedAt, typedAt < subscription.followedSince ?? now(),
            typedAt > agent.latestTurnStartedAt ?? .distantPast {
-            return .failed(.typedInTerminal)
+            return .mustWait
         }
         guard let summary = subscription.snapshot(at: now())?.summary else {
-            return .undecided(waitAtDeadline: false)
+            return .undecided
         }
 
         func request(_ mode: RemoteMessageDeliveryMode, _ epoch: RemoteInputEpoch) -> RemoteMessageSendResult {
@@ -238,27 +240,28 @@ final class TaskSteerSender {
             // A permission prompt or a question is on screen, by either
             // view. Typed text could answer it.
             return .mustWait
-        case (.openPrompt(let epoch), .idle):
+        case (.openPrompt(let epoch), .idle), (.openPrompt(let epoch), .error):
+            // An agent whose turn an error ended waits at its prompt too.
             // The transcript can show the prompt open for a moment after
             // Toastty typed another message there.
-            guard mayTypeAtPrompt() else { return .undecided(waitAtDeadline: true) }
+            guard mayType(.openPrompt) else { return .undecided }
             switch request(.prompt, epoch) {
             case .accepted, .duplicate: return .typed(.sent)
             case .uncertain: return .failed(.uncertain)
             case .rejected(.surfaceUnavailable), .rejected(.notBound): return .failed(.unavailable)
-            case .rejected, .queued: return .undecided(waitAtDeadline: true)
+            case .rejected, .queued: return .undecided
             }
         case (.openPrompt, .busy):
             // The hooks say that the agent works, and its transcript does
             // not show the turn yet.
-            return .undecided(waitAtDeadline: true)
+            return .undecided
         case (.unavailable(reason: .working), .busy):
             guard let control = summary.inputControl else { return .mustWait }
             // The conversation does not show the running turn yet.
-            guard let turnEpoch = control.turnEpoch else { return .undecided(waitAtDeadline: true) }
+            guard let turnEpoch = control.turnEpoch else { return .undecided }
             // The agent cannot read during a turn, or someone typed in
             // this turn's terminal.
-            guard control.canSteer else { return .mustWait }
+            guard control.canSteer, mayType(.runningTurn) else { return .mustWait }
             switch request(.steer, turnEpoch) {
             case .accepted, .duplicate: return .typed(.steered)
             case .uncertain: return .failed(.uncertain)
@@ -273,14 +276,14 @@ final class TaskSteerSender {
             // conversation is behind, as while it first reads its
             // transcript, and the prompt opens in a moment; or the prompt
             // holds text that someone typed, and stays closed.
-            return .undecided(waitAtDeadline: true)
+            return .undecided
         case (.unavailable(reason: .interrupted), .busy),
              (.localDraft, .busy):
             return .mustWait
         default:
             // The agent starts, ended or failed, or Toastty does not follow
             // its conversation.
-            return .undecided(waitAtDeadline: false)
+            return .undecided
         }
     }
 }

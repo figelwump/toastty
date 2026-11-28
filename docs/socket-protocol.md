@@ -426,12 +426,14 @@ Notable action-specific behavior:
     agent session at delivery: the session in the worktree after a move, else
     the session setup started, else the session restored in that session's
     pane after a relaunch, else the most recently active agent in the task
-    space. It types the text and submits it, as `terminal.send-text` with
-    `submit=true` does; a busy agent gets it as typed input. It types nothing
-    and fails with `invalidPayload` and the reason while the agent waits for an
-    answer to a permission prompt, a question or a dialog, while text typed in
-    the terminal since the agent's latest turn started can still be in its
-    prompt, or while an earlier message without a confirmed Return can.
+    space. It checks the agent before it types: the text goes to the agent's
+    open prompt, or into the running turn of a Claude Code or Codex agent.
+    Toastty types nothing while the agent waits for an answer to a
+    permission prompt, a question or a dialog, while text typed in the
+    terminal since the agent's latest turn started can still be in its
+    prompt, while an earlier message without a confirmed Return can, or while
+    it cannot tell what the agent does. It then saves the message on the task
+    for the agent's next open prompt.
   - Toastty types a first line that names the sender, from the caller and
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's
@@ -441,23 +443,31 @@ Notable action-specific behavior:
     approves or decides for the user in a task. Optional `args.from` names a caller in no
     session, also as for `coordinator.send`. The text starts on the second
     line.
-  - optional `args.steer=true` checks the agent before it types, and types
-    nothing into a permission prompt or a question. The result adds
-    `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
-    running turn of a Claude Code or Codex agent) or `queued` (saved on the
-    task for the agent's next open prompt, also after a relaunch, with
-    `messageID`, `queuePosition` and `delivered` false; `task.get` lists it
-    under `queuedMessages` with `steer: true`).
+  - returns `taskID`, `sessionID`, `panelID`, `delivered`, `message`, one
+    sentence that says what Toastty did, and `delivery`: `sent` (typed at the
+    open prompt), `steered` (typed into the running turn of a Claude Code or
+    Codex agent) or `queued` (saved on the task for the agent's next open
+    prompt, also after a relaunch, with `messageID`, `queuePosition` and
+    `delivered` false; `task.get` lists it under `queuedMessages` with
+    `steer: true`). A saved message that Toastty could type at once, at the
+    prompt that the agent's hooks report, returns `sent` with its
+    `messageID`, or `sentUnconfirmed` when the terminal did not confirm the
+    Return key.
     Send it through `app_control.run_action`: it can wait up to 5 seconds for
-    the agent's state. It returns `INVALID_PAYLOAD`, with nothing typed, when
-    Toastty cannot tell what the agent does, when text that someone typed can
-    still be in the agent's prompt, and, for a message that must wait, when 10
-    messages already wait or the task was archived. See
-    [Coordinate tasks](tasks.md#coordinate-tasks).
-  - returns `taskID`, `sessionID`, `panelID`, and `delivered`. A task with no
-    running agent, empty text, or a message that was typed but may not have
-    been submitted returns `INVALID_PAYLOAD`; Toastty does not retry the last
-    case, which could type the message twice.
+    the agent's state. It returns `INVALID_PAYLOAD`, with nothing typed, for
+    a task with no running agent, for empty text, when the terminal does not
+    take text that Toastty types now (a saved message stays `queued` then,
+    and Toastty tries it again), and, for a message that must wait, when 10
+    messages already wait or the task was archived. A message that was typed into the
+    agent's conversation but may not have been submitted also returns
+    `INVALID_PAYLOAD`; Toastty does not retry it, which could type the
+    message twice. See [Coordinate tasks](tasks.md#coordinate-tasks).
+  - optional `args.queue=true` never types into a running turn. Toastty
+    saves the message on the task and types it at the agent's next open
+    prompt, after its own watch, wake and merge lines. The result has the
+    `messageID` and `delivery`: `sent`, `sentUnconfirmed` or `queued`.
+  - optional `args.steer` is accepted for older callers and changes nothing:
+    it names the default. It cannot go with `args.queue`.
   - workspace scope applies to the task, not the panel: an unscoped caller
     reaches any task, and a workspace-scoped session reaches only the tasks it
     may see in `task.list`.

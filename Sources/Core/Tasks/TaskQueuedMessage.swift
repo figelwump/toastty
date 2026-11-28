@@ -1,7 +1,7 @@
 import Foundation
 
-/// A message that `task send --queue` left for a task's agent, or that
-/// `task send --steer` could not type at once. Toastty types it at the
+/// A message that `task send --queue` left for a task's agent, or that a
+/// `task send` without it could not type at once. Toastty types it at the
 /// agent's next open prompt, never into a running turn, a permission
 /// prompt, a question or text that someone typed at the prompt.
 ///
@@ -19,12 +19,12 @@ public struct TaskQueuedMessage: Codable, Equatable, Identifiable, Sendable {
     /// The sender, as `task get` names it.
     public var from: String
     public var queuedAt: Date
-    /// `true` for a `task send --steer` message. It goes before Toastty's
-    /// other messages, as a message for the agent's current turn would
-    /// have, and waits only for an open prompt: not for the task's
-    /// question, a turn that a quit cut off, or a finished task, at which
-    /// a `--steer` send to an open prompt also types at once. `nil` for
-    /// `--queue`.
+    /// `true` for a message from a `task send` without `--queue`, which
+    /// would have steered. It goes before Toastty's other messages, as a
+    /// message for the agent's current turn would have, and waits only for
+    /// an open prompt: not for the task's question, a turn that a quit cut
+    /// off, or a finished task, at which such a send to an open prompt
+    /// also types at once. `nil` for `--queue`.
     public var steer: Bool?
     /// `nil` while the message waits.
     public var outcome: Outcome?

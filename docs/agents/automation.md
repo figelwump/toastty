@@ -322,7 +322,7 @@ sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
   --validation-command 'python3 scripts/automation/remote-task-steer-check.py --provider codex'
 ```
 
-Run this after a change to `task send --steer` or to the input checks it
+Run this after a change to `task send` or to the input checks it
 uses. Each run mutates one disposable Toastty instance on the dedicated
 validation Mac, with a throwaway runtime home; the installed production app is
 not touched. It uses the real, authenticated provider CLI and subscription
@@ -330,11 +330,12 @@ usage. Remote Access stays off, so nothing follows the agent's conversation
 before the first send.
 
 The check makes one task with a real agent and sends to it with
-`task send --steer`: at its open prompt (`sent`), and in a turn that a script
+`task send`, with no flag: at its open prompt (`sent`), and in a turn that a script
 of the run holds for 40 seconds (`steered`, and the agent must answer as that
 message says, not as the turn's first message said). Messages with image paths
-on lines of their own must be answered too: one with a plain `task send` and
-two with `--steer` at the open prompt, and one in the steered message. The
+on lines of their own must be answered too: one path and then two at the
+open prompt, the second with `--steer`, which names the default, and one in
+the steered message. The
 screen must never show `[Image #`. A host without Codex's
 hooks reports a Codex agent in a long command as idle; the check then requires
 `queued`, nothing typed during the turn, and the message after the turn. With
@@ -786,7 +787,7 @@ The other scenarios are `first-run`, `first-run-instructions`, `first-run-reques
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
 `user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `dependency-busy`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
-passes the words on with `task send --steer` and not without it. In
+passes the words on with `task send` and without `--queue`. In
 `ci-failed` the failed test is in the pull request's change: the task is
 told to fix it once, and a second failure goes to the user. In the two
 `ci-rerun` scenarios the failed test is outside the change: the task is
@@ -813,10 +814,11 @@ and reports BLOCKED without them. Every scenario also checks that each
 `coordinator reply` names a message that the run sent.
 `dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. In `dependency-busy` the waiting
-task's agent works when the merge comes: the coordinator must leave its
-message with `task send --queue`, the agent must read nothing during its
-turn, and after the check ends the turn, the real app must type the message
-once and `task get` must report it `sent`. The five merge scenarios cover
+task's agent works when the merge comes: the coordinator must send its
+message at once with `task send`. The check's agent cannot read during a
+turn, so it must read nothing during its turn, and after the check ends the
+turn, the real app must type the message once and `task get` must report it
+`sent`. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
 asks for one when the user says "merge it"; asked to merge simple changes
@@ -881,9 +883,9 @@ otherwise. `interrupted` kills and relaunches its instance.
 Every run also checks what must hold whatever the coordinator decided: no
 merge of its own, review approval or push; no call that changes GitHub; no
 `request-merge` but for a task whose merge the scenario expects; every message
-to a task starts with `[coordinator]`; no message to an agent that works or
-waits at a prompt, except a `task send --steer` to one that works, and no
-send without `--steer` or `--queue` to a task whose agent works; every turn that a digest started set the next check; and
+to a task starts with `[coordinator]`; Toastty types no message into an agent
+that works or waits at a prompt, and the coordinator makes no send without
+`--queue` to a task whose agent waits at a prompt; every turn that a digest started set the next check; and
 no file written but the policy, the ledger and the two records, and nothing
 committed but the policy.
 
